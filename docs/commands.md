@@ -340,3 +340,51 @@ incomplete for every conversation. After real-database parity and resource check
 is off by default; migration does not activate it. Enabled reads require a ready
 cache and raise if it becomes incomplete rather than falling back to an
 archive-sized Python scan. Set the flag to false to restore the existing path.
+
+### Reassign a historical memory audience
+
+The client chooses memory audiences. These administrative commands apply an
+explicit historical correction after source and target audiences have been
+registered as direct aliases of the same active storage owner. Identifiers
+are opaque; the commands do not infer groups from channels or platform names.
+Finish any storage merges and drain ingestion and compaction before planning.
+
+```bash
+virtual-context admin plan-audience-reassignment \
+  "$OWNER_ID" "$SOURCE_AUDIENCE" "$TARGET_AUDIENCE" \
+  --tenant-id "$TENANT_ID" --expected-lifecycle-epoch "$OWNER_EPOCH" \
+  --operation-id "$OPERATION_ID" --manifest /private/operations/audience.json \
+  --postgres-dsn-env DATABASE_URL
+
+virtual-context admin reassign-audience \
+  --manifest /private/operations/audience.json --postgres-dsn-env DATABASE_URL
+
+virtual-context admin reassign-audience \
+  --manifest /private/operations/audience.json --postgres-dsn-env DATABASE_URL --apply
+```
+
+Use `--sqlite-db PATH` instead to select an existing SQLite database. Database
+selection is required and does not fall back to application configuration.
+The schema must already be upgraded; these commands do not run startup data
+migrations, construct an engine, or call a model provider.
+
+Planning creates a new mode-0600 JSON manifest and refuses to overwrite an
+existing path. Store manifests outside source control. Verification is the
+default; only `reassign-audience --apply` writes. The manifest pins every selected
+canonical row and each attested user/assistant pair. A selected row without
+exact source membership refuses the entire plan; complete its ordinary source
+admission before planning. Apply rechecks tenant,
+lifecycle, owner routing, active work, source hashes and complete membership
+before recording immutable authorizations and changing effective audience.
+Original source-ledger evidence, message bodies and physical channel provenance
+are preserved. A repeated identical apply reports zero updates; conflicting
+manifests or a second reassignment of the same canonical row are refused.
+
+Output reports selected and updated rows, invalidated cards and any remaining
+rows in the source audience. Apply hides affected actor cards while retaining
+their immutable entries and citations for re-admission. It does not rebuild
+derived data. Reproject exact card-source pointers from current canonical/fact
+proof before normal card rebuilding; stale pointers must never be marked clean.
+Reproject affected structured summaries, allocate any missing speaker handles,
+and clear serving caches as separate cutover steps. Preserve a private card
+checkpoint before any ordinary storage merge, which can remove cached entries.

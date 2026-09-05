@@ -37,6 +37,13 @@ from ..core.progress_snapshot import (
 )
 from ..core.canonical_turns import STRIP_WHITESPACE
 from ..core.store import ContextStore
+from .audience_proof import effective_attested_audience, verify_source_replay_audience
+from .audience_reassignment import (
+    assert_audience_reassignment_schema,
+    ensure_audience_reassignment_schema,
+    plan_audience_reassignment,
+    reassign_audience,
+)
 from .relational import RelationalStoreMixin
 from ..core.exceptions import CanonicalSourceConflict, ConversationLifecycleConflict
 from ..types import AUDIENCE_ATTRIBUTION_VERSION, ChunkEmbedding, ConversationStats, DepthLevel, EngineStateSnapshot, Fact, FactLink, FactSignal, CanonicalTurnChunkEmbedding, CanonicalTurnReconcileRow, CanonicalTurnRow, LinkedFact, QuoteResult, SegmentMetadata, SourceProvenance, SpeakerRetrievalContext, StoredSegment, StoredSummary, TagStats, TagSummary, TurnTagEntry, WorkingSetEntry, channel_excerpt_prefix, strip_channel_hash
@@ -1181,6 +1188,7 @@ class SQLiteStore(RelationalStoreMixin, ContextStore):
         db_path: str | Path,
         *,
         compaction_fence_mode: "CompactionFenceMode | None" = None,
+        initialize_schema: bool = True,
     ) -> None:
         from ..core.compaction_fence import CompactionFenceMode as _CFM
         # Resolve the runtime mode BEFORE the schema/conn setup so a
@@ -1189,7 +1197,9 @@ class SQLiteStore(RelationalStoreMixin, ContextStore):
         # weaker mode. Per fencing plan §9.0.
         self._compaction_fence_mode = _CFM.resolve(compaction_fence_mode)
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize_schema = initialize_schema
+        if initialize_schema:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         # Per-thread post-commit scope for the alias write seam. When the
         # merge body opens an outer transaction it activates a scope so
@@ -1200,8 +1210,17 @@ class SQLiteStore(RelationalStoreMixin, ContextStore):
         # immediately after their commit. Per spec S8.
         self._post_commit_scope = threading.local()
         self.search_config = None  # set by engine after construction
-        self._ensure_schema()
-        self._ensure_request_state_schema()
+        if initialize_schema:
+            self._ensure_schema()
+            self._ensure_request_state_schema()
+        else:
+            # Maintenance planning must not rerun unrelated data migrations.
+            # Require the source guards to have been installed beforehand.
+            try:
+                self._assert_canonical_message_source_schema(self._get_conn())
+            except BaseException:
+                self.close()
+                raise
 
     def _enforce_or_observe_mismatch(
         self, *, operation_id: str | None, write_site: str,
@@ -1235,10 +1254,13 @@ class SQLiteStore(RelationalStoreMixin, ContextStore):
             # 5s was too short — caused sqlite3.OperationalError: database is
             # locked, crashing the proxy with 500s (A/B test 2026-03-01).
             conn = sqlite3.connect(
-                str(self.db_path), timeout=30, isolation_level=None,
+                (str(self.db_path) if self._initialize_schema else
+                 self.db_path.resolve().as_uri() + "?mode=rw"),
+                uri=not self._initialize_schema, timeout=30, isolation_level=None,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
+            if self._initialize_schema:
+                conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
         return conn
@@ -2605,6 +2627,22 @@ CREATE TABLE IF NOT EXISTS request_captures (
                          FROM actor_card_turn_sources
                         WHERE canonical_turn_id =
                               OLD.canonical_turn_id
+                 ) AND NOT EXISTS (
+                       SELECT 1 FROM canonical_audience_reassignments ar
+                        WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                          AND ar.owner_conversation_id = OLD.conversation_id
+                          AND ar.from_audience = OLD.audience_conversation_id
+                          AND ar.to_audience = NEW.audience_conversation_id
+                          AND ar.from_attribution_version = OLD.audience_attribution_version
+                          AND ar.to_attribution_version = NEW.audience_attribution_version
+                          AND ar.turn_hash = OLD.turn_hash
+                          AND OLD.turn_hash IS NEW.turn_hash
+                          AND OLD.conversation_id IS NEW.conversation_id
+                          AND OLD.user_content IS NEW.user_content
+                          AND OLD.sender_actor_id IS NEW.sender_actor_id
+                          AND OLD.origin_channel_id IS NEW.origin_channel_id
+                          AND OLD.created_at IS NEW.created_at
+                          AND OLD.first_seen_at IS NEW.first_seen_at
                  );
             END;
 
@@ -2772,6 +2810,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
         only the live adapter admission path or an audited repair artifact may
         create memberships.
         """
+        ensure_audience_reassignment_schema(conn, "sqlite")
         for trigger_name in (
             "trg_guard_attested_canonical_turn_update",
             "trg_validate_canonical_message_source_pair_insert",
@@ -2974,8 +3013,28 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     OLD.sender_actor_id IS NOT NEW.sender_actor_id OR
                     OLD.source_message_id IS NOT NEW.source_message_id OR
                     OLD.reply_target_message_id IS NOT NEW.reply_target_message_id OR
-                    OLD.audience_conversation_id IS NOT NEW.audience_conversation_id OR
-                    OLD.audience_attribution_version IS NOT NEW.audience_attribution_version
+                    ((OLD.audience_conversation_id IS NOT NEW.audience_conversation_id OR
+                     OLD.audience_attribution_version IS NOT NEW.audience_attribution_version) AND NOT EXISTS (
+                        SELECT 1 FROM canonical_audience_reassignments ar
+                        JOIN audience_reassignment_operations op
+                          ON op.operation_id = ar.operation_id
+                         AND op.manifest_digest = ar.manifest_digest
+                         AND op.tenant_id = ar.tenant_id
+                         AND op.to_audience = ar.to_audience
+                        JOIN conversations owner
+                          ON owner.conversation_id = OLD.conversation_id
+                         AND owner.tenant_id = ar.tenant_id
+                         AND owner.lifecycle_epoch = op.expected_lifecycle_epoch
+                        WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                          AND ar.owner_conversation_id = OLD.conversation_id
+                          AND op.owner_conversation_id = OLD.conversation_id
+                          AND ar.from_audience = OLD.audience_conversation_id
+                          AND ar.to_audience = NEW.audience_conversation_id
+                          AND ar.from_attribution_version = OLD.audience_attribution_version
+                          AND ar.to_attribution_version = NEW.audience_attribution_version
+                          AND ar.turn_hash = OLD.turn_hash
+                          AND ar.turn_hash = NEW.turn_hash
+                    ))
                 )
             ) OR (
                 EXISTS (
@@ -2989,7 +3048,32 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     OLD.user_content IS NOT NEW.user_content OR
                     OLD.assistant_content IS NOT NEW.assistant_content OR
                     OLD.user_raw_content IS NOT NEW.user_raw_content OR
-                    OLD.assistant_raw_content IS NOT NEW.assistant_raw_content
+                    OLD.assistant_raw_content IS NOT NEW.assistant_raw_content OR
+                    (EXISTS (
+                        SELECT 1 FROM canonical_audience_reassignments ar
+                        WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                    ) AND (OLD.audience_conversation_id IS NOT NEW.audience_conversation_id OR
+                     OLD.audience_attribution_version IS NOT NEW.audience_attribution_version) AND NOT EXISTS (
+                        SELECT 1 FROM canonical_audience_reassignments ar
+                        JOIN audience_reassignment_operations op
+                          ON op.operation_id = ar.operation_id
+                         AND op.manifest_digest = ar.manifest_digest
+                         AND op.tenant_id = ar.tenant_id
+                         AND op.to_audience = ar.to_audience
+                        JOIN conversations owner
+                          ON owner.conversation_id = OLD.conversation_id
+                         AND owner.tenant_id = ar.tenant_id
+                         AND owner.lifecycle_epoch = op.expected_lifecycle_epoch
+                        WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                          AND ar.owner_conversation_id = OLD.conversation_id
+                          AND op.owner_conversation_id = OLD.conversation_id
+                          AND ar.from_audience = OLD.audience_conversation_id
+                          AND ar.to_audience = NEW.audience_conversation_id
+                          AND ar.from_attribution_version = OLD.audience_attribution_version
+                          AND ar.to_attribution_version = NEW.audience_attribution_version
+                          AND ar.turn_hash = OLD.turn_hash
+                          AND ar.turn_hash = NEW.turn_hash
+                    ))
                 )
             )
             BEGIN
@@ -3055,6 +3139,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
     def _assert_canonical_message_source_schema(
         conn: sqlite3.Connection,
     ) -> None:
+        assert_audience_reassignment_schema(conn, "sqlite")
         columns = {
             str(row["name"])
             for row in conn.execute(
@@ -3204,7 +3289,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     and (source_message_id or "")
                     == str(membership["message_id"] or "")
                     and (audience_conversation_id or "")
-                    == str(membership["audience_conversation_id"] or "")
+                    == effective_attested_audience(conn, membership, dialect="sqlite")
                     and (origin_channel_id or "")
                     == str(membership["channel_id"] or "")
                 )
@@ -9869,6 +9954,21 @@ CREATE TABLE IF NOT EXISTS request_captures (
         self._commit_if_unlocked(conn)
         return updated
 
+    def plan_audience_reassignment(
+        self, owner_conversation_id: str, from_audience: str, to_audience: str,
+        *, tenant_id: str, expected_lifecycle_epoch: int, operation_id: str,
+    ) -> dict:
+        """Build a complete source-pinned manifest without changing memory."""
+        return plan_audience_reassignment(
+            self, owner_conversation_id, from_audience, to_audience,
+            tenant_id=tenant_id, expected_lifecycle_epoch=expected_lifecycle_epoch,
+            operation_id=operation_id, dialect="sqlite",
+        )
+
+    def reassign_audience(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        """Apply an explicitly approved audience manifest, preserving receipts."""
+        return reassign_audience(self, manifest, dry_run=dry_run, dialect="sqlite")
+
     def reattribute_canonical_turn_audience(
         self,
         conversation_id: str,
@@ -10903,6 +11003,11 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 "attested source belongs to another serving owner"
             )
         stored = rows[0]
+        original_audience = verify_source_replay_audience(
+            self._get_conn(), canonical_turn_id=str(stored["canonical_turn_id"]),
+            current_audience=str(stored["audience_conversation_id"] or ""),
+            incoming_audience=row.audience_conversation_id or "", dialect="sqlite",
+        )
         immutable_claim = {
             "agent_scope_id": claim["agent_scope_id"],
             "platform": claim["platform"],
@@ -10917,7 +11022,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
             "projection_version": claim["projection_version"],
             "canonical_turn_hash": row.turn_hash or "",
             "reply_target_message_id": claim["reply_target_message_id"],
-            "audience_conversation_id": row.audience_conversation_id or "",
+            "audience_conversation_id": original_audience,
         }
         if any(
             str(
@@ -10947,7 +11052,10 @@ CREATE TABLE IF NOT EXISTS request_captures (
             raise CanonicalSourceConflict(
                 "attested source lacks an immutable exact assistant pair"
             )
-        return _row_to_canonical_turn(stored)
+        result = _row_to_canonical_turn(stored)
+        if result.audience_conversation_id != (row.audience_conversation_id or ""):
+            result.authorized_replay_audience = row.audience_conversation_id or ""
+        return result
 
     def attest_canonical_user_source(
         self,
@@ -10982,13 +11090,21 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 raise CanonicalSourceConflict(
                     "attested canonical user row does not exist"
                 )
+            expected_stored_audience = audience
+            if str(stored["audience_conversation_id"] or "") != audience:
+                verify_source_replay_audience(
+                    conn, canonical_turn_id=canonical_id,
+                    current_audience=str(stored["audience_conversation_id"] or ""),
+                    incoming_audience=audience, dialect="sqlite",
+                )
+                expected_stored_audience = str(stored["audience_conversation_id"] or "")
             exact = (
                 str(stored["user_content"] or "") == content
                 and not str(stored["assistant_content"] or "").strip()
                 and str(stored["turn_hash"] or "") == (row.turn_hash or "")
                 and str(stored["source_message_id"] or "")
                 == claim["message_id"]
-                and str(stored["audience_conversation_id"] or "") == audience
+                and str(stored["audience_conversation_id"] or "") == expected_stored_audience
                 and str(stored["origin_channel_id"] or "")
                 == claim["channel_id"]
                 and str(stored["sender_actor_id"] or "") == actor_id
@@ -11055,6 +11171,11 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 "reply_target_message_id": claim["reply_target_message_id"],
             }
             if existing is not None:
+                expected["audience_conversation_id"] = verify_source_replay_audience(
+                    conn, canonical_turn_id=canonical_id,
+                    current_audience=str(stored["audience_conversation_id"] or ""),
+                    incoming_audience=audience, dialect="sqlite",
+                )
                 if any(
                     str(existing[name] if existing[name] is not None else "")
                     != str(value)
@@ -11075,6 +11196,14 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     (seen, *key),
                 )
             else:
+                if conn.execute(
+                    "SELECT 1 FROM canonical_audience_reassignments "
+                    "WHERE canonical_turn_id IN (?, ?)",
+                    (canonical_id, assistant_id),
+                ).fetchone() is not None:
+                    raise CanonicalSourceConflict(
+                        "cannot attest an audience-reassigned legacy row"
+                    )
                 conn.execute(
                     """INSERT INTO canonical_message_sources
                        (tenant_id, agent_scope_id, platform, account_id,

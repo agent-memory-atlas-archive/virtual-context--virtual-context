@@ -30,6 +30,13 @@ from ..core.discord_snowflake import (
     datetime_to_snowflake_floor,
 )
 from ..core.store import ContextStore
+from .audience_proof import effective_attested_audience, verify_source_replay_audience
+from .audience_reassignment import (
+    assert_audience_reassignment_schema,
+    ensure_audience_reassignment_schema,
+    plan_audience_reassignment,
+    reassign_audience,
+)
 from ..core.canonical_turns import (
     HASH_VERSION,
     compute_turn_hash_from_raw,
@@ -1293,6 +1300,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         dsn: str,
         *,
         compaction_fence_mode: "CompactionFenceMode | None" = None,
+        initialize_schema: bool = True,
     ) -> None:
         from ..core.compaction_fence import CompactionFenceMode as _CFM
         # Resolve the runtime mode BEFORE the pool/schema setup so a
@@ -1310,7 +1318,16 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             kwargs={"row_factory": dict_row, "autocommit": True},
         )
         self.search_config = None  # set by engine after construction
-        self._ensure_schema()
+        if initialize_schema:
+            self._ensure_schema()
+        else:
+            # Administrative planning opens an already upgraded schema and
+            # must not run unrelated startup migrations on source data.
+            try:
+                self._assert_canonical_message_source_schema()
+            except BaseException:
+                self.close()
+                raise
 
     def migrate_bounded_read_indexes(self, *, dry_run: bool = True) -> dict:
         """Explicit concurrent index migration; worker startup never builds it."""
@@ -2443,6 +2460,8 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                        channel_id, message_id
                    )"""
             )
+            with conn.transaction():
+                ensure_audience_reassignment_schema(conn, "postgres")
             conn.execute(
                 """CREATE OR REPLACE FUNCTION
                        vc_guard_attested_canonical_turn_update()
@@ -2467,8 +2486,28 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                                OLD.sender_actor_id IS DISTINCT FROM NEW.sender_actor_id OR
                                OLD.source_message_id IS DISTINCT FROM NEW.source_message_id OR
                                OLD.reply_target_message_id IS DISTINCT FROM NEW.reply_target_message_id OR
-                               OLD.audience_conversation_id IS DISTINCT FROM NEW.audience_conversation_id OR
-                               OLD.audience_attribution_version IS DISTINCT FROM NEW.audience_attribution_version
+                               ((OLD.audience_conversation_id IS DISTINCT FROM NEW.audience_conversation_id OR
+                                OLD.audience_attribution_version IS DISTINCT FROM NEW.audience_attribution_version) AND NOT EXISTS (
+                                   SELECT 1 FROM canonical_audience_reassignments ar
+                                   JOIN audience_reassignment_operations op
+                                     ON op.operation_id = ar.operation_id
+                                    AND op.manifest_digest = ar.manifest_digest
+                                    AND op.tenant_id = ar.tenant_id
+                                    AND op.to_audience = ar.to_audience
+                                   JOIN conversations owner
+                                     ON owner.conversation_id = OLD.conversation_id
+                                    AND owner.tenant_id = ar.tenant_id
+                                    AND owner.lifecycle_epoch = op.expected_lifecycle_epoch
+                                   WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                                     AND ar.owner_conversation_id = OLD.conversation_id
+                                     AND op.owner_conversation_id = OLD.conversation_id
+                                     AND ar.from_audience = OLD.audience_conversation_id
+                                     AND ar.to_audience = NEW.audience_conversation_id
+                                     AND ar.from_attribution_version = OLD.audience_attribution_version
+                                     AND ar.to_attribution_version = NEW.audience_attribution_version
+                                     AND ar.turn_hash = OLD.turn_hash
+                                     AND ar.turn_hash = NEW.turn_hash
+                               ))
                            )
                        ) OR (
                            EXISTS (
@@ -2483,7 +2522,32 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                                OLD.user_content IS DISTINCT FROM NEW.user_content OR
                                OLD.assistant_content IS DISTINCT FROM NEW.assistant_content OR
                                OLD.user_raw_content IS DISTINCT FROM NEW.user_raw_content OR
-                               OLD.assistant_raw_content IS DISTINCT FROM NEW.assistant_raw_content
+                               OLD.assistant_raw_content IS DISTINCT FROM NEW.assistant_raw_content OR
+                               (EXISTS (
+                                   SELECT 1 FROM canonical_audience_reassignments ar
+                                   WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                               ) AND (OLD.audience_conversation_id IS DISTINCT FROM NEW.audience_conversation_id OR
+                                OLD.audience_attribution_version IS DISTINCT FROM NEW.audience_attribution_version) AND NOT EXISTS (
+                                   SELECT 1 FROM canonical_audience_reassignments ar
+                                   JOIN audience_reassignment_operations op
+                                     ON op.operation_id = ar.operation_id
+                                    AND op.manifest_digest = ar.manifest_digest
+                                    AND op.tenant_id = ar.tenant_id
+                                    AND op.to_audience = ar.to_audience
+                                   JOIN conversations owner
+                                     ON owner.conversation_id = OLD.conversation_id
+                                    AND owner.tenant_id = ar.tenant_id
+                                    AND owner.lifecycle_epoch = op.expected_lifecycle_epoch
+                                   WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                                     AND ar.owner_conversation_id = OLD.conversation_id
+                                     AND op.owner_conversation_id = OLD.conversation_id
+                                     AND ar.from_audience = OLD.audience_conversation_id
+                                     AND ar.to_audience = NEW.audience_conversation_id
+                                     AND ar.from_attribution_version = OLD.audience_attribution_version
+                                     AND ar.to_attribution_version = NEW.audience_attribution_version
+                                     AND ar.turn_hash = OLD.turn_hash
+                                     AND ar.turn_hash = NEW.turn_hash
+                               ))
                            )
                        ) THEN
                            RAISE EXCEPTION
@@ -2579,6 +2643,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
     def _assert_canonical_message_source_schema(self) -> None:
         """Fail startup if the source fence could not be installed."""
         with self.pool.connection() as conn:
+            assert_audience_reassignment_schema(conn, "postgres")
             table = conn.execute(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_name = 'canonical_message_sources'"
@@ -2737,7 +2802,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                     and (source_message_id or "")
                     == str(membership["message_id"] or "")
                     and (audience_conversation_id or "")
-                    == str(membership["audience_conversation_id"] or "")
+                    == effective_attested_audience(conn, membership, dialect="postgres")
                     and (origin_channel_id or "")
                     == str(membership["channel_id"] or "")
                 )
@@ -3183,6 +3248,31 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                        AND e.tenant_id = s.tenant_id
                        AND p.tenant_id = e.tenant_id
                        AND p.actor_id = e.actor_id;
+
+                    -- An audited scope-only transition retains immutable
+                    -- claims for source reprojection and re-admission. The
+                    -- invalid flag above still blocks serving stale cards.
+                    IF TG_OP = 'UPDATE' THEN
+                        IF EXISTS (
+                            SELECT 1 FROM canonical_audience_reassignments ar
+                             WHERE ar.canonical_turn_id = OLD.canonical_turn_id
+                               AND ar.owner_conversation_id = OLD.conversation_id
+                               AND ar.from_audience = OLD.audience_conversation_id
+                               AND ar.to_audience = NEW.audience_conversation_id
+                               AND ar.from_attribution_version = OLD.audience_attribution_version
+                               AND ar.to_attribution_version = NEW.audience_attribution_version
+                               AND ar.turn_hash = OLD.turn_hash
+                               AND OLD.turn_hash IS NOT DISTINCT FROM NEW.turn_hash
+                               AND OLD.conversation_id IS NOT DISTINCT FROM NEW.conversation_id
+                               AND OLD.user_content IS NOT DISTINCT FROM NEW.user_content
+                               AND OLD.sender_actor_id IS NOT DISTINCT FROM NEW.sender_actor_id
+                               AND OLD.origin_channel_id IS NOT DISTINCT FROM NEW.origin_channel_id
+                               AND OLD.created_at IS NOT DISTINCT FROM NEW.created_at
+                               AND OLD.first_seen_at IS NOT DISTINCT FROM NEW.first_seen_at
+                        ) THEN
+                            RETURN NEW;
+                        END IF;
+                    END IF;
 
                     DELETE FROM actor_card_entries e
                      USING actor_card_turn_sources s
@@ -4728,10 +4818,15 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         try:
             with self.pool.connection() as conn:
                 rows = conn.execute(
-                    """SELECT DISTINCT agent_scope_id, platform, account_id
-                         FROM canonical_message_sources
-                        WHERE audience_conversation_id = %s
-                          AND channel_id = %s
+                    """SELECT DISTINCT cms.agent_scope_id, cms.platform, cms.account_id
+                         FROM canonical_message_sources cms
+                         JOIN canonical_turns ct
+                           ON ct.canonical_turn_id = cms.canonical_turn_id
+                         JOIN conversations owner
+                           ON owner.conversation_id = ct.conversation_id
+                          AND owner.tenant_id = cms.tenant_id
+                        WHERE ct.audience_conversation_id = %s
+                          AND cms.channel_id = %s
                         LIMIT 2""",
                     (conversation_id, channel_id),
                 ).fetchall()
@@ -10710,6 +10805,21 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 updated += int(cursor.rowcount or 0)
             return updated
 
+    def plan_audience_reassignment(
+        self, owner_conversation_id: str, from_audience: str, to_audience: str,
+        *, tenant_id: str, expected_lifecycle_epoch: int, operation_id: str,
+    ) -> dict:
+        """Build a complete source-pinned manifest without changing memory."""
+        return plan_audience_reassignment(
+            self, owner_conversation_id, from_audience, to_audience,
+            tenant_id=tenant_id, expected_lifecycle_epoch=expected_lifecycle_epoch,
+            operation_id=operation_id, dialect="postgres",
+        )
+
+    def reassign_audience(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        """Apply an explicitly approved audience manifest, preserving receipts."""
+        return reassign_audience(self, manifest, dry_run=dry_run, dialect="postgres")
+
     def reattribute_canonical_turn_audience(
         self,
         conversation_id: str,
@@ -11727,6 +11837,12 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 "attested source belongs to another serving owner"
             )
         stored = rows[0]
+        with self.pool.connection() as conn:
+            original_audience = verify_source_replay_audience(
+                conn, canonical_turn_id=str(stored["canonical_turn_id"]),
+                current_audience=str(stored["audience_conversation_id"] or ""),
+                incoming_audience=row.audience_conversation_id or "", dialect="postgres",
+            )
         immutable_claim = {
             "agent_scope_id": claim["agent_scope_id"],
             "platform": claim["platform"],
@@ -11741,7 +11857,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             "projection_version": claim["projection_version"],
             "canonical_turn_hash": row.turn_hash or "",
             "reply_target_message_id": claim["reply_target_message_id"],
-            "audience_conversation_id": row.audience_conversation_id or "",
+            "audience_conversation_id": original_audience,
         }
         if any(
             str(
@@ -11771,7 +11887,10 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             raise CanonicalSourceConflict(
                 "attested source lacks an immutable exact assistant pair"
             )
-        return _row_to_canonical_turn(rows[0])
+        result = _row_to_canonical_turn(stored)
+        if result.audience_conversation_id != (row.audience_conversation_id or ""):
+            result.authorized_replay_audience = row.audience_conversation_id or ""
+        return result
 
     def attest_canonical_user_source(
         self,
@@ -11824,13 +11943,21 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 raise CanonicalSourceConflict(
                     "attested canonical user row does not exist"
                 )
+            expected_stored_audience = audience
+            if str(stored["audience_conversation_id"] or "") != audience:
+                verify_source_replay_audience(
+                    conn, canonical_turn_id=canonical_id,
+                    current_audience=str(stored["audience_conversation_id"] or ""),
+                    incoming_audience=audience, dialect="postgres",
+                )
+                expected_stored_audience = str(stored["audience_conversation_id"] or "")
             exact = (
                     str(stored["user_content"] or "") == content
                     and not str(stored["assistant_content"] or "").strip()
                     and str(stored["turn_hash"] or "") == (row.turn_hash or "")
                     and str(stored["source_message_id"] or "")
                     == claim["message_id"]
-                    and str(stored["audience_conversation_id"] or "") == audience
+                    and str(stored["audience_conversation_id"] or "") == expected_stored_audience
                     and str(stored["origin_channel_id"] or "")
                     == claim["channel_id"]
                     and str(stored["sender_actor_id"] or "") == actor_id
@@ -11899,6 +12026,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 "reply_target_message_id": claim["reply_target_message_id"],
             }
             if existing is not None:
+                expected["audience_conversation_id"] = verify_source_replay_audience(
+                    conn, canonical_turn_id=canonical_id,
+                    current_audience=str(stored["audience_conversation_id"] or ""),
+                    incoming_audience=audience, dialect="postgres",
+                )
                 if any(
                         str(existing[name] if existing[name] is not None else "")
                         != str(value)
@@ -11919,6 +12051,14 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         (seen, *key),
                 )
                 return
+            if conn.execute(
+                "SELECT 1 FROM canonical_audience_reassignments "
+                "WHERE canonical_turn_id IN (%s, %s)",
+                (canonical_id, assistant_id),
+            ).fetchone() is not None:
+                raise CanonicalSourceConflict(
+                    "cannot attest an audience-reassigned legacy row"
+                )
             conn.execute(
                     """INSERT INTO canonical_message_sources
                        (tenant_id, agent_scope_id, platform, account_id,

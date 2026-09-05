@@ -1,5 +1,13 @@
 # Bug log
 
+## BUG-070 — Historical audience corrections conflict with immutable source admission
+
+- **Reported:** 2026-09-05.
+- **Cause:** Storage ownership merges preserve the original memory audience. Updating canonical audience alone conflicts with the immutable source ledger, so exact replay under either the original or corrected audience cannot remain both idempotent and source-attested. Destructive cache invalidation also discards durable card carryovers even though their evidence survives a scope correction.
+- **Fix:** Add an explicit administrative manifest for opaque audience IDs, fenced by tenant, active owner, direct aliases, lifecycle epoch, exact source membership and drained work. Atomically record immutable per-row authorizations and update complete canonical pairs while retaining original source receipts, bodies and physical provenance. Only an exact source replay can use its authorized original/current audience; ordinary retrieval scope is unchanged. Refuse every selected unattested row and prevent a legacy receipt from acquiring new source membership inside the pair transaction. Hide affected cards without deleting their immutable claims, requiring exact citation reprojection and normal re-admission before serving. Planning requires current canonical/card trigger bodies and opens an existing database without startup migrations or changing its journal mode.
+- **Regression:** Synthetic SQLite and PostgreSQL cases prove complete-pair correction, original/current replay, unrelated-audience rejection, stale and recomputed manifests, rollback, immutable SQL guards, retained card evidence, later owner merges and idempotent apply. Legacy receipt adoption fails before pair commit, and unsupported unattested rows refuse the entire operation. CLI cases prove unchanged non-WAL database bytes, missing-schema/stale-trigger refusal, explicit database selection and private manifests. The missing-API, durable-card, legacy admission and read-only capability regressions failed before their respective fixes.
+- **Validation:** Forty-four focused SQLite/store and CLI cases passed, plus four existing source-admission invariants. Twenty PostgreSQL checks passed on a separately named disposable database, including the complete audience module and source/card invariants. The full suite ran once: 6,105 passed, 513 skipped and six failures exposed outdated fake PostgreSQL catalog fixtures; those six cases passed after fixture correction. The full suite was not repeated. Package-wide Ruff and diff checks passed. Deployment and historical data repair require independent restored-data verification.
+
 ## BUG-069 — A single phrase becomes high-confidence recurring actor style
 
 - **Reported:** 2026-09-05.

@@ -3191,6 +3191,11 @@ def main():
     )
     _configure_structured_summary_migration(admin_sub, _positive_int)
 
+    from .audience_reassignment_cmd import (
+        configure_parser as _configure_audience_reassignment,
+    )
+    _configure_audience_reassignment(admin_sub)
+
     resequence_parser = admin_sub.add_parser(
         "resequence-canonical-turns",
         help=(
@@ -3483,6 +3488,9 @@ def main():
                 cmd_admin_migrate_structured_summaries,
             )
             cmd_admin_migrate_structured_summaries(args)
+        elif args.admin_command in {"plan-audience-reassignment", "reassign-audience"}:
+            from .audience_reassignment_cmd import cmd_admin_audience_reassignment
+            cmd_admin_audience_reassignment(args)
         elif args.admin_command == "resequence-canonical-turns":
             cmd_admin_resequence_canonical_turns(args)
         elif args.admin_command == "normalize-canonical-actor-ids":

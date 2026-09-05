@@ -2439,6 +2439,9 @@ class CanonicalTurnRow:
     # disclosure. Collapsing them would let a DM request through a merged alias
     # receive guild-origin influence.
     #
+    # An explicit audited administrative reassignment can change the effective
+    # audience while the independent source receipt retains its original route.
+    # Ordinary aliases never grant that authority.
     # Empty means the route could not be proved, which makes the row ineligible
     # for policy reads rather than defaulting to the owner.
     audience_conversation_id: str = ""
@@ -2451,6 +2454,9 @@ class CanonicalTurnRow:
     # user message. It is deliberately NOT persisted on ``canonical_turns``;
     # the normalized claim is consumed atomically into the source ledger.
     source_claim: dict[str, str] | None = None
+    # Transient, store-issued authorization for an exact original-source replay
+    # after an audited audience reassignment. Never persisted or used by reads.
+    authorized_replay_audience: str = field(default="", repr=False, compare=False)
 
 
 @dataclass

@@ -5,6 +5,15 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-070 — Audited audience correction preserves immutable source replay
+
+- **Cause**: Ownership merges retain audience boundaries, while direct audience rewrites conflict with source attestation and can erase durable card evidence.
+- **Fix**: Explicit opaque audience manifests record complete-pair authorizations, retain original receipts, and permit only exact original/current source replay. Stale cards remain hidden with their immutable evidence retained for reprojection and re-admission.
+- **Tests**:
+  - `test_audience_reassignment.py` — synthetic complete-pair, source integrity, tenant/lifecycle, active work, rollback, SQL guards, idempotency, card preservation and later owner merge contracts; unattested-row refusal, historical receipt adoption/replay rejection and valid-digest tenant/alias/pair fences.
+  - `test_audience_reassignment_postgres.py` — real PostgreSQL parity for exact replay, stale and valid-digest manifests, guards, audit cascade cleanup, durable card preservation, unsupported-row refusal, legacy adoption rollback and current trigger-body requirements; requires a disposable database.
+  - `test_audience_reassignment_cli.py` — read-only planning/default verification, non-WAL database byte/journal preservation, explicit database selection, exclusive private manifests, missing-schema/stale-trigger refusal and safe errors.
+
 ### BUG-001 — Headless runner shows `_general` as primary tag
 
 - **Symptom**: Headless replay would show `_general` as the primary tag for every turn

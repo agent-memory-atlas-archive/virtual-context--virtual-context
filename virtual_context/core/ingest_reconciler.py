@@ -1464,8 +1464,15 @@ class IngestReconciler:
             or (stored.turn_hash or "") != (row.turn_hash or "")
             or (stored.sender_actor_id or "") != (row.sender_actor_id or "")
             or (stored.source_message_id or "") != (row.source_message_id or "")
-            or (stored.audience_conversation_id or "")
-            != (row.audience_conversation_id or "")
+            or (
+                (stored.audience_conversation_id or "")
+                != (row.audience_conversation_id or "")
+                and (
+                    not (row.audience_conversation_id or "")
+                    or getattr(stored, "authorized_replay_audience", "")
+                    != row.audience_conversation_id
+                )
+            )
             or (stored.origin_channel_id or "") != (row.origin_channel_id or "")
         ):
             raise CanonicalSourceConflict(

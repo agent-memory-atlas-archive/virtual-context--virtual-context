@@ -35,7 +35,20 @@ TAG_SUMMARY_REQUIRED_COLUMNS = (
 )
 
 
-def _fact_embeddings_catalog_result(sql: str):
+AUDIENCE_AUDIT_COLUMNS = {
+    "audience_reassignment_operations": (
+        "operation_id", "tenant_id", "owner_conversation_id", "from_audience",
+        "to_audience", "expected_lifecycle_epoch", "manifest_digest", "row_count", "created_at",
+    ),
+    "canonical_audience_reassignments": (
+        "canonical_turn_id", "operation_id", "tenant_id", "owner_conversation_id",
+        "from_audience", "to_audience", "from_attribution_version", "to_attribution_version",
+        "turn_hash", "source_fingerprint", "row_fingerprint", "manifest_digest", "created_at",
+    ),
+}
+
+
+def _fact_embeddings_catalog_result(sql: str, params=None):
     """Truthy catalog rows for the constructor's required-DDL assertions.
 
     ``PostgresStore.__init__`` asserts ``fact_embeddings`` + its index + FK
@@ -48,6 +61,35 @@ def _fact_embeddings_catalog_result(sql: str):
         SPEAKER_HANDLE_COLUMNS,
         SPEAKER_HANDLE_UNIQUE_KEYS,
     )
+
+    relation = params[0] if params and isinstance(params[0], str) else None
+    if "pg_get_functiondef(tgfoid)" in sql:
+        return _FakeRowsResult([
+            {"tgname": name, "definition": "SELECT * FROM canonical_audience_reassignments"}
+            for name in params
+        ])
+    if relation in AUDIENCE_AUDIT_COLUMNS:
+        if "information_schema.columns" in sql:
+            return _FakeRowsResult([
+                {"column_name": column} for column in AUDIENCE_AUDIT_COLUMNS[relation]
+            ])
+        if "pg_constraint" in sql and "contype = 'p'" in sql:
+            primary = ("operation_id" if relation == "audience_reassignment_operations"
+                       else "canonical_turn_id")
+            return _FakeRowsResult([{"attname": primary}])
+    if "canonical_audience_reassignments" in sql:
+        if "pg_constraint" in sql and "contype = 'f'" in sql:
+            return _FakeRowsResult([
+                {"definition": "FOREIGN KEY (canonical_turn_id) REFERENCES "
+                 "canonical_turns(canonical_turn_id) ON DELETE CASCADE"},
+                {"definition": "FOREIGN KEY (operation_id) REFERENCES "
+                 "audience_reassignment_operations(operation_id)"},
+            ])
+        if "pg_trigger" in sql:
+            return _FakeRowsResult([
+                {"tgname": "trg_audience_reassignment_guard"},
+                {"tgname": "trg_audience_operation_guard"},
+            ])
 
     if "to_regclass('public.speaker_handles')" in sql:
         return _FakeRowsResult([{"reg": "speaker_handles"}])
@@ -110,7 +152,7 @@ class _FakeConn:
 
     def execute(self, sql: str, params=None):
         self.executed.append((sql, params))
-        catalog = _fact_embeddings_catalog_result(sql)
+        catalog = _fact_embeddings_catalog_result(sql, params)
         if catalog is not None:
             return catalog
         return self
@@ -351,7 +393,7 @@ def test_postgres_store_get_all_segments_uses_batch_tag_lookup(monkeypatch):
     class _RowsConn(_FakeConn):
         def execute(self, sql: str, params=None):
             self.executed.append((sql, params))
-            catalog = _fact_embeddings_catalog_result(sql)
+            catalog = _fact_embeddings_catalog_result(sql, params)
             if catalog is not None:
                 return catalog
             if "FROM segments" in sql:
@@ -400,7 +442,7 @@ def test_normalize_request_turn_sequences_works_without_executemany(monkeypatch)
     class _NormalizeConn(_FakeConn):
         def execute(self, sql: str, params=None):
             self.executed.append((sql, params))
-            catalog = _fact_embeddings_catalog_result(sql)
+            catalog = _fact_embeddings_catalog_result(sql, params)
             if catalog is not None:
                 return catalog
             if "SELECT id, conversation_id, request_turn, timestamp FROM request_context" in sql:
