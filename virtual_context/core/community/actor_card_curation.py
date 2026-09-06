@@ -92,7 +92,10 @@ class ActorCardCurationService:
                 '"greeting_only", "one_off_trivia", "bot_meta_or_test", '
                 '"no_durable_context", or "insufficient_evidence". It must be '
                 '"substantive" exactly when substantive is true. entries must '
-                "be an array. A substantive actor must receive at least one entry; "
+                "be an array. One-shot service or external-resource requests alone "
+                "are no_durable_context: return substantive false and entries []. "
+                "Do not invent a preference, goal, or history entry just to cover "
+                "a completed action. A substantive actor must receive at least one entry; "
                 "a non-substantive actor must receive none. Each entry must contain "
                 "exactly kind, body, confidence, fact_ids, and turn_ids. kind must "
                 'be exactly one of "communication_pref", "active_goal", '

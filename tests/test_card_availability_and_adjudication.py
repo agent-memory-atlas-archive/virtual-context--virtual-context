@@ -39,7 +39,7 @@ from tests.test_actor_cards import (
     _entry,
     _now,
     _turn_source,
-    store,  # fixture
+    store as store,  # fixture
 )
 from tests.test_actor_cards import CARD_SCOPE_CROSS_CONTEXT
 
@@ -314,11 +314,14 @@ def test_agent_refused_rejection_is_accepted_and_rejects(store):
 
 @pytest.mark.regression("BUG-065")
 def test_judgment_rules_cover_agent_adjudication():
+    from virtual_context.core.community.actor_card_policy import _ACTOR_CARD_ADMISSION_REJECTION_RULES
+
     rules = cp._ACTOR_CARD_JUDGMENT_RULES.lower()
     assert "refused" in rules
     assert "honored" in rules
     assert "safety" in rules
-    assert "agent_refused" in rules or "safety_posture_request" in rules
+    assert "agent_refused" in _ACTOR_CARD_ADMISSION_REJECTION_RULES
+    assert "safety_posture_request" in _ACTOR_CARD_ADMISSION_REJECTION_RULES
 
 
 @pytest.mark.regression("BUG-064")

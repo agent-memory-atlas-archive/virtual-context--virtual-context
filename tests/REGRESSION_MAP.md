@@ -5,6 +5,19 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-071 — External actions are not lasting communication preferences
+
+- **Cause**: A persistent external-resource change and the agent's compliance could be mistaken for a preference about future responses, then applied across contexts.
+- **Fix**: Both semantic-model prompts distinguish external actions from lasting forms of address, tone, and response format, including stored reply settings. Admission cannot admit to satisfy coverage; one-shot service requests can curate as `no_durable_context`. Misclassified immutable fresh or existing entries reject with `wrong_kind` after subject checks. Policy 18 reconsiders previous admissions when a rebuild is explicitly scheduled; it does not enqueue clean cards.
+- **Tests**:
+  - `test_actor_card_resource_preferences.py::test_both_prompt_surfaces_distinguish_response_preferences_from_external_actions` — the shared contract reaches both models, including the synthetic action's honored reply; failed before the fix.
+  - `test_actor_card_resource_preferences.py::test_rebuild_rejects_customization_but_keeps_genuine_address_and_response_preference` — fresh and carried-over rejection decisions remove the resource action while retaining a genuine address and explanation preference on a cross-context read. Mocked decisions validate the rebuild path rather than live semantic accuracy.
+  - `test_actor_card_resource_preferences.py::test_action_only_substantive_actor_can_reject_every_candidate_without_failure` — primary, fallback, and coverage adjudicator allow zero admissions, yielding `no_durable_entries` with no failure count.
+  - `test_actor_card_resource_preferences.py::test_curator_can_classify_action_only_evidence_as_no_durable_context` — no fabricated entry is required for an isolated completed request.
+  - `test_actor_card_resource_preferences.py::test_reproposed_carryover_keeps_existing_origin_and_is_rejected` — an identical fresh proposal does not exempt an existing entry from re-admission.
+  - `test_actor_card_resource_preferences.py::test_actor_subject_action_keeps_wrong_subject_priority` — source-role errors remain distinct from kind errors.
+  - `test_actor_card_resource_preferences.py::test_repeated_resource_actions_do_not_exclude_stored_reply_preferences` — repeated actions remain separate from lasting stored reply-language preferences.
+
 ### BUG-070 — Audited audience correction preserves immutable source replay
 
 - **Cause**: Ownership merges retain audience boundaries, while direct audience rewrites conflict with source attestation and can erase durable card evidence.
@@ -626,6 +639,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_history_widening_guard.py` | BUG-061 |
 | `test_actor_card_admission_quality.py` | BUG-063 |
 | `test_actor_card_style_evidence.py` | BUG-069 |
+| `test_actor_card_resource_preferences.py` | BUG-071 |
 | `test_card_availability_and_adjudication.py` | BUG-064, BUG-065 |
 | `test_render_escape_host_attribution.py` | BUG-066, BUG-067 |
 | `test_tag_summary_materialization.py` | BUG-041 |

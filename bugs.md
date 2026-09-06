@@ -1,5 +1,14 @@
 # Bug log
 
+## BUG-071 — External customization requests become cross-context response preferences
+
+- **Reported:** 2026-09-05.
+- **Cause:** The shared card contract treated an agent-directed instruction and visible compliance as evidence of a communication preference without distinguishing conversational behavior from actions on external resources. A persistent resource change could therefore become an enduring preference applied across contexts.
+- **Fix:** Policy 18 distinguishes how to address or respond to a person from changing a stored name, label, role, color, icon, document, or other resource, even when the external action repeats. Agent compliance does not establish a response preference. Stored settings that govern actual replies remain eligible under the same durability rules. Admission alone emits rejection reasons and never admits a candidate to satisfy coverage; the curator can classify one-shot service requests as `no_durable_context`. Subject preservation still takes precedence over kind errors. Fresh proposals and existing carryovers receive the same checks; storage kinds and audience policy are unchanged.
+- **Regression:** Synthetic requests pair completed resource customizations with genuine address, explanation, and stored reply-language preferences. Tests cover primary, fallback, and adjudicated rejection of an action-only substantive actor, clean empty curation, repeated actions, re-proposed carryovers, and incorrect actor-subject phrasing. Both actual prompts and honored replies are pinned. Fixed admission decisions test routing and persistence, not a measured model classification rate.
+- **Validation:** The initial prompt regression and five coverage/boundary cases failed before their respective corrections. Ten new cases and six surrounding semantic-policy, confidence, paired-reply, refusal, and policy-version checks passed afterward. The full suite ran once under the suite lock: 6,133 passed and 522 skipped in 49.17 seconds. A final admission-coverage consistency pin failed before aligning the action-only definition; the focused checks passed afterward without repeating the full suite.
+- **Existing data:** The version enters the rebuild fingerprint; it does not enqueue or invalidate clean cards retroactively. Normal scheduling covers actors involved in successful compaction and due transient-failure retries. Existing misclassified cards therefore require an explicit maintenance rebuild through normal curation and independent admission. Maintenance must invoke the rebuild service directly, with force when needed, or dirty the profile before calling `refresh_actor_card`, which returns early for clean profiles. No stored entry bodies are rewritten by this change.
+
 ## BUG-070 — Historical audience corrections conflict with immutable source admission
 
 - **Reported:** 2026-09-05.

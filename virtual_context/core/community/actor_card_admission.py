@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from .actor_card_policy import (
     _ACTOR_CARD_SEMANTIC_CONTRACT,
     _ACTOR_CARD_JUDGMENT_RULES,
+    _ACTOR_CARD_ADMISSION_REJECTION_RULES,
     _ActorCardAdmissionError,
 )
 
@@ -171,9 +172,12 @@ class ActorCardAdmissionService:
                 "ongoing goal, durable preference/style, or a meaningful topic "
                 "the actor discussed with the agent. Greetings, bot invocation "
                 "checks, memory/preference probes, and isolated trivia questions "
-                "are not substantive. A substantive actor must finish with at "
-                "least one admitted card entry; relevant_history is appropriate "
-                "for useful topic continuity when no narrower entry is justified. "
+                "are not substantive. One-shot service or external-resource "
+                "requests alone are no_durable_context: classify them as "
+                "non-substantive. A substantive actor may end with no "
+                "admitted entries when every candidate fails a check; never admit "
+                "a candidate to satisfy coverage. Coverage describes the actor's "
+                "interaction and does not override candidate eligibility. "
                 "Return JSON only with exactly substantive, coverage_reason, and "
                 "decisions. substantive must be boolean. coverage_reason must be "
                 'exactly one of "substantive", "greeting_only", '
@@ -252,6 +256,7 @@ class ActorCardAdmissionService:
             )
             + _ACTOR_CARD_SEMANTIC_CONTRACT
             + _ACTOR_CARD_JUDGMENT_RULES
+            + _ACTOR_CARD_ADMISSION_REJECTION_RULES
         )
         user = json.dumps(
             {
