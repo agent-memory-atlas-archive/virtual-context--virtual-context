@@ -2372,9 +2372,10 @@ class VirtualContextEngine:
         # instead of trusting the upstream invariant. ``list(None)`` raises
         # ``TypeError`` and would crash the persist path silently under the
         # broad exception handler below.
-        # Per-entry derivation: each half's channel comes from its own
-        # metadata. An assistant message with no envelope of its own stays
-        # empty rather than inheriting the user's channel.
+        # Per-entry derivation supplies each half's explicit channel. The
+        # reconciler can additionally bind an exact attested completion to
+        # its validated source channel; ordinary history cannot inherit one
+        # merely because another message is adjacent.
         from .types import (
             SOURCE_CONVERSATION_KEY,
             get_actor_id,

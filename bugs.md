@@ -1,5 +1,14 @@
 # Bug log
 
+## BUG-072 — Exact assistant completions lose source-channel provenance
+
+- **Reported:** 2026-09-09.
+- **Cause:** Completed replies without their own inbound envelope reached canonical admission with an empty channel. The exact source claim bound the user and assistant into one durable pair, and both halves received the proved audience, but only the user retained the source channel. Audience-scoped retrieval consequently excluded the assistant's original words.
+- **Fix:** After validating the exact source claim, completion admission binds the assistant to the same source channel and rejects a conflicting explicit assistant channel. Human sender, actor, message identity and reply-subject fields remain role-local. Unattested history still cannot inherit channel provenance from an adjacent user. Idempotent replies return stored channel metadata without implying that historical rows were repaired.
+- **Regression:** Synthetic wager resolution is stored as assistant-only text and recalled from another authorized channel. Matching explicit metadata remains accepted; conflicting assistant channel and invalid user-source claims fail without writes. The public completed-turn surface is exercised with an assistant message lacking an envelope, and legacy unattested behavior is retained.
+- **Validation:** The missing-channel recall and conflicting-channel admission tests failed before the fix. Eight new cases and five existing source replay, interleaving, legacy adoption, rollback and generation controls passed afterward. The additional cases check completion of a pre-existing user row and honest unchanged metadata on historical replay. Targeted Ruff and diff checks passed; no broad suite was run.
+- **Existing data:** Already-completed rows require explicit provenance repair. This change does not rewrite canonical history, source receipts or audience-correction authorizations.
+
 ## BUG-071 — External customization requests become cross-context response preferences
 
 - **Reported:** 2026-09-05.

@@ -5,6 +5,19 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-072 — Exact assistant completions retain their source channel
+
+- **Cause**: An assistant completion without its own envelope was durably paired with its attested user source but lacked the channel required for retrieval.
+- **Fix**: Exact completion admission derives the assistant channel only after validating the source claim, rejects explicit channel disagreement, and retains role-local human identity. Existing completed rows are not silently repaired.
+- **Tests**:
+  - `test_completed_assistant_channel.py::test_attested_completion_is_recalled_across_channels` — missing or matching explicit assistant channel yields source-backed recall of the original assistant concession and no human identity bleed; missing-channel case failed before the fix.
+  - `test_completed_assistant_channel.py::test_attested_completion_rejects_conflicting_assistant_channel` — conflicting explicit assistant channel refuses the pair without writes; failed before the fix.
+  - `test_completed_assistant_channel.py::test_unattested_completion_does_not_inherit_user_channel` — an unproved source cannot donate neighboring channel metadata.
+  - `test_completed_assistant_channel.py::test_conflicting_user_source_is_rejected_before_assistant_admission` — a contradictory source claim cannot authorize assistant provenance.
+  - `test_completed_assistant_channel.py::test_completed_turn_surface_preserves_channel_without_assistant_envelope` — the public completion API retains the exact channel when a provider reply contains only role and content.
+  - `test_completed_assistant_channel.py::test_completion_of_existing_user_preserves_source_channel` — completing a pre-existing exact user row persists the new assistant's source channel.
+  - `test_completed_assistant_channel.py::test_historical_resend_reports_stored_channel_without_repair` — a completed historical pair with a blank assistant channel is idempotent and reports the unchanged stored value rather than claiming a repair.
+
 ### BUG-071 — External actions are not lasting communication preferences
 
 - **Cause**: A persistent external-resource change and the agent's compliance could be mistaken for a preference about future responses, then applied across contexts.

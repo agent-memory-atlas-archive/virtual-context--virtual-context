@@ -406,6 +406,22 @@ class IngestReconciler:
                 self._resolve_reply_subjects(conversation_id, prepared)
             if user_source_claim:
                 membership = self._find_attested_source_membership(prepared[0])
+                # The validated source claim binds this exact completion to
+                # one channel, just as the proved route binds its audience.
+                # A provider response need not repeat the inbound envelope.
+                # This does not authorize inheriting a human speaker or
+                # guessing a channel from neighboring transcript entries.
+                user_row, assistant_row = prepared
+                if (
+                    assistant_row.origin_channel_id
+                    and assistant_row.origin_channel_id != user_row.origin_channel_id
+                ):
+                    raise CanonicalSourceConflict(
+                        "attested assistant channel disagrees with its source"
+                    )
+                assistant_row.origin_channel_id = user_row.origin_channel_id
+                if not assistant_row.origin_channel_label:
+                    assistant_row.origin_channel_label = user_row.origin_channel_label
                 if membership is not None:
                     return self._complete_attested_single(
                         conversation_id,
@@ -973,6 +989,11 @@ class IngestReconciler:
             self._preserve_existing_enrichment(
                 assistant_row, stored_assistant,
             )
+            # An idempotent completion performs no write. Historical rows
+            # with missing channel provenance require an explicit repair;
+            # report their stored fields instead of implying a repair here.
+            assistant_row.origin_channel_id = stored_assistant.origin_channel_id
+            assistant_row.origin_channel_label = stored_assistant.origin_channel_label
             return CanonicalIngestResult(
                 merge_mode="source_exact_resend",
                 turns_written=0,
