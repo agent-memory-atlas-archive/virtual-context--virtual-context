@@ -1,5 +1,14 @@
 # Bug log
 
+## BUG-074 — Strict history tagging skips canonical search indexing
+
+- **Reported:** 2026-09-09.
+- **Cause:** Exact-source admission defers canonical chunk embeddings to the durable tagger. Strict history ingestion independently writes tag fields and marks existing rows tagged, bypassing that worker's embedding step. The durable selector excludes tagged rows, leaving completed history without its role-local search entries.
+- **Fix:** After verifying exact physical identity and body hashes, strict history creates canonical embeddings before the tag compare-and-set. Failed embedding leaves the group untagged for retry. Normal, stub and tool branches append the in-memory tag entry only after persistence succeeds, so failed pairs do not advance progress or checkpoints. Already-tagged hydration remains read-only; durable tagging keeps its existing embedding path.
+- **Regression:** Synthetic exact-source pairs reproduce successful tagging followed by an empty durable queue and missing chunks. Controls cover separated role lanes, partial embedding failure and retry, later-pair progress, stale lifecycle and body rejection, legacy combined rows, and avoiding duplicate embedding on replay or the durable worker path.
+- **Validation:** Ten new focused cases and nine existing history, identity and durable-worker controls passed. Three PostgreSQL regressions passed, including provider/storage failure followed by durable recovery. A live embedding-service check produced six role-local chunks for six fresh rows and retrieved the exact assistant response through the configured quote tool from another channel, preserving source claims and non-tag canonical fields. Targeted Ruff passed.
+- **Existing data:** Previously tagged rows are not automatically reprocessed. Missing historical search entries require explicit source-verified indexing. Generic chunk writes retain their existing transaction semantics; the tag compare-and-set remains the authority for body, membership and lifecycle races.
+
 ## BUG-073 — Historical channel repair invalidates existing audience receipts
 
 - **Reported:** 2026-09-09.

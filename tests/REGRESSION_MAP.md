@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-074 — Strict history indexing precedes tag completion
+
+- **Cause**: Strict history marks exact existing rows tagged without the canonical embeddings deferred by admission, so the durable worker skips them.
+- **Fix**: Embed verified physical rows before the tag compare-and-set; failed groups remain retryable without advancing in-memory entries, progress or checkpoints.
+- **Tests**:
+  - `test_strict_history_indexing.py` — real strict-history and durable-selector path, role-local retrieval, partial failures and retries, exact source/lifecycle controls, hydrated replay and legacy combined rows.
+  - `test_history_tagging_index_postgres.py` — PostgreSQL strict-history indexing and retry parity through the real storage and query path.
+
 ### BUG-073 — Audited historical assistant-channel enrichment
 
 - **Cause**: A channel fill on an existing audience-corrected assistant row changes the fingerprint in its immutable audience receipt.

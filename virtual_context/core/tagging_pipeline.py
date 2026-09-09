@@ -681,6 +681,7 @@ class TaggingPipeline:
             )
             if not row.turn_hash or row.turn_hash != turn_hash:
                 return 0
+            self._embed_existing_canonical_rows(existing_rows, epoch=epoch)
             updated = self._store.update_canonical_group_tagging_if_unchanged(
                 conversation_id=self.config.conversation_id,
                 turn_group_number=int(row.turn_group_number),
@@ -720,6 +721,7 @@ class TaggingPipeline:
         group_numbers = {int(row.turn_group_number) for row in existing_rows}
         if len(group_numbers) != 1 or next(iter(group_numbers)) < 0:
             return 0
+        self._embed_existing_canonical_rows(existing_rows, epoch=epoch)
         updated = self._store.update_canonical_group_tagging_if_unchanged(
             conversation_id=self.config.conversation_id,
             turn_group_number=next(iter(group_numbers)),
@@ -737,6 +739,46 @@ class TaggingPipeline:
             return 0
         entry.canonical_turn_id = existing_rows[0].canonical_turn_id or entry.canonical_turn_id
         return len(existing_rows)
+
+    def _embed_existing_canonical_rows(
+        self, rows: list["CanonicalTurnRow"], *, epoch: int,
+    ) -> None:
+        """Index verified physical rows before removing them from the tag queue.
+
+        Strict history ingestion otherwise marks a group tagged before the
+        durable worker can perform its embedding step. Match that worker's
+        ordering: a failed side leaves the group untagged for a later retry.
+        The existing tag CAS remains the authority for row/hash/lifecycle
+        races; generic chunk writes are not an atomic part of that CAS.
+        """
+        for row in rows:
+            try:
+                current_epoch = self._store.get_lifecycle_epoch(
+                    self.config.conversation_id,
+                )
+            except (AttributeError, NotImplementedError):
+                current_epoch = None
+            except KeyError as exc:
+                raise RuntimeError(
+                    "strict canonical tagging lifecycle epoch unavailable"
+                ) from exc
+            if current_epoch is not None and int(current_epoch) != epoch:
+                raise RuntimeError("strict canonical tagging lifecycle epoch changed")
+            embedded = self._semantic.embed_and_store_turn(
+                row.conversation_id,
+                int(row.turn_group_number),
+                canonical_turn_id=row.canonical_turn_id,
+                user_text=row.user_content,
+                assistant_text=row.assistant_content,
+                user_raw_content=row.user_raw_content,
+                assistant_raw_content=row.assistant_raw_content,
+                reply_target_body=row.reply_target_body or "",
+            )
+            if not embedded:
+                raise RuntimeError(
+                    "strict canonical tagging embedding incomplete; "
+                    "leaving group untagged for retry"
+                )
 
     def _hydrate_entry_from_tagged_rows(
         self,
@@ -1949,7 +1991,6 @@ class TaggingPipeline:
                     sender=sender or "",
                     session_date=running_session_date,
                 )
-                self._turn_tag_index.append(entry)
                 try:
                     self._persist_canonical_turn(
                         entry,
@@ -1967,6 +2008,7 @@ class TaggingPipeline:
                     # lease transition to another worker. Never swallow.
                     if require_existing_canonical:
                         raise
+                self._turn_tag_index.append(entry)
                 self._link_turn_tool_outputs(entry.turn_number, turn_tool_refs)
                 ingested += 1
                 continue
@@ -2008,7 +2050,6 @@ class TaggingPipeline:
                     sender=sender or "",
                     session_date=running_session_date,
                 )
-                self._turn_tag_index.append(entry)
                 try:
                     self._persist_canonical_turn(
                         entry,
@@ -2022,6 +2063,7 @@ class TaggingPipeline:
                 except RuntimeError:
                     if require_existing_canonical:
                         raise
+                self._turn_tag_index.append(entry)
                 self._link_turn_tool_outputs(entry.turn_number, turn_tool_refs)
                 ingested += 1
                 logger.info(
@@ -2136,7 +2178,6 @@ class TaggingPipeline:
                 sender=sender or "",
                 session_date=running_session_date,
             )
-            self._turn_tag_index.append(entry)
             try:
                 self._persist_canonical_turn(
                     entry,
@@ -2150,6 +2191,7 @@ class TaggingPipeline:
             except RuntimeError:
                 if require_existing_canonical:
                     raise
+            self._turn_tag_index.append(entry)
             self._link_turn_tool_outputs(entry.turn_number, turn_tool_refs)
             ingested += 1
 
