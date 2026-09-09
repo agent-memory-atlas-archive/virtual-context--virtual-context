@@ -11,6 +11,17 @@ Use `pytest -m regression` to run all regression tests.
 - `test_source_event_times_postgres.py` — the same admission/replay and later-enrichment boundaries on a named disposable PostgreSQL database, including exact guard-function validation.
 - `test_actor_card_source_time_evidence.py` — occurrence versus ingestion distinction, missing-authority exclusion, bounded large reads, fingerprint invalidation and segment evidence timestamp labels.
 
+### BUG-075 — Source-grounded finite agreements and resolved continuity
+
+- **Cause:** Blanket transience and banter rejection discarded accepted ongoing agreements; cards lacked validity and scoped finite carryover.
+- **Fix:** Preserve distinct acknowledged outcomes and bounded response preferences, independently verify dates, retain original intervals, and enforce validity during reads.
+- **Tests:**
+  - `test_actor_card_commitment_policy.py` — actual curator and admission prompt contracts, explicit date/attested occurrence requirements, playful acceptance, separate outcome history, and immutable bounds.
+  - `test_actor_card_curation_shape.py` — grouped claims, label/shape refusal, complete fallback and retention of the previous card after invalid responses.
+  - `test_actor_card_commitment_rebuild.py` — normalized proposals through admission/storage/read, cross-channel continuity with audience isolation, carryover, interval identity and malformed date rejection.
+  - `test_actor_card_validity.py` — clock boundaries, stale/dirty cards, future carryover, invalid data, interval collision refusal, compatible normalization and additive schema migration.
+  - `test_actor_card_validity_postgres.py` — corresponding PostgreSQL lifecycle, scope, collision and migration behavior in a disposable database.
+
 ### BUG-074 — Strict history indexing precedes tag completion
 
 - **Cause**: Strict history marks exact existing rows tagged without the canonical embeddings deferred by admission, so the durable worker skips them.

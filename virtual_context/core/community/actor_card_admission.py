@@ -7,6 +7,7 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from .actor_card_policy import (
@@ -135,6 +136,11 @@ class ActorCardAdmissionService:
                     "kind": entry.kind,
                     "body": entry.body,
                     "proposed_confidence": entry.confidence,
+                    **{
+                        name: getattr(entry, name)
+                        for name in ("valid_from", "expires_at")
+                        if getattr(entry, name, "")
+                    },
                     "fact_ids": fact_ids,
                     "turn_ids": turn_ids,
                     "source_segments": [
@@ -188,7 +194,7 @@ class ActorCardAdmissionService:
                 "exactly candidate_id, admit, and reason. admit must be a boolean. "
                 "reason must be exactly one of "
                 '"durable", "temporary", "test_probe", '
-                '"stopped_or_replaced", "completed", "contradicted", '
+                '"stopped_or_replaced", "completed", "expired", "contradicted", '
                 '"insufficient_evidence", "not_durable", '
                 '"not_person_card", "wrong_subject", "wrong_kind", '
                 '"irrelevant_citation", "redundant", '
@@ -216,22 +222,37 @@ class ActorCardAdmissionService:
                 "continuity unless the fresh one materially corrects, updates, or "
                 "better preserves the evidence; reject the other as redundant or "
                 "stopped_or_replaced. Do not admit redundant copies. "
-                "Reject temporary, test/probe, one-turn, session-only, "
-                "channel-only, stopped, replaced, completed, or contradicted "
-                "material. Later source messages revoke or replace earlier "
+                "Reject test/probe instructions and unsupported one-turn, "
+                "session-only, or channel-only behavior requests. Apply the "
+                "shared finite-agreement contract to an honored ongoing "
+                "communication_pref. Reject an expired, stopped, replaced, "
+                "completed, or contradicted preference or active_goal, but do "
+                "not reject meaningful resolved relationship history merely "
+                "because its event completed. Later source messages revoke or replace earlier "
                 "material. Requested answer prefixes and memory-system tests are "
                 "not durable identity preferences. A communication preference or "
                 "interaction style is admissible only when a source message "
                 "explicitly establishes durability beyond the current test, "
                 "session, and channel, or when consistent natural evidence appears "
                 "across distinct actor-authored messages or interactions, ideally "
-                "spread over time. Repeated test instructions do not establish a "
-                "pattern. The immutable candidate body itself "
+                "spread over time, or a finite communication_pref satisfies "
+                "the shared honored-agreement and time-bound rules. Repeated "
+                "test instructions do not establish a pattern. Independently "
+                "verify any valid_from and expires_at against the cited source "
+                "content, their relation to this agreement, the immutable body, "
+                "and as_of. Bounds are immutable candidate claims; do not invent "
+                "or repair them. Reject with insufficient_evidence if a bound "
+                "is not entailed, or if a relative duration without a proved "
+                "starting date is presented as an active preference. Only "
+                "communication_pref may carry those fields; reject other "
+                "kinds with wrong_kind. The immutable candidate body itself "
                 "must be self-contained and unambiguous without relying on the "
                 "surrounding segment; reject with insufficient_evidence when an "
                 "essential referent (such as which medication, goal, or "
                 "preference) is omitted. The body must be fully entailed by the "
-                "cited actor-authored messages. Compact fact fields and tags help "
+                "cited actor-authored messages and their supplied paired agent "
+                "replies, with each participant's role preserved. "
+                "Compact fact fields and tags help "
                 "locate evidence but cannot independently justify body text. "
                 "Full entailment requires preserving every material qualifier in "
                 "the source, including exceptions, exclusions, uncertainty, "
@@ -260,6 +281,7 @@ class ActorCardAdmissionService:
         )
         user = json.dumps(
             {
+                "as_of": datetime.now(timezone.utc).isoformat(),
                 "curator_substantive_claim": curator_substantive,
                 "candidates": candidates,
                 "facts": compact_facts,
@@ -334,6 +356,7 @@ class ActorCardAdmissionService:
                 "test_probe",
                 "stopped_or_replaced",
                 "completed",
+                "expired",
                 "contradicted",
                 "insufficient_evidence",
                 "not_durable",

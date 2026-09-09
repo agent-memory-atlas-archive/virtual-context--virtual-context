@@ -2166,6 +2166,9 @@ class ActorCardEntry:
     superseded_by: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    # Explicit source-grounded validity; absent bounds preserve legacy behavior.
+    valid_from: str | None = None
+    expires_at: str | None = None
 
 
 @dataclass

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from .actor_card_policy import (
     _ACTOR_CARD_SEMANTIC_CONTRACT,
     _ACTOR_CARD_JUDGMENT_RULES,
     _ACTOR_CARD_CONFIDENCE_SCALE,
+    _actor_card_entry_keys_valid,
     _ActorCardAdmissionError,
     _EmptyResponseFallbackProvider,
 )
@@ -50,7 +52,7 @@ class ActorCardCurationService:
         turn_sources: list,
     ) -> tuple[str, bool, str, list, set[str]]:
         """Curate one audience partition without exposing another audience."""
-        from ...types import CARD_ENTRY_BODY_MAX_CHARS
+        from ...types import CARD_ENTRY_BODY_MAX_CHARS, CARD_KINDS
 
         prompt_facts = [
             {
@@ -92,12 +94,21 @@ class ActorCardCurationService:
                 '"greeting_only", "one_off_trivia", "bot_meta_or_test", '
                 '"no_durable_context", or "insufficient_evidence". It must be '
                 '"substantive" exactly when substantive is true. entries must '
-                "be an array. One-shot service or external-resource requests alone "
-                "are no_durable_context: return substantive false and entries []. "
+                "be an object containing exactly four arrays in this order: relevant_history, "
+                "communication_pref, active_goal, interaction_style. First record meaningful "
+                "resolved outcomes in relevant_history; then record distinct response "
+                "obligations in communication_pref. An expiring obligation does not replace "
+                "the outcome that justified it. Each entry must have kind equal to its group. "
+                "Use an empty array for a kind without supported claims. "
+                "One-shot service or external-resource requests alone "
+                "are no_durable_context: return substantive false and all four arrays empty. "
                 "Do not invent a preference, goal, or history entry just to cover "
                 "a completed action. A substantive actor must receive at least one entry; "
-                "a non-substantive actor must receive none. Each entry must contain "
-                "exactly kind, body, confidence, fact_ids, and turn_ids. kind must "
+                "a non-substantive actor must receive four empty arrays. Each entry must contain "
+                "kind, body, confidence, fact_ids, and turn_ids. Only a "
+                "communication_pref with supported time bounds may additionally "
+                "contain valid_from and expires_at; omit these optional fields "
+                "for other entries. No other fields are allowed. kind must "
                 'be exactly one of "communication_pref", "active_goal", '
                 '"relevant_history", or "interaction_style". confidence must '
                 "be a number from 0 through 1. fact_ids "
@@ -106,8 +117,10 @@ class ActorCardCurationService:
                 f"the body. Use at most {_ACTOR_CARD_CITATION_LIMIT} citation ids "
                 "total per entry. Put "
                 "fact ids only in fact_ids and turn ids only in turn_ids; never "
-                "copy an id into both arrays. Obey entries_per_kind as a hard "
-                "maximum. Use a neutral concise body and do not invent identity "
+                "copy an id into both arrays. Each kind has its own independent "
+                "hard maximum in limits.by_kind. limits.max_total_entries is "
+                "the sum of those separate budgets, not a target to fill. "
+                "Use a neutral concise body and do not invent identity "
                 "or intent. Every body must be self-contained and unambiguous when "
                 "read without the surrounding transcript; include essential "
                 "referents such as the specific medication, goal, preference, or "
@@ -119,18 +132,27 @@ class ActorCardCurationService:
                 "do not rewrite it as 'frequently', 'often', or 'always', or "
                 "normalize its meaningful terms (for example, 'pal-o' to 'pal'). "
                 "Do not turn a qualified statement into a "
-                "broader or more certain claim. Do not promote temporary, "
-                "test-only, one-turn, session-only, or channel-only instructions "
-                "into communication_pref or interaction_style. Do not retain a "
+                "broader or more certain claim. Distinguish temporary, test-only, "
+                "one-turn, session-only, or channel-only instructions from an "
+                "explicitly honored ongoing agreement. Do not turn a probe or "
+                "one-turn request into a lasting preference or interaction style; "
+                "a finite agreement must satisfy the shared time-bound contract. "
+                "Do not propose a communication_pref whose expires_at is at or before as_of; "
+                "retain a distinct meaningful acknowledged outcome as relevant_history instead. "
+                "Do not retain a "
                 "preference or goal that later evidence stopped, replaced, "
-                "completed, or contradicted. Use message timestamps, mentioned_at, "
-                "and status to resolve conflicts, with the newest applicable "
-                "evidence winning. A communication preference or interaction "
-                "style is durable only when explicitly stated as lasting or "
-                "consistently supported by repeated natural interactions. Use "
-                "relevant_history for concise, useful continuity about a "
+                "completed, or contradicted. Use explicit source chronology, "
+                "attested occurred_at when supplied, and status to resolve "
+                "conflicts, with the newest applicable evidence winning. "
+                "Ingestion order alone does not prove event order. "
+                "A communication preference or interaction "
+                "style is durable when explicitly stated as lasting or "
+                "consistently supported by repeated natural interactions. "
+                "Use the finite-agreement exception only for communication_pref. "
+                "Use relevant_history for concise, useful continuity about a "
                 "meaningful topic this actor actually discussed with the agent "
-                "when no narrower durable preference or goal is justified. "
+                "when no narrower kind describes that same claim; classify "
+                "distinct claims from the same interaction independently. "
                 "An isolated, underspecified follow-up whose missing referent "
                 "cannot be recovered from the supplied evidence is insufficient "
                 "for relevant_history, even if it sounds important. Subject matter "
@@ -148,10 +170,18 @@ class ActorCardCurationService:
         )
         user = json.dumps(
             {
+                "as_of": datetime.now(timezone.utc).isoformat(),
                 "facts": prompt_facts,
                 "turns": prompt_turns,
                 "limits": {
-                    "entries_per_kind": int(self._config.assembler.actor_card_entries_per_kind),
+                    "by_kind": {
+                        kind: int(self._config.assembler.actor_card_entries_per_kind)
+                        for kind in sorted(CARD_KINDS)
+                    },
+                    "max_total_entries": (
+                        len(CARD_KINDS)
+                        * int(self._config.assembler.actor_card_entries_per_kind)
+                    ),
                     "body_chars": CARD_ENTRY_BODY_MAX_CHARS,
                 },
             },
@@ -174,6 +204,20 @@ class ActorCardCurationService:
                     "actor card curation response is not valid JSON",
                     text,
                 ) from exc
+            if isinstance(parsed, dict) and isinstance(parsed.get("entries"), dict):
+                groups = parsed["entries"]
+                order = ("relevant_history", "communication_pref", "active_goal", "interaction_style")
+                if set(groups) != set(order) or any(
+                    not isinstance(groups[kind], list)
+                    or any(not isinstance(item, dict) or item.get("kind") != kind
+                           for item in groups[kind])
+                    for kind in order
+                ):
+                    raise _ActorCardAdmissionError(
+                        "actor card curation response has invalid kind groups", text,
+                    )
+                # Preserve the established flat internal/provider-adapter contract.
+                parsed = {**parsed, "entries": [item for kind in order for item in groups[kind]]}
             if (
                 not isinstance(parsed, dict)
                 or set(parsed) != {"substantive", "coverage_reason", "entries"}
@@ -186,6 +230,11 @@ class ActorCardCurationService:
             ):
                 raise _ActorCardAdmissionError(
                     "actor card curation response has invalid coverage shape",
+                    text,
+                )
+            if any(not _actor_card_entry_keys_valid(item) for item in parsed["entries"]):
+                raise _ActorCardAdmissionError(
+                    "actor card curation response has invalid entry shape",
                     text,
                 )
             return parsed

@@ -10,6 +10,15 @@
 - **Replay compatibility:** Exact historical replays with incomplete assistant attribution remain accepted while supplemental occurrence metadata is refused. A dedicated refusal type separates unavailable legacy evidence from a contradictory prior timestamp, which remains fatal. Both legacy forms failed before the fix and passed afterward on first adoption and later replay, with the timestamp-conflict control.
 - **Existing data:** No occurrence timestamps are guessed or backfilled automatically. Existing history requires exact trusted source evidence; all existing source-ledger and audience/channel receipt fingerprints remain unchanged.
 
+## BUG-075 — Accepted finite agreements disappear from actor cards
+
+- **Reported:** 2026-09-09.
+- **Cause:** Curation and admission broadly rejected temporary or playful material, including accepted agreements that continue across turns. Card entries had no validity interval, and carryover retained only cross-context preferences and style. A resolved relationship outcome could also be discarded as completed material.
+- **Fix:** Admit source-grounded ongoing response agreements and distinct acknowledged outcomes even when expressed playfully. Finite response preferences carry independently admitted UTC validity bounds and remain in their source audience. Explicit source dates or attested occurrence times can anchor the interval; unknown timing remains qualified history. Readers enforce the start and expiry on every read, and unexpired scoped preferences retain their original bounds through rebuilds. Bounds participate in immutable candidate identity; storage rejects changed bounds under an existing ID. Existing kinds, source checks, refusal rules, and permanent preference behavior remain intact.
+- **Regression:** Synthetic cases cover curation/admission contracts, full rebuild and carryover, immutable date identity, invalid intervals, offset normalization, exact start/expiry boundaries, source-audience isolation, dirty last-good cards, and additive SQLite/PostgreSQL schema compatibility.
+- **Curation shape:** Request independent kind groups with explicit budgets, then flatten into the existing internal entry format. Invalid or mislabeled groups and unexpected entry fields use the bounded malformed-response fallback; invalid fallback retains the prior card. Legacy flat provider-adapter responses remain compatible.
+- **Validation:** Focused storage, rebuild, admission, expiry and compatibility checks passed on SQLite and PostgreSQL. Live-provider validation preserved separate accepted history and finite preferences; a restored-source check confirmed both claims survived the configured actor-card token cap without modifying source, fact, segment or search data. Model-generated historical wording still requires source verification; structural validation alone does not establish semantic fidelity.
+
 ## BUG-074 — Strict history tagging skips canonical search indexing
 
 - **Reported:** 2026-09-09.

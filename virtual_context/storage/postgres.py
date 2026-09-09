@@ -12,6 +12,7 @@ import signal
 import threading
 from collections.abc import Collection
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import psycopg
@@ -19,6 +20,10 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from typing import TYPE_CHECKING
+
+from ..actor_card_validity import (
+    actor_card_is_active, actor_card_is_unexpired, normalize_actor_card_validity,
+)
 
 if TYPE_CHECKING:
     from ..core.compaction_fence import CompactionFenceMode
@@ -3087,12 +3092,16 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                     superseded_by TEXT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    valid_from TEXT NULL,
+                    expires_at TEXT NULL,
                     UNIQUE (id, tenant_id),
                     FOREIGN KEY (tenant_id, actor_id)
                         REFERENCES actor_profiles(tenant_id, actor_id)
                         ON DELETE CASCADE
                 )
             """)
+            conn.execute("ALTER TABLE actor_card_entries ADD COLUMN IF NOT EXISTS valid_from TEXT NULL")
+            conn.execute("ALTER TABLE actor_card_entries ADD COLUMN IF NOT EXISTS expires_at TEXT NULL")
             conn.execute(
                 """CREATE INDEX IF NOT EXISTS idx_actor_card_entries_actor
                    ON actor_card_entries(tenant_id, actor_id, superseded_by)"""
@@ -14447,6 +14456,14 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         actor_id = (actor_id or "").strip()
         if not actor_id:
             return 0
+        bounded_entries = []
+        try:
+            for entry, sources in entries_with_sources:
+                start, end = normalize_actor_card_validity(entry.valid_from, entry.expires_at)
+                bounded_entries.append((replace(entry, valid_from=start, expires_at=end), sources))
+        except ValueError:
+            return 0
+        entries_with_sources = bounded_entries
         expected = expected_source_epochs or {}
         now = _dt_to_str(datetime.now(timezone.utc))
 
@@ -14514,7 +14531,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 ] = []
                 for entry, sources in entries_with_sources:
                     collision = conn.execute(
-                        """SELECT tenant_id, actor_id FROM actor_card_entries
+                        """SELECT tenant_id, actor_id, valid_from, expires_at FROM actor_card_entries
                             WHERE id = %s""",
                         (entry.id,),
                     ).fetchone()
@@ -14523,6 +14540,15 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         or collision["actor_id"] != actor_id
                     ):
                         return 0
+                    if collision is not None:
+                        try:
+                            existing_bounds = normalize_actor_card_validity(
+                                collision["valid_from"], collision["expires_at"],
+                            )
+                        except ValueError:
+                            return 0
+                        if existing_bounds != (entry.valid_from, entry.expires_at):
+                            return 0
                     if not sources:
                         return 0
                     normalized_sources: list[ActorCardEntrySource] = []
@@ -14675,19 +14701,21 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         """INSERT INTO actor_card_entries
                                (id, tenant_id, actor_id, kind, body, confidence,
                                 sensitivity, audience_scope, superseded_by,
-                                created_at, updated_at)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s)
+                                created_at, updated_at, valid_from, expires_at)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s,%s,%s)
                            ON CONFLICT (id) DO UPDATE SET
                                kind=EXCLUDED.kind, body=EXCLUDED.body,
                                confidence=EXCLUDED.confidence,
                                sensitivity=EXCLUDED.sensitivity,
                                audience_scope=EXCLUDED.audience_scope,
                                superseded_by=NULL,
-                               updated_at=EXCLUDED.updated_at""",
+                               updated_at=EXCLUDED.updated_at,
+                               valid_from=EXCLUDED.valid_from, expires_at=EXCLUDED.expires_at""",
                         (
                             entry.id, tenant_id, actor_id, entry.kind, entry.body,
                             float(entry.confidence or 0.0), entry.sensitivity,
                             entry.audience_scope, entry.created_at or now, now,
+                            entry.valid_from, entry.expires_at,
                         ),
                     )
                     conn.execute(
@@ -14916,8 +14944,9 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
     ) -> list[tuple[ActorCardEntry, list[ActorCardEntrySource]]]:
         """Read active durable identity/style entries for explicit re-admission.
 
-        This is an internal refresh read, not a request-serving read.  The
-        pipeline partitions each entry by its proved source audience, and the
+        This is an internal refresh read, not a request-serving read.
+        Finite communication preferences retain their exact validity and scope.
+        The pipeline partitions each entry by its proved source audience, and the
         atomic replacement path re-validates every fact/turn and lifecycle
         epoch before a carried entry can commit.
         """
@@ -14931,8 +14960,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                      WHERE e.tenant_id = %s
                        AND e.actor_id = %s
                        AND e.superseded_by IS NULL
-                       AND e.audience_scope = 'cross_context'
-                       AND e.kind IN ({cross_kinds})
+                       AND (
+                         (e.audience_scope = 'cross_context' AND e.kind IN ({cross_kinds}))
+                         OR (e.kind = 'communication_pref' AND e.audience_scope = 'same_conversation'
+                             AND e.expires_at IS NOT NULL)
+                       )
                        AND (
                          EXISTS (
                            SELECT 1 FROM actor_card_entry_sources fs
@@ -14951,7 +14983,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             out: list[
                 tuple[ActorCardEntry, list[ActorCardEntrySource]]
             ] = []
+            now = datetime.now(timezone.utc)
             for row in rows:
+                if not actor_card_is_unexpired(row["valid_from"], row["expires_at"], now=now):
+                    continue
+                start, end = normalize_actor_card_validity(row["valid_from"], row["expires_at"])
                 source_rows = conn.execute(
                     """SELECT owner_conversation_id,
                               audience_conversation_id,
@@ -15004,6 +15040,8 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         superseded_by=row["superseded_by"],
                         created_at=row["created_at"],
                         updated_at=row["updated_at"],
+                        valid_from=start,
+                        expires_at=end,
                     ),
                     sources,
                 ))
@@ -15125,6 +15163,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             if not rows:
                 return None
 
+            now = datetime.now(timezone.utc)
+            rows = [r for r in rows if actor_card_is_active(r["valid_from"], r["expires_at"], now=now)]
+            if not rows:
+                return None
+            bounds = {r["id"]: normalize_actor_card_validity(r["valid_from"], r["expires_at"]) for r in rows}
             return ActorCard(
                 tenant_id=tenant_id,
                 actor_id=actor_id,
@@ -15138,6 +15181,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         audience_scope=r["audience_scope"],
                         superseded_by=r["superseded_by"],
                         created_at=r["created_at"], updated_at=r["updated_at"],
+                        valid_from=bounds[r["id"]][0], expires_at=bounds[r["id"]][1],
                     )
                     for r in rows
                 ],

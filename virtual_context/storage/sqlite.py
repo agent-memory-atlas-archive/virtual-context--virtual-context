@@ -11,9 +11,14 @@ import sqlite3
 import threading
 from collections.abc import Collection
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from ..actor_card_validity import (
+    actor_card_is_active, actor_card_is_unexpired, normalize_actor_card_validity,
+)
 
 if TYPE_CHECKING:
     from ..core.compaction_fence import CompactionFenceMode
@@ -2457,6 +2462,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 superseded_by TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                valid_from TEXT NULL,
+                expires_at TEXT NULL,
                 UNIQUE (id, tenant_id),
                 FOREIGN KEY (tenant_id, actor_id)
                     REFERENCES actor_profiles(tenant_id, actor_id)
@@ -2596,6 +2603,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     ON DELETE CASCADE
             );
         """)
+        self._add_column_if_missing(conn, "actor_card_entries", "valid_from", "TEXT NULL")
+        self._add_column_if_missing(conn, "actor_card_entries", "expires_at", "TEXT NULL")
         self._add_column_if_missing(
             conn,
             "actor_card_rebuild_status",
@@ -13485,6 +13494,14 @@ CREATE TABLE IF NOT EXISTS request_captures (
         actor_id = (actor_id or "").strip()
         if not actor_id:
             return 0
+        bounded_entries = []
+        try:
+            for entry, sources in entries_with_sources:
+                start, end = normalize_actor_card_validity(entry.valid_from, entry.expires_at)
+                bounded_entries.append((replace(entry, valid_from=start, expires_at=end), sources))
+        except ValueError:
+            return 0
+        entries_with_sources = bounded_entries
         expected = expected_source_epochs or {}
         now = _dt_to_str(datetime.now(timezone.utc))
 
@@ -13526,7 +13543,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
             ] = []
             for entry, sources in entries_with_sources:
                 collision = conn.execute(
-                    """SELECT tenant_id, actor_id FROM actor_card_entries
+                    """SELECT tenant_id, actor_id, valid_from, expires_at FROM actor_card_entries
                         WHERE id = ?""",
                     (entry.id,),
                 ).fetchone()
@@ -13536,6 +13553,17 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 ):
                     conn.execute("ROLLBACK")
                     return 0
+                if collision is not None:
+                    try:
+                        existing_bounds = normalize_actor_card_validity(
+                            collision["valid_from"], collision["expires_at"],
+                        )
+                    except ValueError:
+                        conn.execute("ROLLBACK")
+                        return 0
+                    if existing_bounds != (entry.valid_from, entry.expires_at):
+                        conn.execute("ROLLBACK")
+                        return 0
                 # A source-free cross-context entry would be globally visible
                 # with no fact or audience provenance at all.
                 if not sources:
@@ -13698,18 +13726,20 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     """INSERT INTO actor_card_entries
                            (id, tenant_id, actor_id, kind, body, confidence,
                             sensitivity, audience_scope, superseded_by,
-                            created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                            created_at, updated_at, valid_from, expires_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET
                            kind=excluded.kind, body=excluded.body,
                            confidence=excluded.confidence,
                            sensitivity=excluded.sensitivity,
                            audience_scope=excluded.audience_scope,
-                           superseded_by=NULL, updated_at=excluded.updated_at""",
+                           superseded_by=NULL, updated_at=excluded.updated_at,
+                           valid_from=excluded.valid_from, expires_at=excluded.expires_at""",
                     (
                         entry.id, tenant_id, actor_id, entry.kind, entry.body,
                         float(entry.confidence or 0.0), entry.sensitivity,
                         entry.audience_scope, entry.created_at or now, now,
+                        entry.valid_from, entry.expires_at,
                     ),
                 )
                 conn.execute(
@@ -13936,8 +13966,9 @@ CREATE TABLE IF NOT EXISTS request_captures (
 
         This intentionally does not apply the request-audience serving filter:
         refresh partitions each returned entry by its proved source audience
-        before a model sees it.  Only policy-approved cross-context kinds are
-        eligible, and every source remains subject to ``replace_actor_card``'s
+        before a model sees it. Policy-approved cross-context kinds and finite
+        communication preferences are eligible without extending their validity.
+        Every source remains subject to ``replace_actor_card``'s
         authoritative provenance checks before it can be written again.
         """
         actor_id = (actor_id or "").strip()
@@ -13950,8 +13981,11 @@ CREATE TABLE IF NOT EXISTS request_captures (
                  WHERE e.tenant_id = ?
                    AND e.actor_id = ?
                    AND e.superseded_by IS NULL
-                   AND e.audience_scope = 'cross_context'
-                   AND e.kind IN ({cross_kinds})
+                   AND (
+                     (e.audience_scope = 'cross_context' AND e.kind IN ({cross_kinds}))
+                     OR (e.kind = 'communication_pref' AND e.audience_scope = 'same_conversation'
+                         AND e.expires_at IS NOT NULL)
+                   )
                    AND (
                      EXISTS (
                        SELECT 1 FROM actor_card_entry_sources fs
@@ -13968,7 +14002,11 @@ CREATE TABLE IF NOT EXISTS request_captures (
             (tenant_id, actor_id),
         ).fetchall()
         out: list[tuple[ActorCardEntry, list[ActorCardEntrySource]]] = []
+        now = datetime.now(timezone.utc)
         for row in rows:
+            if not actor_card_is_unexpired(row["valid_from"], row["expires_at"], now=now):
+                continue
+            start, end = normalize_actor_card_validity(row["valid_from"], row["expires_at"])
             source_rows = conn.execute(
                 """SELECT owner_conversation_id, audience_conversation_id,
                           audience_channel_id, fact_id,
@@ -14013,6 +14051,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     superseded_by=row["superseded_by"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
+                    valid_from=start,
+                    expires_at=end,
                 ),
                 sources,
             ))
@@ -14029,7 +14069,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
     ) -> ActorCard | None:
         """Read one clean, policy-filtered card.
 
-        This method owns the clean/superseded/audience predicates so no
+        This method owns the clean/superseded/audience/validity predicates so no
         caller can fetch an unsafe superset and filter it afterwards.
 
         The audience is the validated PRE-ALIAS route, not the resolved owner:
@@ -14135,6 +14175,11 @@ CREATE TABLE IF NOT EXISTS request_captures (
         if not rows:
             return None
 
+        now = datetime.now(timezone.utc)
+        rows = [r for r in rows if actor_card_is_active(r["valid_from"], r["expires_at"], now=now)]
+        if not rows:
+            return None
+        bounds = {r["id"]: normalize_actor_card_validity(r["valid_from"], r["expires_at"]) for r in rows}
         return ActorCard(
             tenant_id=tenant_id,
             actor_id=actor_id,
@@ -14148,6 +14193,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     audience_scope=r["audience_scope"],
                     superseded_by=r["superseded_by"],
                     created_at=r["created_at"], updated_at=r["updated_at"],
+                    valid_from=bounds[r["id"]][0], expires_at=bounds[r["id"]][1],
                 )
                 for r in rows
             ],

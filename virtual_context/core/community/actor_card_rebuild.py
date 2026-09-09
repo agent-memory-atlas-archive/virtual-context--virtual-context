@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .evidence_manifest import evidence_digest
+from ...actor_card_validity import normalize_actor_card_validity
 
 from .actor_card_policy import (
     _ACTOR_CARD_CITATION_LIMIT,
@@ -19,6 +20,7 @@ from .actor_card_policy import (
     _ACTOR_CARD_SINGLE_MESSAGE_STYLE_CONFIDENCE_CAP,
     _ActorCardAdmissionError,
     _ActorCardCoverageError,
+    _actor_card_entry_keys_valid,
     _format_rejection_counts,
 )
 
@@ -176,6 +178,7 @@ class ActorCardRebuildService:
             CARD_CROSS_CONTEXT_KINDS,
             CARD_ENTRY_BODY_MAX_CHARS,
             CARD_KINDS,
+            CARD_KIND_COMMUNICATION_PREF,
             CARD_SCOPE_CROSS_CONTEXT,
             CARD_SCOPE_SAME_CONVERSATION,
             CARD_SENSITIVITY_NORMAL,
@@ -355,6 +358,8 @@ class ActorCardRebuildService:
                         "body": entry.body,
                         "confidence": entry.confidence,
                         "scope": entry.audience_scope,
+                        "valid_from": entry.valid_from,
+                        "expires_at": entry.expires_at,
                     },
                     "sources": sorted(
                         [
@@ -601,17 +606,26 @@ class ActorCardRebuildService:
             confidence = item.get("confidence")
             fact_ids = item.get("fact_ids")
             turn_ids = item.get("turn_ids")
-            if set(item) != {
-                "kind",
-                "body",
-                "confidence",
-                "fact_ids",
-                "turn_ids",
-            }:
+            if not _actor_card_entry_keys_valid(item):
                 rejected["invalid_entry_shape"] += 1
                 continue
             if kind not in CARD_KINDS:
                 rejected["invalid_kind"] += 1
+                continue
+            try:
+                valid_from, expires_at = normalize_actor_card_validity(
+                    item.get("valid_from"), item.get("expires_at"),
+                )
+            except (TypeError, ValueError):
+                rejected["invalid_validity"] += 1
+                continue
+            if (valid_from or expires_at) and kind != CARD_KIND_COMMUNICATION_PREF:
+                rejected["invalid_validity_kind"] += 1
+                continue
+            if valid_from and not expires_at:
+                # This lifecycle represents a finite response agreement. An
+                # omitted end must not turn one into a permanent preference.
+                rejected["missing_expiry"] += 1
                 continue
             quota_key = (audience_id, kind)
             if not isinstance(body, str) or not body.strip():
@@ -743,12 +757,17 @@ class ActorCardRebuildService:
 
             scope = (
                 CARD_SCOPE_CROSS_CONTEXT
-                if kind in CARD_CROSS_CONTEXT_KINDS
+                if kind in CARD_CROSS_CONTEXT_KINDS and not expires_at
                 else CARD_SCOPE_SAME_CONVERSATION
             )
+            identity = [actor_id, kind, body, fact_ids, turn_ids]
+            if valid_from or expires_at:
+                # Preserve legacy identities, while making different agreed
+                # intervals different immutable candidates for admission.
+                identity.append({"valid_from": valid_from, "expires_at": expires_at})
             digest = hashlib.sha256(
                 json.dumps(
-                    [actor_id, kind, body, fact_ids, turn_ids],
+                    identity,
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()[:32]
@@ -765,6 +784,8 @@ class ActorCardRebuildService:
                 audience_scope=scope,
                 created_at=now,
                 updated_at=now,
+                valid_from=valid_from,
+                expires_at=expires_at,
             )
             semantic_key = (
                 audience_id,
@@ -772,6 +793,8 @@ class ActorCardRebuildService:
                 body,
                 tuple(fact_ids),
                 tuple(turn_ids),
+                valid_from,
+                expires_at,
             )
             existing_entry = normalized_entries_by_key.get(semantic_key)
             if existing_entry is not None:
@@ -835,9 +858,16 @@ class ActorCardRebuildService:
         existing_entry_ids_by_audience: dict[str, set[str]] = {}
         fresh_entry_ids = {entry.id for entry, _sources in normalized}
         for entry, entry_sources in carryover_entries:
+            retained_scope = (
+                entry.kind in CARD_CROSS_CONTEXT_KINDS
+                and entry.audience_scope == CARD_SCOPE_CROSS_CONTEXT
+            ) or (
+                entry.kind == CARD_KIND_COMMUNICATION_PREF
+                and entry.audience_scope == CARD_SCOPE_SAME_CONVERSATION
+                and bool(entry.expires_at)
+            )
             if (
-                entry.kind not in CARD_CROSS_CONTEXT_KINDS
-                or entry.audience_scope != CARD_SCOPE_CROSS_CONTEXT
+                not retained_scope
                 or not entry_sources
             ):
                 logger.error(
@@ -848,7 +878,7 @@ class ActorCardRebuildService:
                     entry.audience_scope,
                     len(entry_sources),
                 )
-                raise RuntimeError("actor card carryover violated the cross-context boundary")
+                raise RuntimeError("actor card carryover violated the retention boundary")
             audiences = {
                 (source.audience_conversation_id or "").strip() for source in entry_sources
             }
