@@ -83,6 +83,15 @@ class CanonicalSourceConflict(RuntimeError):
     """
 
 
+class SourceEventTimeUnavailable(RuntimeError):
+    """An exact legacy replay lacks the stronger occurrence-evidence metadata.
+
+    This refuses supplemental event metadata without rejecting the already
+    admitted message pair. Contradictory source or timestamp claims remain
+    ``CanonicalSourceConflict`` errors.
+    """
+
+
 class LifecycleEpochMismatch(Exception):
     """Raised when the source's or target's `lifecycle_epoch` advanced
     between cloud's reservation step (which captured the epochs) and the

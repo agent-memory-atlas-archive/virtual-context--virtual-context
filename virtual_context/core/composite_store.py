@@ -1624,6 +1624,16 @@ class CompositeStore:
             )
         fn(row, observed_at=observed_at)
 
+    def get_canonical_source_event_times(self, keys, *, tenant_id: str) -> dict:
+        fn = getattr(self._segments, "get_canonical_source_event_times", None)
+        return fn(keys, tenant_id=tenant_id) if callable(fn) else {}
+
+    def attest_canonical_source_event_time(self, row: "CanonicalTurnRow") -> None:
+        fn = getattr(self._segments, "attest_canonical_source_event_time", None)
+        if not callable(fn):
+            raise NotImplementedError("segment store cannot attest source occurrence times")
+        fn(row)
+
     def find_actor_ids_by_display_label(
         self,
         conversation_id: str,

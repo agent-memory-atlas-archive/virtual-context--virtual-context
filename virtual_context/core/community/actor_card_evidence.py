@@ -16,6 +16,26 @@ class ActorCardEvidenceService:
         self._store = store
         self._paired_agent_replies = paired_agent_replies
 
+    def _source_event_times(self, turn_sources: list) -> dict:
+        """Read attested occurrence times without treating ingest time as history."""
+        getter = getattr(self._store, "get_canonical_source_event_times", None)
+        if not callable(getter):
+            return {}
+        by_tenant: dict[str, set[tuple[str, str]]] = {}
+        for source in turn_sources:
+            tenant = getattr(source, "tenant_id", "")
+            owner = getattr(source, "owner_conversation_id", "")
+            if tenant and owner:
+                by_tenant.setdefault(tenant, set()).add(
+                    (owner, source.turn.canonical_turn_id),
+                )
+        result = {}
+        for tenant_id, keys in sorted(by_tenant.items()):
+            ordered = sorted(keys)
+            for offset in range(0, len(ordered), 2000):
+                result.update(getter(ordered[offset:offset + 2000], tenant_id=tenant_id))
+        return result
+
     def fingerprint_records(self, fact_sources: list, turn_sources: list):
         """Stream exact ancillary evidence, including corrected old replies.
 
@@ -25,6 +45,9 @@ class ActorCardEvidenceService:
         """
         for (owner, group), reply in sorted(self._paired_agent_replies(turn_sources).items()):
             yield {"kind": "paired_reply", "owner": owner, "group": group, "reply": reply}
+        for (owner, source_id), occurred_at in sorted(self._source_event_times(turn_sources).items()):
+            yield {"kind": "source_event_time", "owner": owner, "id": source_id,
+                   "occurred_at": occurred_at}
         refs = sorted(
             {
                 (source.owner_conversation_id, source.fact.segment_ref)
@@ -53,6 +76,7 @@ class ActorCardEvidenceService:
                     "content": row.user_content,
                     "turn": row.turn_number,
                     "timestamp": row.created_at or row.first_seen_at or "",
+                    "timestamp_basis": "ingestion",
                 }
 
     def paired_agent_replies(self, turn_sources: list) -> dict:
@@ -102,6 +126,7 @@ class ActorCardEvidenceService:
         default then governs behavior-change requests.
         """
         replies = self._paired_agent_replies(turn_sources)
+        event_times = self._source_event_times(turn_sources)
         rendered: list[dict] = []
         used = 0
         for source in turn_sources:
@@ -118,11 +143,17 @@ class ActorCardEvidenceService:
             item = {
                 "id": source.turn.canonical_turn_id,
                 "timestamp": (source.turn.created_at or source.turn.first_seen_at or ""),
+                "timestamp_basis": "ingestion",
                 "audience_conversation_id": (source.audience_conversation_id),
                 "audience_channel_id": source.audience_channel_id,
                 "content": content,
                 "truncated": truncated,
             }
+            occurred_at = event_times.get(
+                (source.owner_conversation_id, source.turn.canonical_turn_id),
+            )
+            if occurred_at:
+                item["occurred_at"] = occurred_at
             raw_group = getattr(source.turn, "turn_group_number", None)
             try:
                 group = int(raw_group) if raw_group is not None else -1
@@ -226,6 +257,7 @@ class ActorCardEvidenceService:
                     {
                         "turn": row.turn_number,
                         "timestamp": (row.created_at or row.first_seen_at or ""),
+                        "timestamp_basis": "ingestion",
                         "content": content,
                     }
                 )

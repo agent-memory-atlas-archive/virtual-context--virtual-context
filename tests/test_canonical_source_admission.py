@@ -926,11 +926,17 @@ def test_sqlite_upgrade_rebuilds_missing_assistant_foreign_key(tmp_path: Path):
     assistant_id = conn.execute(
         "SELECT assistant_canonical_turn_id FROM canonical_message_sources"
     ).fetchone()[0]
+    # This fixture models the schema before the assistant foreign key existed.
+    # Newer channel-receipt guards must be absent too: SQLite otherwise
+    # retargets them to the temporary table during RENAME, leaving a broken
+    # reference when that table is dropped rather than a valid legacy schema.
     for trigger in (
         "trg_guard_attested_canonical_turn_update",
         "trg_validate_canonical_message_source_pair_insert",
         "trg_validate_canonical_message_source_pair_update",
         "trg_guard_canonical_message_source_update",
+        "trg_guard_receipted_assistant_channel_update",
+        "trg_invalidate_actor_card_turn_source_update",
     ):
         conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     conn.execute("PRAGMA foreign_keys=OFF")
@@ -982,6 +988,10 @@ def test_sqlite_upgrade_rebuilds_missing_assistant_foreign_key(tmp_path: Path):
         f"SELECT {columns} FROM canonical_message_sources_without_assistant_fk"
     )
     conn.execute("DROP TABLE canonical_message_sources_without_assistant_fk")
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' "
+        "AND instr(sql, 'canonical_message_sources_without_assistant_fk') > 0"
+    ).fetchall() == []
     conn.execute("PRAGMA foreign_keys=ON")
     store.close()
 

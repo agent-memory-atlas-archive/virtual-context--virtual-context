@@ -1198,6 +1198,14 @@ class ContextStore(ABC):
             "this storage backend cannot attest canonical message sources"
         )
 
+    def get_canonical_source_event_times(self, keys, *, tenant_id: str) -> dict:
+        """Exact source occurrence times; unsupported stores supply none."""
+        return {}
+
+    def attest_canonical_source_event_time(self, row: "CanonicalTurnRow") -> None:
+        """Bind optional occurrence metadata to an already attested exact pair."""
+        raise NotImplementedError("this storage backend cannot attest source occurrence times")
+
     def find_actor_ids_by_display_label(
         self,
         conversation_id: str,

@@ -2651,11 +2651,15 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 )
         with self.pool.connection() as conn, conn.transaction():
             ensure_receipted_channel_guard(conn, "postgres")
+            from .source_event_times import ensure_source_event_time_schema
+            ensure_source_event_time_schema(conn, "postgres")
 
     def _assert_canonical_message_source_schema(self) -> None:
         """Fail startup if the source fence could not be installed."""
         with self.pool.connection() as conn:
             assert_audience_reassignment_schema(conn, "postgres")
+            from .source_event_times import assert_source_event_time_schema
+            assert_source_event_time_schema(conn, "postgres")
             table = conn.execute(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_name = 'canonical_message_sources'"
@@ -11686,7 +11690,26 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             raise CanonicalSourceConflict(
                 "trusted source claim disagrees with canonical user row"
             )
+        if "occurred_at" in claim:
+            from ..types import normalize_source_occurred_at
+            try:
+                values["occurred_at"] = normalize_source_occurred_at(claim["occurred_at"])
+            except (TypeError, ValueError) as exc:
+                raise CanonicalSourceConflict("invalid source occurrence timestamp") from exc
         return values
+
+    def get_canonical_source_event_times(self, keys, *, tenant_id: str) -> dict:
+        from .source_event_times import read_source_event_times
+        with self._relational_connection() as conn:
+            return read_source_event_times(conn, keys, tenant_id=tenant_id, dialect="postgres")
+
+    def attest_canonical_source_event_time(self, row: "CanonicalTurnRow") -> None:
+        from .source_event_times import record_source_event_time
+        claim = self._validated_source_claim(row)
+        if "occurred_at" not in claim:
+            raise CanonicalSourceConflict("source occurrence attestation is missing its timestamp")
+        with self.pool.connection() as conn, conn.transaction():
+            record_source_event_time(conn, row, claim, dialect="postgres")
 
     def list_attested_message_sources(
         self,
@@ -11981,6 +12004,12 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         "source message already belongs to another canonical "
                         "body, route, or identity"
                     )
+                from .source_event_times import record_source_event_time
+                from ..core.exceptions import SourceEventTimeUnavailable
+                try:
+                    record_source_event_time(conn, row, claim, dialect="postgres")
+                except SourceEventTimeUnavailable:
+                    logger.info("SOURCE_EVENT_TIME_UNAVAILABLE canonical_id=%s", canonical_id)
                 conn.execute(
                         """UPDATE canonical_message_sources
                               SET observed_at = %s
@@ -12026,6 +12055,12 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         claim["reply_target_message_id"], seen, seen,
                     ),
             )
+            from .source_event_times import record_source_event_time
+            from ..core.exceptions import SourceEventTimeUnavailable
+            try:
+                record_source_event_time(conn, row, claim, dialect="postgres")
+            except SourceEventTimeUnavailable:
+                logger.info("SOURCE_EVENT_TIME_UNAVAILABLE canonical_id=%s", canonical_id)
         except CanonicalSourceConflict:
             raise
         except psycopg.errors.UniqueViolation as exc:

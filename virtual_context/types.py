@@ -716,6 +716,18 @@ _SOURCE_ATTESTATION_FIELDS = (
 )
 
 
+def normalize_source_occurred_at(value: object) -> str:
+    """Validate the adapter's UTC millisecond timestamp without date guessing."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", value,
+    ):
+        raise ValueError("source occurrence time requires UTC ISO milliseconds")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z") != value:
+        raise ValueError("source occurrence time is not canonical")
+    return value
+
+
 def normalize_source_attestation(value: object) -> dict[str, object]:
     """Normalize a trusted-adapter source claim, or return ``{}``.
 
@@ -759,6 +771,11 @@ def normalize_source_attestation(value: object) -> dict[str, object]:
         return {}
     for name in digest_names:
         cleaned[name] = cleaned[name].lower()
+    if "occurred_at" in value:
+        try:
+            cleaned["occurred_at"] = normalize_source_occurred_at(value["occurred_at"])
+        except (TypeError, ValueError):
+            return {}
     return {"version": 1, **cleaned}
 
 

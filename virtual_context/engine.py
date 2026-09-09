@@ -159,6 +159,7 @@ class VirtualContextEngine:
     # user/assistant pair, returns a structured admission outcome, and commits
     # through the immutable source ledger atomically.
     exact_source_admission_version = 2
+    source_event_time_version = 1
 
     def __init__(
         self,

@@ -33,6 +33,9 @@ TAG_SUMMARY_REQUIRED_COLUMNS = (
     "covers_through_canonical_turn_id",
     "structured_summary_json",
 )
+SOURCE_EVENT_TIME_COLUMNS = (
+    "canonical_turn_id", "tenant_id", "source_fingerprint", "occurred_at", "created_at",
+)
 
 
 AUDIENCE_AUDIT_COLUMNS = {
@@ -63,6 +66,26 @@ def _fact_embeddings_catalog_result(sql: str, params=None):
     )
 
     relation = params[0] if params and isinstance(params[0], str) else None
+    if relation == "canonical_source_event_times":
+        # A freshly bootstrapped sidecar has non-null fields, its canonical
+        # primary/foreign key, and the exact immutable trigger function. These
+        # unit doubles do not bypass the production capability assertion.
+        if "information_schema.columns" in sql:
+            return _FakeRowsResult([
+                {"column_name": column, "is_nullable": "NO"}
+                for column in SOURCE_EVENT_TIME_COLUMNS
+            ])
+        if "pg_constraint" in sql and "contype='p'" in sql:
+            return _FakeRowsResult([{"attname": "canonical_turn_id"}])
+        if "pg_constraint" in sql and "contype='f'" in sql:
+            return _FakeRowsResult([{
+                "definition": "FOREIGN KEY (canonical_turn_id) REFERENCES "
+                "canonical_turns(canonical_turn_id) ON DELETE CASCADE",
+            }])
+        if "pg_trigger" in sql:
+            from virtual_context.storage.source_event_times import _PG_GUARD_BODY
+
+            return _FakeRowsResult([{"prosrc": _PG_GUARD_BODY}])
     if "pg_get_functiondef(tgfoid)" in sql:
         return _FakeRowsResult([
             {"tgname": name, "definition": "SELECT * FROM canonical_audience_reassignments"}
@@ -186,6 +209,9 @@ class _FakeRowsResult:
 
     def fetchone(self):
         return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class _ConnCheckout:

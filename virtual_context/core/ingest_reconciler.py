@@ -22,7 +22,7 @@ from ..core.canonical_turns import (
     utcnow_iso,
 )
 from ..core.semantic_search import SemanticSearchManager
-from ..core.exceptions import CanonicalSourceConflict
+from ..core.exceptions import CanonicalSourceConflict, SourceEventTimeUnavailable
 from ..core.store import ContextStore
 from ..types import (
     FactSignal,
@@ -989,7 +989,19 @@ class IngestReconciler:
             self._preserve_existing_enrichment(
                 assistant_row, stored_assistant,
             )
-            # An idempotent completion performs no write. Historical rows
+            # A replay may add independently attested occurrence metadata;
+            # it never rewrites the canonical pair or its source ledger.
+            if "occurred_at" in (user_row.source_claim or {}):
+                try:
+                    self._store.attest_canonical_source_event_time(user_row)
+                except SourceEventTimeUnavailable:
+                    # Older exact pairs remain valid replays even when their
+                    # assistant metadata cannot support the optional clock.
+                    logger.info(
+                        "Optional source occurrence unavailable for legacy canonical source %s",
+                        user_row.canonical_turn_id,
+                    )
+            # An ordinary idempotent completion performs no write. Historical rows
             # with missing channel provenance require an explicit repair;
             # report their stored fields instead of implying a repair here.
             assistant_row.origin_channel_id = stored_assistant.origin_channel_id

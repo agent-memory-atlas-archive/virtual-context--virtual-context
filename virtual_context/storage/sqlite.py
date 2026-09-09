@@ -3067,12 +3067,16 @@ CREATE TABLE IF NOT EXISTS request_captures (
         )
 
         ensure_receipted_channel_guard(conn, "sqlite")
+        from .source_event_times import ensure_source_event_time_schema
+        ensure_source_event_time_schema(conn, "sqlite")
 
     @staticmethod
     def _assert_canonical_message_source_schema(
         conn: sqlite3.Connection,
     ) -> None:
         assert_audience_reassignment_schema(conn, "sqlite")
+        from .source_event_times import assert_source_event_time_schema
+        assert_source_event_time_schema(conn, "sqlite")
         columns = {
             str(row["name"])
             for row in conn.execute(
@@ -10875,7 +10879,27 @@ CREATE TABLE IF NOT EXISTS request_captures (
             raise CanonicalSourceConflict(
                 "trusted source claim disagrees with canonical user row"
             )
+        if "occurred_at" in claim:
+            from ..types import normalize_source_occurred_at
+            try:
+                values["occurred_at"] = normalize_source_occurred_at(claim["occurred_at"])
+            except (TypeError, ValueError) as exc:
+                raise CanonicalSourceConflict("invalid source occurrence timestamp") from exc
         return values
+
+    def get_canonical_source_event_times(self, keys, *, tenant_id: str) -> dict:
+        from .source_event_times import read_source_event_times
+        with self._relational_connection() as conn:
+            return read_source_event_times(conn, keys, tenant_id=tenant_id, dialect="sqlite")
+
+    def attest_canonical_source_event_time(self, row: "CanonicalTurnRow") -> None:
+        from .audience_reassignment import _transaction
+        from .source_event_times import record_source_event_time
+        claim = self._validated_source_claim(row)
+        if "occurred_at" not in claim:
+            raise CanonicalSourceConflict("source occurrence attestation is missing its timestamp")
+        with _transaction(self, "sqlite") as conn:
+            record_source_event_time(conn, row, claim, dialect="sqlite")
 
     def list_attested_message_sources(
         self,
@@ -11024,6 +11048,16 @@ CREATE TABLE IF NOT EXISTS request_captures (
         row: "CanonicalTurnRow",
         *,
         observed_at: str,
+        assistant_row: "CanonicalTurnRow | None" = None,
+    ) -> None:
+        from .audience_reassignment import _transaction
+        with _transaction(self, "sqlite"):
+            self._attest_canonical_user_source_in_transaction(
+                row, observed_at=observed_at, assistant_row=assistant_row,
+            )
+
+    def _attest_canonical_user_source_in_transaction(
+        self, row: "CanonicalTurnRow", *, observed_at: str,
         assistant_row: "CanonicalTurnRow | None" = None,
     ) -> None:
         claim = self._validated_source_claim(row)
@@ -11191,7 +11225,12 @@ CREATE TABLE IF NOT EXISTS request_captures (
                         claim["reply_target_message_id"], seen, seen,
                     ),
                 )
-            self._commit_if_unlocked(conn)
+            from .source_event_times import record_source_event_time
+            from ..core.exceptions import SourceEventTimeUnavailable
+            try:
+                record_source_event_time(conn, row, claim, dialect="sqlite")
+            except SourceEventTimeUnavailable:
+                logger.info("SOURCE_EVENT_TIME_UNAVAILABLE canonical_id=%s", canonical_id)
         except sqlite3.IntegrityError as exc:
             if not self._reconcile_lock_active():
                 conn.rollback()

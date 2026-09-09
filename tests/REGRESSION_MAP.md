@@ -5,6 +5,12 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-076 — Attested source occurrence time
+
+- `test_source_event_times.py` — optional UTC claim validation, exact pair admission and replay, legacy replay without weaker timestamp admission, no ingestion-date fallback, conflict/rollback, stale source and lifecycle rejection, schema guards, card rebuild invalidation and unchanged audience/channel receipt proof.
+- `test_source_event_times_postgres.py` — the same admission/replay and later-enrichment boundaries on a named disposable PostgreSQL database, including exact guard-function validation.
+- `test_actor_card_source_time_evidence.py` — occurrence versus ingestion distinction, missing-authority exclusion, bounded large reads, fingerprint invalidation and segment evidence timestamp labels.
+
 ### BUG-074 — Strict history indexing precedes tag completion
 
 - **Cause**: Strict history marks exact existing rows tagged without the canonical embeddings deferred by admission, so the durable worker skips them.

@@ -1,5 +1,15 @@
 # Bug log
 
+## BUG-076 — Canonical source evidence lacks occurrence time
+
+- **Reported:** 2026-09-09.
+- **Cause:** Trusted source admission retains exact identity and bodies but drops the adapter's message occurrence time. Ingestion timestamps and session labels cannot establish when a relative, time-limited agreement began.
+- **Fix:** Accept an optional canonical UTC occurrence timestamp from the trusted adapter and persist it in a separate immutable, source-fingerprinted table within exact pair admission. Exact completion replay may add missing event metadata without changing either canonical row or the source ledger; conflicting timestamps refuse the transaction. Bounded reads verify current tenant, lifecycle, exact pair, source identity, body hashes and effective audience. First insertion marks the actor card dirty and cancels an obsolete in-flight build.
+- **Regression:** Missing timestamps never fall back to ingestion dates; malformed optional claims fail closed; new admission, later enrichment, optional and exact replay, conflicts, transactional rollback, stale evidence, schema guards and prior audience/channel receipts are covered with synthetic sources.
+- **Validation:** Nineteen focused SQLite cases and seven PostgreSQL cases passed, including exact guard-function rejection, later metadata enrichment, legacy replay compatibility and conflicting replay rollback. Three existing source admission and historical completion controls also passed.
+- **Replay compatibility:** Exact historical replays with incomplete assistant attribution remain accepted while supplemental occurrence metadata is refused. A dedicated refusal type separates unavailable legacy evidence from a contradictory prior timestamp, which remains fatal. Both legacy forms failed before the fix and passed afterward on first adoption and later replay, with the timestamp-conflict control.
+- **Existing data:** No occurrence timestamps are guessed or backfilled automatically. Existing history requires exact trusted source evidence; all existing source-ledger and audience/channel receipt fingerprints remain unchanged.
+
 ## BUG-074 — Strict history tagging skips canonical search indexing
 
 - **Reported:** 2026-09-09.
