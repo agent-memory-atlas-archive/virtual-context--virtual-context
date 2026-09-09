@@ -31,6 +31,14 @@ from ..core.discord_snowflake import (
 )
 from ..core.store import ContextStore
 from .audience_proof import effective_attested_audience, verify_source_replay_audience
+from .assistant_channel_enrichment import (
+    ensure_assistant_channel_enrichment_schema,
+    plan_assistant_channel_enrichment, enrich_assistant_channels,
+)
+from .actor_card_transition_guards import postgres_actor_card_turn_source_function_body
+from .channel_enrichment_guards import (
+    ensure_receipted_channel_guard,
+)
 from .audience_reassignment import (
     assert_audience_reassignment_schema,
     ensure_audience_reassignment_schema,
@@ -2462,6 +2470,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             )
             with conn.transaction():
                 ensure_audience_reassignment_schema(conn, "postgres")
+                ensure_assistant_channel_enrichment_schema(conn, "postgres")
             conn.execute(
                 """CREATE OR REPLACE FUNCTION
                        vc_guard_attested_canonical_turn_update()
@@ -2640,6 +2649,9 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                                    FOR EACH ROW EXECUTE FUNCTION
                                        vc_guard_canonical_message_source_update()"""
                 )
+        with self.pool.connection() as conn, conn.transaction():
+            ensure_receipted_channel_guard(conn, "postgres")
+
     def _assert_canonical_message_source_schema(self) -> None:
         """Fail startup if the source fence could not be installed."""
         with self.pool.connection() as conn:
@@ -3179,113 +3191,12 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                     EXECUTE FUNCTION vc_dirty_actor_card_on_canonical_insert()
                 """)
 
-            conn.execute("""
+            conn.execute(f"""
                 CREATE OR REPLACE FUNCTION
                     vc_invalidate_actor_card_turn_source()
                 RETURNS trigger
                 LANGUAGE plpgsql
-                AS $$
-                BEGIN
-                    -- PostgreSQL fires an UPDATE OF trigger when a column is
-                    -- named in SET even if its value did not change. Canonical
-                    -- tagging re-upserts the request-owned row and names these
-                    -- identity/evidence columns, so treat an exact no-op as
-                    -- the additive reconciliation it is. Otherwise every
-                    -- normal live turn invalidates (and can delete) the card
-                    -- entry that just cited it.
-                    IF TG_OP = 'UPDATE'
-                       AND OLD.conversation_id
-                           IS NOT DISTINCT FROM NEW.conversation_id
-                       AND OLD.user_content
-                           IS NOT DISTINCT FROM NEW.user_content
-                       AND OLD.sender_actor_id
-                           IS NOT DISTINCT FROM NEW.sender_actor_id
-                       AND OLD.audience_conversation_id
-                           IS NOT DISTINCT FROM NEW.audience_conversation_id
-                       AND OLD.audience_attribution_version
-                           IS NOT DISTINCT FROM
-                               NEW.audience_attribution_version
-                       AND OLD.origin_channel_id
-                           IS NOT DISTINCT FROM NEW.origin_channel_id
-                       AND OLD.created_at
-                           IS NOT DISTINCT FROM NEW.created_at
-                       AND OLD.first_seen_at
-                           IS NOT DISTINCT FROM NEW.first_seen_at THEN
-                        RETURN NEW;
-                    END IF;
-
-                    -- Authorship arms: changes to ANY of the author's
-                    -- rows (including provenance enrichment on rows no card
-                    -- cites) queue a re-curation only. Invalidation is the
-                    -- citation arm's job below.
-                    UPDATE actor_profiles p
-                       SET card_dirty = 1,
-                           card_build_marker = ''
-                      FROM conversations c
-                     WHERE c.conversation_id = OLD.conversation_id
-                       AND p.tenant_id = c.tenant_id
-                       AND p.actor_id = OLD.sender_actor_id
-                       AND OLD.sender_actor_id <> '';
-
-                    IF TG_OP = 'UPDATE' THEN
-                        UPDATE actor_profiles p
-                           SET card_dirty = 1,
-                               card_build_marker = ''
-                          FROM conversations c
-                         WHERE c.conversation_id = NEW.conversation_id
-                           AND p.tenant_id = c.tenant_id
-                           AND p.actor_id = NEW.sender_actor_id
-                           AND NEW.sender_actor_id <> '';
-                    END IF;
-
-                    UPDATE actor_profiles p
-                       SET card_dirty = 1, card_invalid = 1,
-                           card_build_marker = ''
-                      FROM actor_card_entries e,
-                           actor_card_turn_sources s
-                     WHERE s.canonical_turn_id = OLD.canonical_turn_id
-                       AND e.id = s.entry_id
-                       AND e.tenant_id = s.tenant_id
-                       AND p.tenant_id = e.tenant_id
-                       AND p.actor_id = e.actor_id;
-
-                    -- An audited scope-only transition retains immutable
-                    -- claims for source reprojection and re-admission. The
-                    -- invalid flag above still blocks serving stale cards.
-                    IF TG_OP = 'UPDATE' THEN
-                        IF EXISTS (
-                            SELECT 1 FROM canonical_audience_reassignments ar
-                             WHERE ar.canonical_turn_id = OLD.canonical_turn_id
-                               AND ar.owner_conversation_id = OLD.conversation_id
-                               AND ar.from_audience = OLD.audience_conversation_id
-                               AND ar.to_audience = NEW.audience_conversation_id
-                               AND ar.from_attribution_version = OLD.audience_attribution_version
-                               AND ar.to_attribution_version = NEW.audience_attribution_version
-                               AND ar.turn_hash = OLD.turn_hash
-                               AND OLD.turn_hash IS NOT DISTINCT FROM NEW.turn_hash
-                               AND OLD.conversation_id IS NOT DISTINCT FROM NEW.conversation_id
-                               AND OLD.user_content IS NOT DISTINCT FROM NEW.user_content
-                               AND OLD.sender_actor_id IS NOT DISTINCT FROM NEW.sender_actor_id
-                               AND OLD.origin_channel_id IS NOT DISTINCT FROM NEW.origin_channel_id
-                               AND OLD.created_at IS NOT DISTINCT FROM NEW.created_at
-                               AND OLD.first_seen_at IS NOT DISTINCT FROM NEW.first_seen_at
-                        ) THEN
-                            RETURN NEW;
-                        END IF;
-                    END IF;
-
-                    DELETE FROM actor_card_entries e
-                     USING actor_card_turn_sources s
-                     WHERE s.canonical_turn_id = OLD.canonical_turn_id
-                       AND e.id = s.entry_id
-                       AND e.tenant_id = s.tenant_id;
-
-                    IF TG_OP = 'DELETE' THEN
-                        RETURN OLD;
-                    END IF;
-                    RETURN NEW;
-                END;
-                $$
+                AS $${postgres_actor_card_turn_source_function_body()}                $$
             """)
             # One transaction: DROP TRIGGER takes ACCESS EXCLUSIVE and the pool
             # is autocommit, so as separate statements the table is writable and
@@ -10804,6 +10715,36 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 cursor = conn.execute(sql, params)
                 updated += int(cursor.rowcount or 0)
             return updated
+
+    def get_receipted_canonical_turn_ids(
+        self, conversation_id: str, canonical_turn_ids: list[str],
+    ) -> set[str]:
+        from .receipted_source_rows import get_receipted_canonical_turn_ids
+        if not conversation_id or not canonical_turn_ids:
+            return set()
+        with self.pool.connection() as conn:
+            return get_receipted_canonical_turn_ids(
+                conn, conversation_id, canonical_turn_ids, dialect="postgres",
+            )
+
+    def plan_assistant_channel_enrichment(
+        self, owner_conversation_id: str, *, tenant_id: str,
+        audience_conversation_id: str, expected_lifecycle_epoch: int,
+        operation_id: str, assistant_canonical_turn_ids: list[str],
+    ) -> dict:
+        """Plan an explicit, source-pinned assistant channel repair."""
+        return plan_assistant_channel_enrichment(
+            self, owner_conversation_id, tenant_id=tenant_id,
+            audience_conversation_id=audience_conversation_id,
+            expected_lifecycle_epoch=expected_lifecycle_epoch,
+            operation_id=operation_id,
+            assistant_canonical_turn_ids=assistant_canonical_turn_ids,
+            dialect="postgres",
+        )
+
+    def enrich_assistant_channels(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        """Verify by default; apply only the exact approved receipt manifest."""
+        return enrich_assistant_channels(self, manifest, dry_run=dry_run, dialect="postgres")
 
     def plan_audience_reassignment(
         self, owner_conversation_id: str, from_audience: str, to_audience: str,

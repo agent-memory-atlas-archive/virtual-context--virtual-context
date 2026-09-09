@@ -860,6 +860,24 @@ class ContextStore(ABC):
         """
         return 0
 
+    def get_receipted_canonical_turn_ids(
+        self, conversation_id: str, canonical_turn_ids: list[str],
+    ) -> set[str]:
+        """Optional bulk maintenance skip list; stores without receipts return empty."""
+        return set()
+
+    def plan_assistant_channel_enrichment(
+        self, owner_conversation_id: str, *, tenant_id: str,
+        audience_conversation_id: str, expected_lifecycle_epoch: int,
+        operation_id: str, assistant_canonical_turn_ids: list[str],
+    ) -> dict:
+        """Optional audited administration; unsupported stores must refuse."""
+        raise NotImplementedError("assistant channel enrichment is unsupported")
+
+    def enrich_assistant_channels(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        """Verify or apply an explicit channel manifest without policy fallback."""
+        raise NotImplementedError("assistant channel enrichment is unsupported")
+
     def update_canonical_turn_actors_if_empty(
         self,
         conversation_id: str,

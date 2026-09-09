@@ -615,6 +615,7 @@ def _manifest(headers, rows):
 
 
 def _replay_rows(conn, headers, operation, dialect):
+    from .assistant_channel_enrichment import canonical_row_matches_audience_receipt
     if any(operation[name] != headers[name] for name in _HEADERS):
         raise ValueError("operation id already belongs to another audience manifest")
     p = _placeholder(dialect)
@@ -632,6 +633,7 @@ def _replay_rows(conn, headers, operation, dialect):
     memberships = _memberships(conn, rows, dialect)
     _validate_memberships(rows, memberships, headers)
     source_map = _source_map(rows, memberships)
+    enrichment_verification = {}
     for receipt in receipts:
         canonical_id = receipt["canonical_turn_id"]
         row = rows[canonical_id]
@@ -645,7 +647,10 @@ def _replay_rows(conn, headers, operation, dialect):
                 or int(row["audience_attribution_version"] or 0)
                 != receipt["to_attribution_version"]
                 or row["turn_hash"] != receipt["turn_hash"]
-                or canonical_row_fingerprint(row) != receipt["row_fingerprint"]
+                or not canonical_row_matches_audience_receipt(
+                    conn, row, receipt, dialect=dialect,
+                    verification_cache=enrichment_verification,
+                )
                 or source_membership_fingerprint(source_map[canonical_id])
                 != receipt["source_fingerprint"]):
             raise ValueError("audience reassignment replay found changed source evidence")

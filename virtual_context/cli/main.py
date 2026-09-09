@@ -1850,6 +1850,7 @@ def cmd_admin_backfill_channels(args):
             "updated": 0,
             "skipped_existing": 0,
             "skipped_no_derivation": 0,
+            "skipped_receipted": 0,
             "derived_from_raw": 0,
             "derived_from_origin": 0,
             "failed": 0,
@@ -3196,6 +3197,11 @@ def main():
     )
     _configure_audience_reassignment(admin_sub)
 
+    from .assistant_channel_enrichment_cmd import (
+        configure_parser as _configure_assistant_channel_enrichment,
+    )
+    _configure_assistant_channel_enrichment(admin_sub)
+
     resequence_parser = admin_sub.add_parser(
         "resequence-canonical-turns",
         help=(
@@ -3491,6 +3497,12 @@ def main():
         elif args.admin_command in {"plan-audience-reassignment", "reassign-audience"}:
             from .audience_reassignment_cmd import cmd_admin_audience_reassignment
             cmd_admin_audience_reassignment(args)
+        elif args.admin_command in {
+            "plan-assistant-channel-enrichment", "verify-assistant-channel-enrichment",
+            "enrich-assistant-channels",
+        }:
+            from .assistant_channel_enrichment_cmd import cmd_admin_assistant_channel_enrichment
+            cmd_admin_assistant_channel_enrichment(args)
         elif args.admin_command == "resequence-canonical-turns":
             cmd_admin_resequence_canonical_turns(args)
         elif args.admin_command == "normalize-canonical-actor-ids":

@@ -5,6 +5,17 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-073 — Audited historical assistant-channel enrichment
+
+- **Cause**: A channel fill on an existing audience-corrected assistant row changes the fingerprint in its immutable audience receipt.
+- **Fix**: Explicit source-pinned manifests record the channel-only transition separately and preserve original audience/source evidence. Ordinary channel writers cannot bypass receipt authorization; stale cards retain their immutable claims for rebuilding.
+- **Tests**:
+  - `test_assistant_channel_enrichment.py` — exact source-pair proof, either audience-repair order, later audience lifecycle fencing, cross-channel assistant quote retrieval, strict manifests, rollback and immutable authorizations.
+  - `test_assistant_channel_enrichment_integration.py` — backend guard capability, retained card claims and ordinary channel-writer refusal.
+  - `test_assistant_channel_enrichment_cli.py` — explicit database selection, private manifests, default verification and planning without startup migrations.
+  - `test_assistant_channel_enrichment_postgres.py` — real PostgreSQL proof, guard, rollback, deletion-cascade and card-evidence parity in a disposable database.
+  - `test_channel_backfill_receipts.py` — receipt-aware dry-run/apply parity, skipped-row limits, retained label evidence, unrelated write-error propagation and tenant CLI totals.
+
 ### BUG-072 — Exact assistant completions retain their source channel
 
 - **Cause**: An assistant completion without its own envelope was durably paired with its attested user source but lacked the channel required for retrieval.

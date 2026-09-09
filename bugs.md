@@ -1,5 +1,13 @@
 # Bug log
 
+## BUG-073 — Historical channel repair invalidates existing audience receipts
+
+- **Reported:** 2026-09-09.
+- **Cause:** Historical assistant rows can have exact source membership and a corrected audience but no source channel. Filling that channel changes the physical-source fingerprint pinned by an earlier audience receipt, so ordinary maintenance cannot restore retrieval while preserving verification of that receipt.
+- **Fix:** Add explicit assistant-channel enrichment manifests, immutable operation and row authorizations, and transactional source/lifecycle checks. The repair changes only a blank assistant channel to its exact paired source channel. Audience replay composes the recorded transition with its unchanged original fingerprint in either operation order, while fencing a later effective audience. Backend guards preserve earlier receipts and retain card source claims while hiding stale cards. Administrative commands plan and verify against an existing schema without migration, and apply only an exact manifest. Ordinary channel backfill bulk-checks protected rows and reports them as skipped before they consume its limit, preserving dry-run/apply parity.
+- **Regression:** Synthetic historical pairs exercise source-backed assistant recall, unchanged audience manifests and source ledgers, exact original/current source replay, stale or forged manifest refusal, transaction rollback, SQL immutability, lifecycle boundaries, and private read-only administrative planning.
+- **Validation:** Forty-five focused enrichment cases, 31 existing audience cases, ten CLI/card integration cases and eight completion-admission cases passed locally. Ten PostgreSQL cases passed in a disposable database, including both operation orders, unreachable guard-body rejection and whole-batch rollback; the later audience lifecycle path passed again after its final fence change. Restored-database verification returned the original assistant text after changing only its channel ID and preserved its earlier complete audience manifest. Six new ordinary-backfill cases and 52 existing backfill controls passed; a read-only PostgreSQL check verified bounded receipt selection against the exact owner, and three PostgreSQL backfill cases verified dry-run/apply parity and unchanged protected evidence. Historical index rebuilding and production repair are separate operations.
+
 ## BUG-072 — Exact assistant completions lose source-channel provenance
 
 - **Reported:** 2026-09-09.

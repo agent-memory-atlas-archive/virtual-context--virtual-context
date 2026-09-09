@@ -38,6 +38,14 @@ from ..core.progress_snapshot import (
 from ..core.canonical_turns import STRIP_WHITESPACE
 from ..core.store import ContextStore
 from .audience_proof import effective_attested_audience, verify_source_replay_audience
+from .assistant_channel_enrichment import (
+    ensure_assistant_channel_enrichment_schema,
+    plan_assistant_channel_enrichment, enrich_assistant_channels,
+)
+from .actor_card_transition_guards import sqlite_actor_card_turn_source_update_sql
+from .channel_enrichment_guards import (
+    ensure_receipted_channel_guard,
+)
 from .audience_reassignment import (
     assert_audience_reassignment_schema,
     ensure_audience_reassignment_schema,
@@ -2566,85 +2574,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
 
             DROP TRIGGER IF EXISTS
                 trg_invalidate_actor_card_turn_source_update;
-            CREATE TRIGGER IF NOT EXISTS trg_invalidate_actor_card_turn_source_update
-            BEFORE UPDATE OF
-                conversation_id, user_content, sender_actor_id,
-                audience_conversation_id, audience_attribution_version,
-                origin_channel_id, created_at, first_seen_at
-            ON canonical_turns
-            FOR EACH ROW
-            WHEN OLD.conversation_id IS NOT NEW.conversation_id
-              OR OLD.user_content IS NOT NEW.user_content
-              OR OLD.sender_actor_id IS NOT NEW.sender_actor_id
-              OR OLD.audience_conversation_id
-                    IS NOT NEW.audience_conversation_id
-              OR OLD.audience_attribution_version
-                    IS NOT NEW.audience_attribution_version
-              OR OLD.origin_channel_id IS NOT NEW.origin_channel_id
-              OR OLD.created_at IS NOT NEW.created_at
-              OR OLD.first_seen_at IS NOT NEW.first_seen_at
-            BEGIN
-                -- Authorship arms: a change to ANY of the author's rows —
-                -- including provenance enrichment one-way fills on rows no
-                -- card cites — queues re-curation only. Invalidation is the
-                -- citation arm's job: only a change to a row a card CITES
-                -- can falsify a rendered claim.
-                UPDATE actor_profiles
-                   SET card_dirty = 1,
-                       card_build_marker = ''
-                 WHERE actor_id = OLD.sender_actor_id
-                   AND OLD.sender_actor_id <> ''
-                   AND tenant_id = (
-                       SELECT tenant_id
-                         FROM conversations
-                        WHERE conversation_id = OLD.conversation_id
-                   );
-                UPDATE actor_profiles
-                   SET card_dirty = 1,
-                       card_build_marker = ''
-                 WHERE actor_id = NEW.sender_actor_id
-                   AND NEW.sender_actor_id <> ''
-                   AND tenant_id = (
-                       SELECT tenant_id
-                         FROM conversations
-                        WHERE conversation_id = NEW.conversation_id
-                   );
-                UPDATE actor_profiles
-                   SET card_dirty = 1, card_invalid = 1,
-                       card_build_marker = ''
-                 WHERE (tenant_id, actor_id) IN (
-                       SELECT e.tenant_id, e.actor_id
-                         FROM actor_card_entries e
-                         JOIN actor_card_turn_sources s
-                           ON s.entry_id = e.id
-                          AND s.tenant_id = e.tenant_id
-                        WHERE s.canonical_turn_id =
-                              OLD.canonical_turn_id
-                 );
-                DELETE FROM actor_card_entries
-                 WHERE id IN (
-                       SELECT entry_id
-                         FROM actor_card_turn_sources
-                        WHERE canonical_turn_id =
-                              OLD.canonical_turn_id
-                 ) AND NOT EXISTS (
-                       SELECT 1 FROM canonical_audience_reassignments ar
-                        WHERE ar.canonical_turn_id = OLD.canonical_turn_id
-                          AND ar.owner_conversation_id = OLD.conversation_id
-                          AND ar.from_audience = OLD.audience_conversation_id
-                          AND ar.to_audience = NEW.audience_conversation_id
-                          AND ar.from_attribution_version = OLD.audience_attribution_version
-                          AND ar.to_attribution_version = NEW.audience_attribution_version
-                          AND ar.turn_hash = OLD.turn_hash
-                          AND OLD.turn_hash IS NEW.turn_hash
-                          AND OLD.conversation_id IS NEW.conversation_id
-                          AND OLD.user_content IS NEW.user_content
-                          AND OLD.sender_actor_id IS NEW.sender_actor_id
-                          AND OLD.origin_channel_id IS NEW.origin_channel_id
-                          AND OLD.created_at IS NEW.created_at
-                          AND OLD.first_seen_at IS NEW.first_seen_at
-                 );
-            END;
+            {sqlite_actor_card_turn_source_update_sql()}
 
             CREATE TABLE IF NOT EXISTS actor_card_rebuild_status (
                 tenant_id TEXT NOT NULL,
@@ -2811,6 +2741,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
         create memberships.
         """
         ensure_audience_reassignment_schema(conn, "sqlite")
+        ensure_assistant_channel_enrichment_schema(conn, "sqlite")
         for trigger_name in (
             "trg_guard_attested_canonical_turn_update",
             "trg_validate_canonical_message_source_pair_insert",
@@ -3134,6 +3065,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
             END;
             """
         )
+
+        ensure_receipted_channel_guard(conn, "sqlite")
 
     @staticmethod
     def _assert_canonical_message_source_schema(
@@ -9953,6 +9886,35 @@ CREATE TABLE IF NOT EXISTS request_captures (
             updated += int(cursor.rowcount or 0)
         self._commit_if_unlocked(conn)
         return updated
+
+    def get_receipted_canonical_turn_ids(
+        self, conversation_id: str, canonical_turn_ids: list[str],
+    ) -> set[str]:
+        from .receipted_source_rows import get_receipted_canonical_turn_ids
+        if not conversation_id or not canonical_turn_ids:
+            return set()
+        return get_receipted_canonical_turn_ids(
+            self._get_conn(), conversation_id, canonical_turn_ids, dialect="sqlite",
+        )
+
+    def plan_assistant_channel_enrichment(
+        self, owner_conversation_id: str, *, tenant_id: str,
+        audience_conversation_id: str, expected_lifecycle_epoch: int,
+        operation_id: str, assistant_canonical_turn_ids: list[str],
+    ) -> dict:
+        """Plan an explicit, source-pinned assistant channel repair."""
+        return plan_assistant_channel_enrichment(
+            self, owner_conversation_id, tenant_id=tenant_id,
+            audience_conversation_id=audience_conversation_id,
+            expected_lifecycle_epoch=expected_lifecycle_epoch,
+            operation_id=operation_id,
+            assistant_canonical_turn_ids=assistant_canonical_turn_ids,
+            dialect="sqlite",
+        )
+
+    def enrich_assistant_channels(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        """Verify by default; apply only the exact approved receipt manifest."""
+        return enrich_assistant_channels(self, manifest, dry_run=dry_run, dialect="sqlite")
 
     def plan_audience_reassignment(
         self, owner_conversation_id: str, from_audience: str, to_audience: str,

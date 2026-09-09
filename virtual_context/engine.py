@@ -4433,10 +4433,13 @@ class VirtualContextEngine:
 
         Writes go through ``update_canonical_turn_channels_if_empty``, a
         per-column compare-and-set — never a full-row rewrite from a
-        possibly-stale payload — so a re-run is a no-op.
+        possibly-stale payload — so a re-run is a no-op. Rows bound to an
+        immutable audience or channel-enrichment receipt are skipped before
+        consuming the limit; their channels require an audited operation.
 
-        Returns ``{eligible, updated, skipped_existing, skipped_no_derivation,
-        derived_from_raw, derived_from_origin, failed, dry_run}``.
+        Returns ``{eligible, updated, skipped_existing, skipped_receipted,
+        skipped_no_derivation, derived_from_raw, derived_from_origin,
+        failed, dry_run}``.
         """
         if not conversation_id:
             raise ValueError("backfill_channels requires a non-empty conversation_id")
@@ -4445,6 +4448,7 @@ class VirtualContextEngine:
             "eligible": 0,
             "updated": 0,
             "skipped_existing": 0,
+            "skipped_receipted": 0,
             "skipped_no_derivation": 0,
             "derived_from_raw": 0,
             "derived_from_origin": 0,
@@ -4453,8 +4457,23 @@ class VirtualContextEngine:
         }
 
         rows = self._store.get_all_canonical_turns(conversation_id)
+        partial_ids = [
+            row.canonical_turn_id
+            for row in rows
+            if row.canonical_turn_id
+            and not (
+                (row.origin_channel_id or "").strip()
+                and (row.origin_channel_label or "").strip()
+            )
+        ]
+        receipted_ids = self._store.get_receipted_canonical_turn_ids(
+            conversation_id, partial_ids,
+        )
+        report["skipped_receipted"] = len(receipted_ids)
         upgrades: dict[str, tuple[str, str]] = {}
         for row in rows:
+            if row.canonical_turn_id in receipted_ids:
+                continue
             if limit is not None and len(upgrades) >= limit:
                 break
             stored_id = (row.origin_channel_id or "").strip()
@@ -4531,7 +4550,7 @@ class VirtualContextEngine:
             if len(labels) == 1
         }
         for ct_id, (eff_id, eff_label) in pending_by_ct.items():
-            if not eff_id or eff_label:
+            if ct_id in receipted_ids or not eff_id or eff_label:
                 continue
             label = unambiguous.get(eff_id)
             if not label:
@@ -4560,10 +4579,11 @@ class VirtualContextEngine:
 
         logger.info(
             "backfill_channels: done conv=%s eligible=%d updated=%d "
-            "skipped_existing=%d skipped_no_derivation=%d derived_from_raw=%d "
+            "skipped_existing=%d skipped_receipted=%d skipped_no_derivation=%d derived_from_raw=%d "
             "derived_from_origin=%d failed=%d dry_run=%s",
             conversation_id[:12], report["eligible"], report["updated"],
-            report["skipped_existing"], report["skipped_no_derivation"],
+            report["skipped_existing"], report["skipped_receipted"],
+            report["skipped_no_derivation"],
             report["derived_from_raw"], report["derived_from_origin"],
             report["failed"], dry_run,
         )

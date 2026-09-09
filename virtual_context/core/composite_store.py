@@ -1253,6 +1253,36 @@ class CompositeStore:
             ))
         return 0
 
+    def get_receipted_canonical_turn_ids(
+        self, conversation_id: str, canonical_turn_ids: list[str],
+    ) -> set[str]:
+        fn = getattr(self._segments, "get_receipted_canonical_turn_ids", None)
+        if not callable(fn):
+            return set()
+        return fn(conversation_id, canonical_turn_ids)
+
+    def plan_assistant_channel_enrichment(
+        self, owner_conversation_id: str, *, tenant_id: str,
+        audience_conversation_id: str, expected_lifecycle_epoch: int,
+        operation_id: str, assistant_canonical_turn_ids: list[str],
+    ) -> dict:
+        fn = getattr(self._segments, "plan_assistant_channel_enrichment", None)
+        if not callable(fn):
+            raise NotImplementedError("canonical store does not support assistant channel enrichment")
+        return fn(
+            owner_conversation_id, tenant_id=tenant_id,
+            audience_conversation_id=audience_conversation_id,
+            expected_lifecycle_epoch=expected_lifecycle_epoch,
+            operation_id=operation_id,
+            assistant_canonical_turn_ids=assistant_canonical_turn_ids,
+        )
+
+    def enrich_assistant_channels(self, manifest: dict, *, dry_run: bool = True) -> dict:
+        fn = getattr(self._segments, "enrich_assistant_channels", None)
+        if not callable(fn):
+            raise NotImplementedError("canonical store does not support assistant channel enrichment")
+        return fn(manifest, dry_run=dry_run)
+
     def update_canonical_turn_actors_if_empty(
         self,
         conversation_id: str,
