@@ -1093,6 +1093,9 @@ class RequestRoles:
     audience_channel_id: str = ""
     audience_channel_scope: str = "channel"
     audience_channel_label: str = ""
+    # Verified parent of the direct reply target, carried only for this request.
+    # It is a separate participant, never a replacement requester or subject.
+    reply_parent: ReplySubject | None = field(default=None, repr=False)
 
 
 def get_current_conversation_info(metadata: dict | None) -> dict:

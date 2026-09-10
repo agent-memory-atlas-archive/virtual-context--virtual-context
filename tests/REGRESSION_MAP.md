@@ -5,6 +5,12 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-077 — Reply-aware participant continuity
+
+- `test_reply_participant_continuity.py::test_third_party_reply_serves_history_without_borrowing_preferences` — current requester keeps their card while the referenced participant contributes attributed history only.
+- `test_reply_participant_continuity.py::test_reply_query_reaches_primary_retry_and_curator_without_changing_requester` — bounded reply query survives retry and curation without changing canonical text or roles.
+- `test_reply_participant_continuity.py` — direct-reply selection, unlinked and unproved scope exclusion, adapter-owned parent parsing, actual scoped-store expiry, structural escaping and token budget controls.
+
 ### BUG-076 — Attested source occurrence time
 
 - `test_source_event_times.py` — optional UTC claim validation, exact pair admission and replay, legacy replay without weaker timestamp admission, no ingestion-date fallback, conflict/rollback, stale source and lifecycle rejection, schema guards, card rebuild invalidation and unchanged audience/channel receipt proof.

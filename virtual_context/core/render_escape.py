@@ -47,6 +47,7 @@ ENGINE_EMITTED_TAGS: tuple[str, ...] = (
     "facts",
     "historical-source-transcript",
     "recent-conversation",
+    "reply-participant-context",
     "speaker-roster",
     "structured-summary",
     "virtual-context",

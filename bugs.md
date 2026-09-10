@@ -1,5 +1,13 @@
 # Bug log
 
+## BUG-077 — Third-party replies lose participant continuity
+
+- **Reported:** 2026-09-09.
+- **Cause:** Automatic lookup used only the current user's terse text. Requester-only card selection also omitted known continuity about a separate participant in the verified reply chain. Passing recent context did not repair the query because the inbound embedding tagger ignores that argument.
+- **Fix:** Carry the adapter-normalized parent as a separate request role and use bounded quoted reply context for primary/retry lookup and fact curation. Render only scoped `relevant_history` from the direct target and its verified parent in an explicitly attributed context block. The requester retains their own influence card; peer preferences and style are not transferred. Existing card admission, audience, lifecycle and expiry checks remain authoritative. No new stored kinds or historical repair are introduced.
+- **Regression:** Synthetic failing cases reproduced missing third-party continuity and an unchanged ambiguous lookup query. Focused checks cover primary/retry query propagation, clean canonical text, direct and nested replies, unproved audience and owner rejection, adapter-only parent parsing, expiry through the actual store, JSON structural exclusion and whole-block token limits.
+- **Validation:** Focused assembly, query, wrapper, roster, card and compaction controls passed. The roster retains budget priority, labels remain audience-scoped, and quoted speech cannot supply temporal intent. Read-only PostgreSQL assembly preserved separate requester and referenced-participant identities, withheld unlinked or out-of-audience context, and included acknowledged continuity under the existing card budget. Full captured-prompt and native serving replays both acknowledged the outcome with the correct participant; the standalone native runner reported a cleanup error after generation.
+
 ## BUG-076 — Canonical source evidence lacks occurrence time
 
 - **Reported:** 2026-09-09.

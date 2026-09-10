@@ -542,6 +542,7 @@ def _roles_for_active_user(
     )
 
     from ..core.ingest_reconciler import IngestReconciler
+    from ..core.reply_context import reply_parent_from_metadata
 
     edge = IngestReconciler._derive_reply_edge(
         active_user, actor_key, audience_conversation_id,
@@ -572,6 +573,10 @@ def _roles_for_active_user(
         subject_label=probe.reply_subject_label,
         reply_target_message_id=probe.reply_target_message_id,
         reply_target_body=probe.reply_target_body,
+        reply_parent=(
+            reply_parent_from_metadata(metadata, actor_key)
+            if probe.reply_subject_actor_id else None
+        ),
         owner_conversation_id=owner,
         audience_conversation_id=audience_conversation_id,
         origin_channel_id=channel_id,

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from .engine_utils import get_recent_context
 from .hint_builder import build_autonomous_hint, build_supervised_hint, build_default_hint
 from .protected_window import _slice_payload_prefix_preserving_db_recent
+from .reply_context import reply_retrieval_query
 from .store import ContextStore
 from .turn_tag_index import TurnTagIndex
 
@@ -424,6 +425,11 @@ class RetrievalAssembler:
         )
         _note("recent_context", _context_stage)
 
+        retrieval_query = reply_retrieval_query(
+            message, request_roles, self.config.conversation_id,
+        )
+        query_options = {"query_text": retrieval_query} if retrieval_query != message else {}
+
         # Retrieve relevant tag summaries. Pass the method-entry
         # bounded snapshot so retriever fallback paths (working-set
         # tags on tagger failure, inherit-from-previous on _general)
@@ -436,6 +442,7 @@ class RetrievalAssembler:
             post_compaction=_post_compaction,
             context_turns=context,
             entries_snapshot=_tti_entries_snapshot,
+            **query_options,
         )
         _note("retrieve_primary", _retrieve_stage)
 
@@ -444,7 +451,7 @@ class RetrievalAssembler:
             _curate_stage = time.monotonic()
             retrieval_result.facts = self._fact_curator.curate(
                 retrieval_result.facts,
-                question=message,
+                question=retrieval_query,
             )
             _note("fact_curate_primary", _curate_stage)
 
@@ -492,8 +499,10 @@ class RetrievalAssembler:
         )
         _note("assemble_primary", _assemble_stage)
 
-        # Expose the message's own tags for downstream use (e.g. history filtering).
-        # Use tags_from_message (what the tag generator produced for this message)
+        # Expose the current lookup's topics for downstream relevance filtering.
+        # A native follow-up is about its explicit reply, not incidental recent
+        # chatter. These topics never become canonical actor claims/ingest tags.
+        # Use tags_from_message (the legacy key for the tagger's query topics)
         # rather than tags_matched (which only includes tags found in the store).
         message_tags = retrieval_result.retrieval_metadata.get(
             "tags_from_message", retrieval_result.tags_matched
@@ -516,6 +525,7 @@ class RetrievalAssembler:
                     post_compaction=_post_compaction,
                     context_turns=expanded,
                     entries_snapshot=_tti_entries_snapshot,
+                    **query_options,
                 )
                 _note("retrieve_retry_general", _retry_retrieve_stage)
                 retry_tags = retry_result.retrieval_metadata.get(
@@ -529,7 +539,7 @@ class RetrievalAssembler:
                     if self._fact_curator and retrieval_result.facts:
                         _retry_curate_stage = time.monotonic()
                         retrieval_result.facts = self._fact_curator.curate(
-                            retrieval_result.facts, question=message,
+                            retrieval_result.facts, question=retrieval_query,
                         )
                         _note("fact_curate_retry", _retry_curate_stage)
                     _retry_assemble_stage = time.monotonic()

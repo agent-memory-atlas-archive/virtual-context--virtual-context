@@ -302,6 +302,7 @@ class ContextRetriever:
         context_turns: list[str] | None = None,
         *,
         entries_snapshot: list | None = None,
+        query_text: str | None = None,
     ) -> RetrievalResult:
         """Tag inbound message, fetch relevant summaries by tag overlap.
 
@@ -310,6 +311,10 @@ class ContextRetriever:
             current_active_tags: Tags from recent conversation turns to skip.
             current_utilization: Current context window usage ratio (0.0-1.0).
             context_turns: Recent user/assistant text for context-aware tagging.
+            query_text: Optional contextual lookup text. The original message
+                stays separate and alone determines temporal intent. Query
+                topics still drive relevance and working-set/history selection;
+                they are not canonical actor claims or ingest tags.
             entries_snapshot: optional bounded view of
                 ``TurnTagIndex.entries`` captured by the caller at the
                 inbound method entry. When provided, the retriever's
@@ -327,6 +332,7 @@ class ContextRetriever:
 
         active_tags = set(current_active_tags or [])
         overflow: list[StoredSummary] = []
+        lookup_text = message if query_text is None else query_text
 
         # Tag the inbound message — scope vocabulary to current conversation
         _load_tags_stage = time.monotonic()
@@ -343,7 +349,7 @@ class ContextRetriever:
             if self._turn_tag_index:
                 vocab_tags = list(set(vocab_tags) | self._turn_tag_index.all_tags())
             tag_result = self._inbound_tagger.generate_tags(
-                message, vocab_tags, context_turns=context_turns,
+                lookup_text, vocab_tags, context_turns=context_turns,
             )
             # Apply temporal heuristic (embedding tagger doesn't detect these)
             if not tag_result.temporal:
@@ -353,13 +359,19 @@ class ContextRetriever:
         else:
             # LLM-based: open-ended tag generation (pass known tags for reuse)
             tag_result = self.tag_generator.generate_tags(
-                message, store_tags, context_turns=context_turns,
+                lookup_text, store_tags, context_turns=context_turns,
             )
+        if query_text is not None:
+            # A date or temporal request inside a quotation is not the
+            # current requester's time filter, even if an LLM tagger says so.
+            tag_result.temporal = detect_temporal_heuristic(message, self._temporal_patterns)
         _note("tag_generate", _tag_stage)
 
         query_embedding = getattr(tag_result, 'query_embedding', None)
 
         retrieval_metadata: dict = {}
+        if query_text is not None:
+            retrieval_metadata["query_context"] = "explicit"
         retrieval_scores: dict[str, float] = {}
 
         # Temporal detection is now advisory; time-scoped recall is tool-driven
@@ -427,6 +439,7 @@ class ContextRetriever:
                         facts=self._fetch_all_facts(),
                         overflow_summaries=overflow,
                         retrieval_metadata={
+                            **(retrieval_metadata if query_text is not None else {}),
                             "elapsed_ms": round(elapsed * 1000, 1),
                             "tags_from_message": tag_result.tags,
                             "tags_skipped_active": skipped_tags,
@@ -447,6 +460,7 @@ class ContextRetriever:
                 facts=self._fetch_all_facts(),
                 overflow_summaries=overflow,
                 retrieval_metadata={
+                    **(retrieval_metadata if query_text is not None else {}),
                     "elapsed_ms": round(elapsed * 1000, 1),
                     "tags_from_message": tag_result.tags,
                     "tags_skipped_active": skipped_tags,
@@ -480,7 +494,7 @@ class ContextRetriever:
         query_embedding_context = None
         if query_embedding is not None:
             query_embedding_context, embed_mode, ctx_embed_ms = (
-                self._build_context_query_embedding(message, context_turns)
+                self._build_context_query_embedding(lookup_text, context_turns)
             )
             if query_embedding_context is not None:
                 if ctx_embed_ms is not None:
@@ -500,7 +514,7 @@ class ContextRetriever:
         scores, breakdowns = score_candidates(
             query_tags=query_tags,
             related_tags=related_query_tags,
-            query_text=message,
+            query_text=lookup_text,
             query_embedding=query_embedding,
             store=self.store,
             idf_weights=idf_weights,
@@ -644,7 +658,7 @@ class ContextRetriever:
         _facts_stage = time.monotonic()
         if getattr(self.config, "fact_dense_retrieval", False):
             facts = self._fetch_facts_dense(
-                message, context_turns, expanded_tags, retrieval_metadata,
+                lookup_text, context_turns, expanded_tags, retrieval_metadata,
             )
         elif self.config.prefetch_facts and expanded_tags:
             facts = self._fetch_facts_by_tags(expanded_tags)
