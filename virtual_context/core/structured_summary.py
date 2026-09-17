@@ -114,6 +114,15 @@ def infer_temporal_status(text: str) -> str:
 
 
 def is_safety_critical_personal_evidence(text: str) -> bool:
+    """Mode-aware wrapper; see ``is_safety_critical_personal_evidence_legacy``."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    from .judgment import judge_safety_critical
+    return judge_safety_critical(value, lambda: is_safety_critical_personal_evidence_legacy(value))
+
+
+def is_safety_critical_personal_evidence_legacy(text: str) -> bool:
     """Whether an exact requester lane must survive summary selection.
 
     The summarizer may choose which ordinary details deserve compression, but

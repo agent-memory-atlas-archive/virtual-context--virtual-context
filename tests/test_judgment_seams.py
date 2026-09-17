@@ -92,3 +92,42 @@ def test_temporal_shadow_mode_keeps_legacy():
     with judgment.override(rt):
         assert _retriever()._detect_temporal("how much protein should I eat") is False
     assert len(seen) == 1
+
+
+from virtual_context.core.structured_summary import (
+    is_safety_critical_personal_evidence,
+    is_safety_critical_personal_evidence_legacy,
+)
+
+
+def test_safety_legacy_wrapper_matches_original():
+    for text in ["I stopped taking metformin last week.", "Correction: I am not on statins.",
+                 "he stopped by the store", "", "We talked about cars."]:
+        assert is_safety_critical_personal_evidence(text) == is_safety_critical_personal_evidence_legacy(text)
+
+
+def test_safety_empty_text_never_calls_jev():
+    rt, seen = _runtime("jev", lambda b: _noul("safety_critical", 0.9))
+    with judgment.override(rt):
+        assert is_safety_critical_personal_evidence("   ") is False
+    assert seen == []
+
+
+def test_safety_jev_mode_thresholds_noul():
+    rt, seen = _runtime("jev", lambda b: _noul("safety_critical", 0.7))
+    with judgment.override(rt):
+        assert is_safety_critical_personal_evidence("We talked about cars.") is True
+    assert seen[0]["state"] == {"text": "We talked about cars."}
+    rt2, _ = _runtime("jev", lambda b: _noul("safety_critical", 0.1))
+    with judgment.override(rt2):
+        assert is_safety_critical_personal_evidence("I stopped taking metformin last week.") is False
+
+
+def test_safety_jev_failure_falls_back_to_regex():
+    def boom(request):
+        return httpx.Response(503, text="down")
+    http = httpx.Client(transport=httpx.MockTransport(boom))
+    rt = build_runtime(JudgmentConfig(mode="jev"), environ={"TYPESAFE_API_KEY": "k"}, http_client=http)
+    with judgment.override(rt):
+        assert is_safety_critical_personal_evidence("I stopped taking metformin last week.") == \
+            is_safety_critical_personal_evidence_legacy("I stopped taking metformin last week.")

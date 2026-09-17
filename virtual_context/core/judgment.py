@@ -362,3 +362,34 @@ def judge_temporal_intent(message: str, legacy: Callable[[], bool]) -> bool:
     return decide("temporal_intent", legacy,
                   lambda c: jev_temporal_intent(c, message, threshold=rt.config.noul_threshold),
                   runtime=rt, describe=str)
+
+
+# --- seam S4: safety-critical personal evidence ------------------------------
+
+def jev_safety_critical(client: JevClient, text: str, *, threshold: float) -> JevOutcome | None:
+    resp = client.ask(
+        seam="safety_critical",
+        state={"text": text},
+        questions={"safety_critical": noul_q(
+            "Does `text` state a correction, a start or stop, or a change of the speaker's own "
+            "situation (medication, health, regimen, relationship, plan) that a later reader "
+            "must not miss?",
+            true="the speaker corrects an earlier claim about themselves or reports starting, "
+                 "stopping, switching, or changing something in their own life",
+            false="no such statement, an incidental use of words like stopped or started, or a "
+                  "change that concerns someone other than the speaker",
+        )},
+    )
+    if resp is None:
+        return None
+    ans = resp.answers.get("safety_critical")
+    if ans is None or ans.kind != "noul":
+        return JevOutcome.fallback("bad_answer", response=resp)
+    return JevOutcome(value=bool(ans.value >= threshold), detail={"p": round(ans.value, 3)}, response=resp)
+
+
+def judge_safety_critical(text: str, legacy: Callable[[], bool]) -> bool:
+    rt = current()
+    return decide("safety_critical", legacy,
+                  lambda c: jev_safety_critical(c, text, threshold=rt.config.noul_threshold),
+                  runtime=rt, describe=str)
