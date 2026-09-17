@@ -57,3 +57,38 @@ def test_intent_shadow_mode_returns_regex_answer_and_calls_jev():
     with judgment.override(rt):
         assert _detect_query_intent("find quote about magnesium") == "default"
     assert len(seen) == 1
+
+
+from virtual_context.core.retriever import ContextRetriever
+from virtual_context.types import RetrieverConfig
+
+
+def _noul(key, p):
+    return {key: {"type": "noul", "noul": p}}
+
+
+def _retriever():
+    return ContextRetriever(tag_generator=None, store=None, config=RetrieverConfig(), inbound_tagger=None)
+
+
+def test_temporal_legacy_matches_pattern_list():
+    r = _retriever()
+    assert r._detect_temporal("what was the very first thing we discussed") is True
+    assert r._detect_temporal("how much protein should I eat") is False
+
+
+def test_temporal_jev_mode_uses_noul_threshold():
+    rt, seen = _runtime("jev", lambda b: _noul("temporal", 0.8))
+    with judgment.override(rt):
+        assert _retriever()._detect_temporal("how much protein should I eat") is True
+    assert seen[0]["state"] == {"message": "how much protein should I eat"}
+    rt2, _ = _runtime("jev", lambda b: _noul("temporal", 0.2))
+    with judgment.override(rt2):
+        assert _retriever()._detect_temporal("what was the very first thing we discussed") is False
+
+
+def test_temporal_shadow_mode_keeps_legacy():
+    rt, seen = _runtime("shadow", lambda b: _noul("temporal", 0.8))
+    with judgment.override(rt):
+        assert _retriever()._detect_temporal("how much protein should I eat") is False
+    assert len(seen) == 1

@@ -334,3 +334,31 @@ def jev_query_intent(client: JevClient, query: str, *, min_confidence: float = 0
 
 def judge_query_intent(query: str, legacy: Callable[[], str]) -> str:
     return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), describe=str)
+
+
+# --- seam S3: inbound temporal intent ----------------------------------------
+
+def jev_temporal_intent(client: JevClient, message: str, *, threshold: float) -> JevOutcome | None:
+    resp = client.ask(
+        seam="temporal_intent",
+        state={"message": message},
+        questions={"temporal": noul_q(
+            "Does `message` ask about when something happened, the order of events, or an "
+            "earlier point in the conversation, rather than about the topic itself?",
+            true="the question is about timing, sequence, or an earlier point in the conversation",
+            false="the question is about the subject matter with no timing or sequence framing",
+        )},
+    )
+    if resp is None:
+        return None
+    ans = resp.answers.get("temporal")
+    if ans is None or ans.kind != "noul":
+        return JevOutcome.fallback("bad_answer", response=resp)
+    return JevOutcome(value=bool(ans.value >= threshold), detail={"p": round(ans.value, 3)}, response=resp)
+
+
+def judge_temporal_intent(message: str, legacy: Callable[[], bool]) -> bool:
+    rt = current()
+    return decide("temporal_intent", legacy,
+                  lambda c: jev_temporal_intent(c, message, threshold=rt.config.noul_threshold),
+                  runtime=rt, describe=str)

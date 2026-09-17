@@ -293,6 +293,12 @@ class ContextRetriever:
             total_tokens += ts.summary_tokens
         return selected, total_tokens
 
+    def _detect_temporal(self, message: str) -> bool:
+        from .judgment import judge_temporal_intent
+        return judge_temporal_intent(
+            message, lambda: detect_temporal_heuristic(message, self._temporal_patterns),
+        )
+
     def retrieve(
         self,
         message: str,
@@ -353,7 +359,7 @@ class ContextRetriever:
             )
             # Apply temporal heuristic (embedding tagger doesn't detect these)
             if not tag_result.temporal:
-                tag_result.temporal = detect_temporal_heuristic(message, self._temporal_patterns)
+                tag_result.temporal = self._detect_temporal(message)
             logger.debug("Inbound embedding match: tags=%s temporal=%s",
                          tag_result.tags, tag_result.temporal)
         else:
@@ -364,7 +370,7 @@ class ContextRetriever:
         if query_text is not None:
             # A date or temporal request inside a quotation is not the
             # current requester's time filter, even if an LLM tagger says so.
-            tag_result.temporal = detect_temporal_heuristic(message, self._temporal_patterns)
+            tag_result.temporal = self._detect_temporal(message)
         _note("tag_generate", _tag_stage)
 
         query_embedding = getattr(tag_result, 'query_embedding', None)
