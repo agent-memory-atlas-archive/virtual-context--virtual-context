@@ -296,3 +296,41 @@ def decide(
         logger.warning("JUDGMENT_FALLBACK seam=%s reason=%s", seam, reason)
         return legacy()
     return outcome.value
+
+
+# --- seam S2: query intent (find_quote) --------------------------------------
+
+INTENT_CRITERIA: dict[str, str] = {
+    "current_state": (
+        "asks for the present or latest state of something: now, currently, these days, "
+        "at the moment, latest, still, or a status question about how things stand"
+    ),
+    "default": (
+        "a topical lookup, a request for a quote or a fact, or a question about the past "
+        "with no present-state framing"
+    ),
+}
+
+
+def jev_query_intent(client: JevClient, query: str, *, min_confidence: float = 0.5) -> JevOutcome | None:
+    resp = client.ask(
+        seam="query_intent",
+        state={"query": query},
+        questions={"intent": choice_q(
+            "What kind of memory lookup does `query` ask for?", INTENT_CRITERIA,
+        )},
+    )
+    if resp is None:
+        return None
+    ans = resp.answers.get("intent")
+    if ans is None or ans.value not in INTENT_CRITERIA:
+        return JevOutcome.fallback("bad_answer", response=resp)
+    conf = ans.confidence if ans.confidence is not None else 1.0
+    if conf < min_confidence:
+        return JevOutcome.fallback("low_confidence", response=resp)
+    return JevOutcome(value=ans.value, detail={"p": round(ans.probabilities.get(ans.value, conf), 3),
+                                              "confidence": round(conf, 3)}, response=resp)
+
+
+def judge_query_intent(query: str, legacy: Callable[[], str]) -> str:
+    return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), describe=str)

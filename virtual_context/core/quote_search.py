@@ -200,6 +200,11 @@ _INSTANCE_COUNT_RE = re.compile(
 
 
 def _detect_query_intent(query: str) -> str:
+    from .judgment import judge_query_intent
+    return judge_query_intent(query, lambda: _detect_query_intent_legacy(query))
+
+
+def _detect_query_intent_legacy(query: str) -> str:
     for pattern in _CURRENT_STATE_PATTERNS:
         if pattern.search(query):
             # "or" in the query signals a disjunction (e.g. "led or am
