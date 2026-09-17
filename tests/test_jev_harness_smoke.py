@@ -40,3 +40,25 @@ def test_admission_sets_load_and_offline_run_scores_jev_only():
     result = run_admission(_fake_runtime(), limit=2, offline=True)
     assert result["n_sets"] == 2 and result["legacy"]["reason_accuracy"] is None
     assert 0.0 <= result["jev"]["reason_accuracy"] <= 1.0
+
+
+import sqlite3
+
+from benchmarks.jev.rerank import first_gold_rank, gold_segment_refs, normalize_snippet
+
+
+def test_first_gold_rank():
+    assert first_gold_rank(["a", "b", "c"], {"c"}) == 3
+    assert first_gold_rank(["a", "b"], {"z"}) is None
+
+
+def test_gold_segment_refs_matches_on_normalized_turn_text(tmp_path):
+    db = tmp_path / "store.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE segments (ref TEXT, full_text TEXT)")
+    conn.execute("INSERT INTO segments VALUES ('seg1', 'user:   I ran the   Chicago marathon in 2024 and loved it. assistant: great')")
+    conn.execute("INSERT INTO segments VALUES ('seg2', 'user: unrelated text')")
+    conn.commit(); conn.close()
+    gold = [[{"role": "user", "content": "I ran the Chicago marathon in 2024 and loved it."}]]
+    assert gold_segment_refs(db, gold) == {"seg1"}
+    assert normalize_snippet("  a   b\nc ") == "a b c"
