@@ -164,7 +164,6 @@ class ActorCardAdmissionService:
             }
             for source in fact_sources
         ]
-        system = ADMISSION_SYSTEM_PROMPT
         request = build_admission_request(
             candidates=candidates, compact_facts=compact_facts, actor_turns=actor_turns,
             evidence_segments=evidence_segments, curator_substantive=curator_substantive,

@@ -6,7 +6,7 @@ import pytest
 
 from virtual_context.core import judgment
 from virtual_context.core.judgment import (
-    JevClient, JevOutcome, JudgmentMode, JudgmentRuntime, build_runtime, choice_q, decide, noul_q,
+    JevClient, JevOutcome, JudgmentMode, build_runtime, choice_q, decide, noul_q,
 )
 from virtual_context.types import JudgmentConfig
 

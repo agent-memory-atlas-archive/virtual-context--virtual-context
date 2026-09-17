@@ -16,7 +16,7 @@ DEFAULT_LEGACY_MODEL = "qwen/qwen3-235b-a22b-2507"
 
 
 def load_sets() -> list[dict]:
-    return [json.loads(l) for l in DATA.read_text().splitlines() if l.strip()]
+    return [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
 
 
 def _legacy_provider():

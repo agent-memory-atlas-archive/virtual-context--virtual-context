@@ -2,6 +2,12 @@ import json
 
 import httpx
 import pytest
+from virtual_context.core.retriever import ContextRetriever
+from virtual_context.types import RetrieverConfig
+from virtual_context.core.structured_summary import (
+    is_safety_critical_personal_evidence,
+    is_safety_critical_personal_evidence_legacy,
+)
 
 from virtual_context.core import judgment
 from virtual_context.core.judgment import build_runtime
@@ -59,10 +65,6 @@ def test_intent_shadow_mode_returns_regex_answer_and_calls_jev():
     assert len(seen) == 1
 
 
-from virtual_context.core.retriever import ContextRetriever
-from virtual_context.types import RetrieverConfig
-
-
 def _noul(key, p):
     return {key: {"type": "noul", "noul": p}}
 
@@ -92,12 +94,6 @@ def test_temporal_shadow_mode_keeps_legacy():
     with judgment.override(rt):
         assert _retriever()._detect_temporal("how much protein should I eat") is False
     assert len(seen) == 1
-
-
-from virtual_context.core.structured_summary import (
-    is_safety_critical_personal_evidence,
-    is_safety_critical_personal_evidence_legacy,
-)
 
 
 def test_safety_legacy_wrapper_matches_original():
