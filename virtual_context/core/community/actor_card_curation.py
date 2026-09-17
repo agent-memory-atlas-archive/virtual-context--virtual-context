@@ -296,11 +296,21 @@ class ActorCardCurationService:
         )
 
     def provider_for_model(self, selected_model: str):
-        """Create a zero-temperature provider through the configured gateway."""
+        """Create a zero-temperature provider for one actor-card model.
+
+        ``<name>/<model>`` first looks up ``providers.<name>`` in the engine
+        config so a model can ride a different gateway than the summarizer
+        (an Anthropic-compatible endpoint or another OpenAI-compatible one);
+        otherwise the model is sent through the summarizer's gateway as
+        before, with the full string as the model id.
+        """
         base = self._compactor.llm
         from ...providers.anthropic import AnthropicProvider
         from ...providers.generic_openai import GenericOpenAIProvider
 
+        named = self._named_provider_for_model(selected_model)
+        if named is not None:
+            return named
         if isinstance(base, GenericOpenAIProvider):
             return GenericOpenAIProvider(
                 base_url=base.base_url,
@@ -316,6 +326,39 @@ class ActorCardCurationService:
                 temperature=0.0,
             )
         raise RuntimeError(f"actor-card model override is unsupported by {type(base).__name__}")
+
+    def _named_provider_for_model(self, selected_model: str):
+        """Resolve ``<name>/<model>`` against ``config.providers``; None when absent."""
+        import os
+        from ...providers.anthropic import AnthropicProvider
+        from ...providers.generic_openai import GenericOpenAIProvider
+
+        providers = getattr(self._config, "providers", None) or {}
+        name, sep, model = (selected_model or "").partition("/")
+        if not sep or not model or name not in providers:
+            return None
+        cfg = providers[name] or {}
+        ptype = cfg.get("type", name)
+        api_key = cfg.get("api_key") or os.environ.get(cfg.get("api_key_env", ""), "")
+        if ptype == "anthropic":
+            if not api_key:
+                raise RuntimeError(f"actor-card provider {name!r} has no API key")
+            return AnthropicProvider(
+                api_key=api_key,
+                model=model,
+                temperature=0.0,
+                base_url=cfg.get("base_url"),
+                disable_thinking=bool(cfg.get("disable_thinking", False)),
+            )
+        if ptype in ("generic_openai", "openrouter"):
+            return GenericOpenAIProvider(
+                base_url=cfg.get("base_url", "https://openrouter.ai/api/v1"),
+                model=model,
+                temperature=0.0,
+                api_key=api_key or "not-needed",
+                reasoning_effort="low",
+            )
+        raise RuntimeError(f"actor-card provider {name!r} has unsupported type {ptype!r}")
 
     def curation_provider(self):
         """Build the optional dedicated curator and malformed-response fallback."""

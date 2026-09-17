@@ -2841,6 +2841,8 @@ class VirtualContextEngine:
                     api_key=api_key,
                     model=provider_config.get("model", self.config.summarization.model),
                     temperature=self.config.summarization.temperature,
+                    base_url=provider_config.get("base_url"),
+                    disable_thinking=bool(provider_config.get("disable_thinking", False)),
                 )
             logger.warning(
                 "Anthropic provider '%s' skipped: no API key (checked env var '%s')",
