@@ -1,0 +1,30 @@
+{"id":"t1","text":"what are we doing currently","label":"current_state","source":"tests/test_find_quote.py"}
+{"id":"t2","text":"what is the status now","label":"current_state","source":"tests/test_find_quote.py"}
+{"id":"t3","text":"latest architecture decision","label":"current_state","source":"tests/test_find_quote.py"}
+{"id":"t4","text":"what's the plan at the moment","label":"current_state","source":"tests/test_find_quote.py"}
+{"id":"t5","text":"how is this working these days","label":"current_state","source":"tests/test_find_quote.py"}
+{"id":"t6","text":"find quote about magnesium","label":"default","source":"tests/test_find_quote.py"}
+{"id":"h1","text":"what am I taking for blood pressure right now","label":"current_state","source":"hand"}
+{"id":"h2","text":"which gym do I go to these days","label":"current_state","source":"hand"}
+{"id":"h3","text":"am I still doing the keto thing","label":"current_state","source":"hand"}
+{"id":"h4","text":"where do I currently live","label":"current_state","source":"hand"}
+{"id":"h5","text":"what's my current squat max","label":"current_state","source":"hand"}
+{"id":"h6","text":"who is my doctor now","label":"current_state","source":"hand"}
+{"id":"h7","text":"is the deal with the landlord still on","label":"current_state","source":"hand"}
+{"id":"h8","text":"what car do I drive","label":"current_state","source":"hand"}
+{"id":"h9","text":"what did I say about the trip to chicago","label":"default","source":"hand"}
+{"id":"h10","text":"when did I first mention the marathon","label":"default","source":"hand"}
+{"id":"h11","text":"quote where I explained the mortgage rate","label":"default","source":"hand"}
+{"id":"h12","text":"what was my squat max last year","label":"default","source":"hand"}
+{"id":"h13","text":"how did the interview in march go","label":"default","source":"hand"}
+{"id":"h14","text":"what recipe did I share for the chili","label":"default","source":"hand"}
+{"id":"h15","text":"did I ever live in boston","label":"default","source":"hand"}
+{"id":"h16","text":"what did the doctor say about my knee back then","label":"default","source":"hand"}
+{"id":"h17","text":"what did I lead or am currently leading","label":"default","source":"hand:disjunction"}
+{"id":"h18","text":"list everything I told you about my dog","label":"default","source":"hand"}
+{"id":"h19","text":"what's the latest on the visa application","label":"current_state","source":"hand"}
+{"id":"h20","text":"how much protein do I eat per day these days","label":"current_state","source":"hand"}
+{"id":"h21","text":"what was the very first thing we discussed","label":"default","source":"hand"}
+{"id":"h22","text":"remind me what I named the puppy","label":"default","source":"hand"}
+{"id":"h23","text":"which supplements am I on","label":"current_state","source":"hand"}
+{"id":"h24","text":"what were my goals in january","label":"default","source":"hand"}

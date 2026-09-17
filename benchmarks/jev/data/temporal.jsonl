@@ -1,0 +1,24 @@
+{"id":"p1","text":"what was the very first thing we discussed","label":true,"source":"patterns"}
+{"id":"p2","text":"at the beginning you mentioned a budget","label":true,"source":"patterns"}
+{"id":"p3","text":"early on we talked about deadlifts","label":true,"source":"patterns"}
+{"id":"p4","text":"initially we planned a trip to lisbon","label":true,"source":"patterns"}
+{"id":"h1","text":"when did I first bring up the marathon","label":true,"source":"hand"}
+{"id":"h2","text":"what did we talk about before the protein discussion","label":true,"source":"hand"}
+{"id":"h3","text":"in what order did I visit those three cities","label":true,"source":"hand"}
+{"id":"h4","text":"how long after the surgery did I start lifting again","label":true,"source":"hand"}
+{"id":"h5","text":"what was the last thing I said yesterday","label":true,"source":"hand"}
+{"id":"h6","text":"which came first, the job offer or the move","label":true,"source":"hand"}
+{"id":"h7","text":"what did I say about squats two weeks ago","label":true,"source":"hand"}
+{"id":"h8","text":"when did I switch doctors","label":true,"source":"hand"}
+{"id":"n1","text":"how much protein should I eat","label":false,"source":"hand"}
+{"id":"n2","text":"give me the chili recipe again","label":false,"source":"hand"}
+{"id":"n3","text":"what is my squat max","label":false,"source":"hand"}
+{"id":"n4","text":"who is my landlord","label":false,"source":"hand"}
+{"id":"n5","text":"what's the best way to fix the mqtt bridge","label":false,"source":"hand"}
+{"id":"n6","text":"summarize what I told you about my dog","label":false,"source":"hand"}
+{"id":"n7","text":"do I take metformin","label":false,"source":"hand"}
+{"id":"n8","text":"the first set felt heavy today, any tips","label":false,"source":"hand:first-not-temporal"}
+{"id":"n9","text":"start a timer for ten minutes","label":false,"source":"hand:start-not-temporal"}
+{"id":"n10","text":"what time zone am I in","label":false,"source":"hand:time-word"}
+{"id":"n11","text":"my plan is to run early in the morning","label":false,"source":"hand:early-not-temporal"}
+{"id":"n12","text":"which of my cars is newest","label":false,"source":"hand"}

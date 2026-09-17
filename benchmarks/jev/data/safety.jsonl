@@ -1,0 +1,24 @@
+{"id":"s1","text":"I stopped taking metformin last week.","label":true,"source":"hand"}
+{"id":"s2","text":"Correction: I am not on statins anymore, my doctor took me off them.","label":true,"source":"hand"}
+{"id":"s3","text":"I started TRT in June.","label":true,"source":"hand"}
+{"id":"s4","text":"Actually I was wrong earlier, my A1C is 6.1 not 7.1.","label":true,"source":"hand"}
+{"id":"s5","text":"We broke up, so ignore what I said about moving in together.","label":true,"source":"hand"}
+{"id":"s6","text":"I quit the keto diet, it was wrecking my sleep.","label":true,"source":"hand"}
+{"id":"s7","text":"I switched from lisinopril to losartan.","label":true,"source":"hand"}
+{"id":"s8","text":"No longer working at the hospital, I resigned Friday.","label":true,"source":"hand"}
+{"id":"s9","text":"I am allergic to penicillin, not amoxicillin, I misspoke.","label":true,"source":"hand"}
+{"id":"s10","text":"Update: the surgery got cancelled, I am not having it.","label":true,"source":"hand"}
+{"id":"s11","text":"I paused creatine while I travel.","label":true,"source":"hand"}
+{"id":"s12","text":"I moved out of Boston in March.","label":true,"source":"hand"}
+{"id":"f1","text":"He stopped by the store on the way home.","label":false,"source":"hand:incidental-stop"}
+{"id":"f2","text":"My brother stopped taking his meds again.","label":false,"source":"hand:third-party"}
+{"id":"f3","text":"We talked about cars for an hour.","label":false,"source":"hand"}
+{"id":"f4","text":"The bus stopped at every corner.","label":false,"source":"hand:incidental-stop"}
+{"id":"f5","text":"Can you correct the typo in that message?","label":false,"source":"hand:correction-word"}
+{"id":"f6","text":"I started the movie but fell asleep.","label":false,"source":"hand:trivial-start"}
+{"id":"f7","text":"My doctor started seeing patients on Saturdays.","label":false,"source":"hand:third-party"}
+{"id":"f8","text":"What is the correct dose of magnesium?","label":false,"source":"hand:correction-word"}
+{"id":"f9","text":"The recipe says to stop stirring once it thickens.","label":false,"source":"hand:incidental-stop"}
+{"id":"f10","text":"I love the new gym playlist.","label":false,"source":"hand"}
+{"id":"f11","text":"She switched teams at work last quarter.","label":false,"source":"hand:third-party"}
+{"id":"f12","text":"Quit playing and answer the question lol","label":false,"source":"hand:quit-word"}
