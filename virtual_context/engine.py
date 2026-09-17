@@ -171,8 +171,14 @@ class VirtualContextEngine:
     ) -> None:
         self._config_path = str(config_path) if config_path else None
         self.config = config or load_config(config_path)
-        from .core.judgment import build_runtime as _build_judgment_runtime, install as _install_judgment
-        _install_judgment(_build_judgment_runtime(self.config.judgment))
+        from .core.judgment import build_runtime as _build_judgment_runtime
+        # Engine-owned: never installed process-wide, so engines in one process keep their own modes.
+        self.judgment_runtime = _build_judgment_runtime(self.config.judgment)
+        logger.info(
+            "JUDGMENT_RUNTIME conv=%s mode=%s seams=%s",
+            self.config.conversation_id[:8], self.judgment_runtime.mode.value,
+            ",".join(f"{k}:{v.value}" for k, v in sorted(self.judgment_runtime.seam_modes.items())) or "-",
+        )
         self._token_counter = create_token_counter(self.config.token_counter)
         self._session_cache = session_cache
         self._session_state_provider = session_state_provider
@@ -417,6 +423,7 @@ class VirtualContextEngine:
         self._search = SearchEngine(
             store=self._store, semantic=self._semantic,
             turn_tag_index=self._turn_tag_index, config=self.config,
+            judgment_runtime=self.judgment_runtime,
         )
         from .core.temporal_resolver import TemporalResolver
         self._temporal = TemporalResolver(
@@ -424,6 +431,7 @@ class VirtualContextEngine:
             search_engine=self._search,
             config=self.config,
             semantic=self._semantic,
+            judgment_runtime=self.judgment_runtime,
         )
         from .core.tool_query import ToolQueryRunner
         self._tool_query = ToolQueryRunner(engine=self, config=self.config)
@@ -478,6 +486,7 @@ class VirtualContextEngine:
             prewarm_context_hint_callback=(
                 lambda: self._retrieval.prewarm_context_hint_cache()
             ),
+            judgment_runtime=self.judgment_runtime,
         )
         self._retrieval = RetrievalAssembler(
             retriever=self._retriever,
@@ -1049,11 +1058,13 @@ class VirtualContextEngine:
         self._search = SearchEngine(
             store=self._store, semantic=self._semantic,
             turn_tag_index=self._turn_tag_index, config=self.config,
+            judgment_runtime=self.judgment_runtime,
         )
         from .core.temporal_resolver import TemporalResolver
         self._temporal = TemporalResolver(
             store=self._store, search_engine=self._search,
             config=self.config, semantic=self._semantic,
+            judgment_runtime=self.judgment_runtime,
         )
         if self._reference_date is not None:
             self._temporal.reference_date = self._reference_date
@@ -1120,6 +1131,7 @@ class VirtualContextEngine:
             # assembly needs the tenant explicitly: AssemblerConfig has no
             # tenant field for it to reach for.
             tenant_id=self.config.tenant_id,
+            judgment_runtime=self.judgment_runtime,
         )
 
     def _init_retriever(self) -> None:
@@ -1145,6 +1157,7 @@ class VirtualContextEngine:
             conversation_id=self.config.conversation_id,
             session_state_provider=self._session_state_provider,
             query_embed_fn=query_embed_fn,
+            judgment_runtime=self.judgment_runtime,
         )
 
     def _build_inbound_embedding_tagger(self) -> TagGenerator:
@@ -1204,6 +1217,7 @@ class VirtualContextEngine:
                 model_name=self.config.summarization.model,
                 tag_rules=self.config.tag_rules,
                 telemetry_ledger=self._telemetry,
+                judgment_runtime=self.judgment_runtime,
             )
 
     def _init_tag_splitter(self) -> None:
@@ -3201,6 +3215,7 @@ class VirtualContextEngine:
             ),
             physical_by_id,
             conversation_id=conv_id,
+            judgment_runtime=self.judgment_runtime,
         )
         _t_compactor = _time.monotonic()
         new_summaries = self._compactor.compact_tag_summaries(

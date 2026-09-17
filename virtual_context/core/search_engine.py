@@ -38,6 +38,8 @@ class SearchEngine:
         turn_tag_index:  a TurnTagIndex instance (shared mutable reference)
         config:          a VirtualContextConfig instance
     """
+    _judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     def __init__(
         self,
@@ -45,8 +47,10 @@ class SearchEngine:
         semantic: SemanticSearchManager,
         turn_tag_index: TurnTagIndex,
         config: VirtualContextConfig,
+        judgment_runtime=None,
     ) -> None:
         self._store = store
+        self._judgment_runtime = judgment_runtime
         self._semantic = semantic
         self._turn_tag_index = turn_tag_index
         self._config = config
@@ -94,6 +98,7 @@ class SearchEngine:
                 speaker_handles if annotation_context is not None else None
             ),
             speaker_annotations=annotation_context is not None,
+            judgment_runtime=self._judgment_runtime,
         )
 
     def _route_speaker_context(
@@ -154,6 +159,7 @@ class SearchEngine:
             store=self._store,
             conversation_id=self._config.conversation_id,
             speaker_context=speaker_context,
+            judgment_runtime=self._judgment_runtime,
         )
         rendered_by_ref = {
             segment.ref: (
@@ -261,6 +267,7 @@ class SearchEngine:
             mode=mode,
             conversation_id=self._config.conversation_id,
             speaker_context=resolved_context,
+            judgment_runtime=self._judgment_runtime,
         )
         return sanitize_summary_payload_for_model(
             result,

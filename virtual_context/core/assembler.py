@@ -71,6 +71,7 @@ def format_tag_section(
     include_source_refs: bool = False,
     depth: str = "summary",
     newest_first: bool = False,
+    judgment_runtime=None,
 ) -> str:
     """Render a tag section in the canonical <virtual-context> format.
 
@@ -98,6 +99,7 @@ def format_tag_section(
             conversation_id=conversation_id,
             speaker_context=speaker_context,
             depth=depth,
+            judgment_runtime=judgment_runtime,
         )
     else:
         rendered_summaries = [
@@ -191,6 +193,8 @@ class ContextAssembler:
     2. [TAG CONTEXT] - retrieved summaries in <virtual-context> tags
     3. [CONVERSATION HISTORY] - recent turns, most recent at bottom
     """
+    judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     def __init__(
         self,
@@ -200,8 +204,10 @@ class ContextAssembler:
         store: object | None = None,
         conversation_id: str = "",
         tenant_id: str = "",
+        judgment_runtime=None,
     ) -> None:
         self.config = config
+        self.judgment_runtime = judgment_runtime
         self.token_counter = token_counter or (lambda text: len(text) // 4)
         self.tag_rules = tag_rules or []
         self._store = store
@@ -1260,6 +1266,7 @@ class ContextAssembler:
             store=getattr(self, "_store", None),
             conversation_id=getattr(self, "_conversation_id", ""),
             speaker_context=roster_context or speaker_context,
+            judgment_runtime=self.judgment_runtime,
         )
         rendered_by_depth: dict[str, dict[int, str]] = {}
         for (item, render_depth), rendered in zip(
@@ -1313,6 +1320,7 @@ class ContextAssembler:
                 store=getattr(self, "_store", None),
                 conversation_id=getattr(self, "_conversation_id", ""),
                 speaker_context=roster_context or speaker_context,
+                judgment_runtime=self.judgment_runtime,
             )
             for (item, render_depth), rendered in zip(
                 late_render_requests, late_rendered, strict=True,
@@ -2024,6 +2032,7 @@ class ContextAssembler:
             rendered_summary_by_object=rendered_summary_by_object,
             depth="summary",
             newest_first=newest_first,
+            judgment_runtime=self.judgment_runtime,
         )
 
     def _format_segments_section(
@@ -2046,6 +2055,7 @@ class ContextAssembler:
                 conversation_id=getattr(self, "_conversation_id", ""),
                 speaker_context=speaker_context,
                 depth="segments",
+                judgment_runtime=self.judgment_runtime,
             )
         else:
             rendered_summaries = [
@@ -2095,6 +2105,7 @@ class ContextAssembler:
                 conversation_id=getattr(self, "_conversation_id", ""),
                 speaker_context=speaker_context,
                 depth="full",
+                judgment_runtime=self.judgment_runtime,
             )
         else:
             rendered_summaries = [

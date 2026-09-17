@@ -8,8 +8,12 @@ Three modes (``JudgmentConfig.mode`` / ``VC_JUDGMENT_MODE``):
 * ``jev`` - the Jev answer is used; any failure falls back to legacy and logs
   ``JUDGMENT_FALLBACK``.
 
-The runtime is installed process-wide by the engine at construction because
-the seams are module-level functions called far from any engine handle.
+Each engine owns a ``JudgmentRuntime`` (``engine.judgment_runtime``) and hands
+it to the objects and functions that host the seams, so two engines in one
+process never share a mode. The module-level registry (``install``,
+``current``, ``override``) is only the default for code paths with no engine
+in hand, such as tests and the benchmark harness; it is never written by the
+engine.
 """
 from __future__ import annotations
 
@@ -241,8 +245,6 @@ def install(runtime: JudgmentRuntime) -> None:
     global _installed
     with _lock:
         _installed = runtime
-    logger.info("JUDGMENT_RUNTIME mode=%s model=%s seams=%s", runtime.mode.value, runtime.config.model,
-                ",".join(f"{k}:{v.value}" for k, v in sorted(runtime.seam_modes.items())) or "-")
 
 
 def current() -> JudgmentRuntime:
@@ -350,8 +352,8 @@ def jev_query_intent(client: JevClient, query: str, *, min_confidence: float = 0
                                               "confidence": round(conf, 3)}, response=resp)
 
 
-def judge_query_intent(query: str, legacy: Callable[[], str]) -> str:
-    return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), describe=str)
+def judge_query_intent(query: str, legacy: Callable[[], str], *, runtime: JudgmentRuntime | None = None) -> str:
+    return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), runtime=runtime, describe=str)
 
 
 # --- seam S3: inbound temporal intent ----------------------------------------
@@ -375,8 +377,8 @@ def jev_temporal_intent(client: JevClient, message: str, *, threshold: float) ->
     return JevOutcome(value=bool(ans.value >= threshold), detail={"p": round(ans.value, 3)}, response=resp)
 
 
-def judge_temporal_intent(message: str, legacy: Callable[[], bool]) -> bool:
-    rt = current()
+def judge_temporal_intent(message: str, legacy: Callable[[], bool], *, runtime: JudgmentRuntime | None = None) -> bool:
+    rt = runtime if runtime is not None else current()
     return decide("temporal_intent", legacy,
                   lambda c: jev_temporal_intent(c, message, threshold=rt.config.noul_threshold),
                   runtime=rt, describe=str)
@@ -406,8 +408,8 @@ def jev_safety_critical(client: JevClient, text: str, *, threshold: float) -> Je
     return JevOutcome(value=bool(ans.value >= threshold), detail={"p": round(ans.value, 3)}, response=resp)
 
 
-def judge_safety_critical(text: str, legacy: Callable[[], bool]) -> bool:
-    rt = current()
+def judge_safety_critical(text: str, legacy: Callable[[], bool], *, runtime: JudgmentRuntime | None = None) -> bool:
+    rt = runtime if runtime is not None else current()
     return decide("safety_critical", legacy,
                   lambda c: jev_safety_critical(c, text, threshold=rt.config.noul_threshold),
                   runtime=rt, describe=str)
@@ -582,9 +584,9 @@ def jev_admission(client: JevClient, payload: dict, eligible: list[str], *, subj
                                           "subject_flips": subject_flips}, response=resp)
 
 
-def judge_admission(payload: dict, eligible: list[str]) -> AdmissionJudgment | None:
+def judge_admission(payload: dict, eligible: list[str], *, runtime: JudgmentRuntime | None = None) -> AdmissionJudgment | None:
     """Return the Jev admission judgment in shadow or jev mode; None in legacy or on failure."""
-    rt = current()
+    rt = runtime if runtime is not None else current()
     if not rt.enabled_for("admission"):
         return None
     assert rt.client is not None

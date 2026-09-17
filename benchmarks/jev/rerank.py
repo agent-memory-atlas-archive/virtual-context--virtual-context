@@ -106,6 +106,7 @@ def _pin_temporal_to_legacy(engine: VirtualContextEngine) -> None:
 
 def _retrieve(engine: VirtualContextEngine, question: str, runtime: JudgmentRuntime) -> tuple[list[str], int, list[str]]:
     _pin_temporal_to_legacy(engine)
+    engine._retriever.judgment_runtime = runtime  # engines own their runtime; the harness swaps arms per call
     with judgment.override(runtime):
         result = engine._retriever.retrieve(question, current_utilization=0.0)
     selected = [s.ref for s in result.summaries]

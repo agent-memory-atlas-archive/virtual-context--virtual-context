@@ -25,6 +25,8 @@ logger = logging.getLogger("virtual_context.core.compaction_pipeline")
 
 
 class ActorCardAdmissionService:
+    _judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
     def __init__(
         self,
         *,
@@ -33,8 +35,10 @@ class ActorCardAdmissionService:
         admission_provider: Callable,
         evidence_segments: Callable,
         prompt_turns: Callable,
+        judgment_runtime=None,
     ) -> None:
         self._config = config
+        self._judgment_runtime = judgment_runtime
         self._compactor = compactor
         self._actor_card_admission_provider = admission_provider
         self._actor_card_evidence_segments = evidence_segments
@@ -170,8 +174,9 @@ class ActorCardAdmissionService:
         )
         request_kwargs = {k: request[k] for k in ("system", "user", "max_tokens")}
         from ..judgment import JudgmentMode, current as _judgment_current, judge_admission, log_admission_shadow
-        jev_judgment = judge_admission(request["payload"], list(eligible))
-        if jev_judgment is not None and _judgment_current().mode_for("admission") is JudgmentMode.JEV:
+        _judgment_rt = self._judgment_runtime if self._judgment_runtime is not None else _judgment_current()
+        jev_judgment = judge_admission(request["payload"], list(eligible), runtime=_judgment_rt)
+        if jev_judgment is not None and _judgment_rt.mode_for("admission") is JudgmentMode.JEV:
             response_text, _usage, admission_source = jev_judgment.text, {}, "jev"
         else:
             complete_with_source = getattr(provider, "complete_with_source", None)
@@ -192,7 +197,7 @@ class ActorCardAdmissionService:
             independently_substantive, decisions = _parse_admission(
                 response_text,
             )
-            if jev_judgment is not None and _judgment_current().mode_for("admission") is JudgmentMode.SHADOW:
+            if jev_judgment is not None and _judgment_rt.mode_for("admission") is JudgmentMode.SHADOW:
                 log_admission_shadow(jev_judgment, independently_substantive, decisions)
         except _ActorCardAdmissionError as primary_exc:
             complete_fallback = getattr(provider, "complete_fallback", None)

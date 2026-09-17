@@ -415,6 +415,9 @@ judgment:
 `seams` lets each decision run in its own mode; a seam not listed follows `mode`. The
 `VC_JUDGMENT_MODE` override changes `mode` only.
 
+Each engine owns its judgment runtime, so engines built with different configs in one
+process never share a mode.
+
 ## Presets
 
 Virtual-context ships with two presets:

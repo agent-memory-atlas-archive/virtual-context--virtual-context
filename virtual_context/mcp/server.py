@@ -128,6 +128,7 @@ def recall_context(
             tag_summaries,
             rendered_summary_by_object=rendered_summary_by_object,
             include_source_refs=True,
+            judgment_runtime=getattr(engine, "judgment_runtime", None),
         )
         for tag, tag_summaries in summaries_by_tag.items()
     )

@@ -1212,6 +1212,7 @@ def _render_recall_all_payload(
         conversation_id=engine.config.conversation_id,
         speaker_context=speaker_context,
         depth="summary",
+        judgment_runtime=getattr(engine, "judgment_runtime", None),
     )
     rendered_by_tag = {
         str(item.tag): value
@@ -1844,6 +1845,7 @@ def _execute_vc_tool_unescaped(
                     speaker_context=speaker_context,
                     speaker_conditioning=_fq_conditioning,
                     speaker_handles=_fq_handles,
+                    judgment_runtime=getattr(engine, "judgment_runtime", None),
                 )
             else:
                 # Model-facing quote search always carries explicit request

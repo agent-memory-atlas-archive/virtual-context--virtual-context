@@ -281,6 +281,7 @@ def _build_structured_summary(
     segment: TaggedSegment,
     *,
     generation_model: str = "",
+    judgment_runtime=None,
 ) -> StructuredSummary:
     """Materialize the v1 envelope deterministically from physical lanes.
 
@@ -411,11 +412,11 @@ def _build_structured_summary(
     # membership or ordering.
     mandatory_claims = [
         claim for _index, claim in reversed(claims_by_source_index)
-        if is_safety_critical_personal_evidence(claim.text)
+        if is_safety_critical_personal_evidence(claim.text, runtime=judgment_runtime)
     ]
     ordinary_claims = [
         claim for _index, claim in claims_by_source_index
-        if not is_safety_critical_personal_evidence(claim.text)
+        if not is_safety_critical_personal_evidence(claim.text, runtime=judgment_runtime)
     ]
     claims = mandatory_claims + ordinary_claims
     if structured_claims_contain_internal_identity(
@@ -440,6 +441,7 @@ def build_deterministic_structured_summary(
     roster: object | None,
     segment: TaggedSegment,
     generation_model: str,
+    judgment_runtime=None,
 ) -> StructuredSummary:
     """Build a source-bound segment envelope without an LLM provider.
 
@@ -450,6 +452,7 @@ def build_deterministic_structured_summary(
     """
     return _build_structured_summary(
         {}, roster, segment, generation_model=generation_model,
+        judgment_runtime=judgment_runtime,
     )
 
 
@@ -610,6 +613,7 @@ def _select_tag_claims(
     selected_claim_refs: object,
     *,
     require_valid_selection: bool,
+    judgment_runtime=None,
 ) -> tuple[SummaryClaim, ...]:
     """Validate ephemeral refs and return exact, immutable source claims.
 
@@ -649,9 +653,11 @@ def _select_tag_claims(
             )
         return tuple(apply_tag_claim_safety_floor(
             claims, fallback, limit=_MAX_TAG_SELECTED_CLAIMS,
+            judgment_runtime=judgment_runtime,
         ))
     return tuple(apply_tag_claim_safety_floor(
         claims, selected, limit=_MAX_TAG_SELECTED_CLAIMS,
+        judgment_runtime=judgment_runtime,
     ))
 
 
@@ -664,6 +670,7 @@ def _rollup_structured_summary(
     require_valid_selection: bool = False,
     source_canonical_turn_ids: list[str],
     validated_tag_rollup_inputs: ValidatedTagRollupInputs | None = None,
+    judgment_runtime=None,
 ) -> StructuredSummary:
     """Select exact lower-layer claims for the model-visible tag summary.
 
@@ -683,6 +690,7 @@ def _rollup_structured_summary(
         pool,
         selected_claim_refs,
         require_valid_selection=require_valid_selection,
+        judgment_runtime=judgment_runtime,
     )
     return StructuredSummary(
         schema_version=STRUCTURED_SUMMARY_SCHEMA_VERSION,
@@ -1284,6 +1292,8 @@ def _collect_code_refs(*groups: object, max_refs: int = 12) -> list[dict]:
 
 class DomainCompactor:
     """Summarize each TaggedSegment independently using an LLM."""
+    judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     def __init__(
         self,
@@ -1294,6 +1304,7 @@ class DomainCompactor:
         tag_rules: list[TagPromptRule] | None = None,
         telemetry_ledger: TelemetryLedger | None = None,
         cost_tracker=None,  # deprecated, ignored — remove when callers updated
+        judgment_runtime=None,
     ) -> None:
         self.llm = llm_provider
         self.config = config
@@ -1301,6 +1312,7 @@ class DomainCompactor:
         self.model_name = model_name
         self.tag_rules = tag_rules or []
         self._telemetry = telemetry_ledger
+        self.judgment_runtime = judgment_runtime
 
     def compact(
         self,
@@ -1477,6 +1489,7 @@ class DomainCompactor:
                                 structured_summary=_build_structured_summary(
                                     {}, roster, segment,
                                     generation_model=self.model_name,
+                                    judgment_runtime=self.judgment_runtime,
                                 ),
                             ),
                             full_text=conversation_text,
@@ -1576,6 +1589,7 @@ class DomainCompactor:
                 if generation_model_override is None
                 else generation_model_override
             ),
+            judgment_runtime=self.judgment_runtime,
         )
 
     def summarize_tag(
@@ -1945,6 +1959,7 @@ class DomainCompactor:
             roster,
             segment,
             generation_model=self.model_name,
+            judgment_runtime=self.judgment_runtime,
         )
         summary_tokens = self.token_counter(summary)
 
@@ -2740,6 +2755,7 @@ class DomainCompactor:
                             validated_tag_rollup_inputs=(
                                 validated_tag_rollup_inputs
                             ),
+                            judgment_runtime=self.judgment_runtime,
                         ),
                         summary_tokens=self.token_counter(fallback_text),
                         source_segment_refs=refs,
@@ -2935,6 +2951,7 @@ class DomainCompactor:
             require_valid_selection=fail_closed,
             source_canonical_turn_ids=source_ids,
             validated_tag_rollup_inputs=validated_tag_rollup_inputs,
+            judgment_runtime=self.judgment_runtime,
         )
         code_refs = _collect_code_refs(
             parsed.get("code_refs"),

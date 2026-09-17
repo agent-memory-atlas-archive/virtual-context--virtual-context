@@ -199,9 +199,9 @@ _INSTANCE_COUNT_RE = re.compile(
 )
 
 
-def _detect_query_intent(query: str) -> str:
+def _detect_query_intent(query: str, *, runtime=None) -> str:
     from .judgment import judge_query_intent
-    return judge_query_intent(query, lambda: _detect_query_intent_legacy(query))
+    return judge_query_intent(query, lambda: _detect_query_intent_legacy(query), runtime=runtime)
 
 
 def _detect_query_intent_legacy(query: str) -> str:
@@ -2924,6 +2924,7 @@ def _contain_summary_results_for_speaker_context(
     *,
     conversation_id: str | None,
     speaker_context: SpeakerRetrievalContext,
+    judgment_runtime: object | None = None,
 ) -> tuple[list[QuoteResult], dict[str, SummarySpeakerAttribution]]:
     """Prove and render segment claims before any model-visible derivation.
 
@@ -2963,6 +2964,7 @@ def _contain_summary_results_for_speaker_context(
         conversation_id=conversation_id or "",
         speaker_context=speaker_context,
         depth="segments",
+        judgment_runtime=judgment_runtime,
     )
     rendered_by_ref = dict(zip(refs, rendered_segments, strict=True))
 
@@ -3054,6 +3056,7 @@ def search_summaries(
     conversation_id: str | None = None,
     *,
     speaker_context: SpeakerRetrievalContext | None = None,
+    judgment_runtime: object | None = None,
 ) -> dict:
     """Search compacted summaries, segment text, and related stored context.
 
@@ -3077,11 +3080,11 @@ def search_summaries(
         }
     coverage_components: list[str] = []
 
-    query_intent = _detect_query_intent(query)
+    query_intent = _detect_query_intent(query, runtime=judgment_runtime)
     if query_intent == "default" and intent_context.strip():
         # Fall back to the original user question/intent context when
         # the model issues a narrow tool query (e.g. "shoe rack").
-        query_intent = _detect_query_intent(intent_context)
+        query_intent = _detect_query_intent(intent_context, runtime=judgment_runtime)
 
     limit = _candidate_limit(max_results, mode)
     results = _search_summary_candidates(
@@ -3143,6 +3146,7 @@ def search_summaries(
             results,
             conversation_id=conversation_id,
             speaker_context=speaker_context,
+            judgment_runtime=judgment_runtime,
         )
     else:
         # Generated summary prose is not evidence even when it happens to use
@@ -3641,6 +3645,7 @@ def find_quote(
     speaker_conditioning: SpeakerConditioning | None = None,
     speaker_handles: dict[str, str] | None = None,
     speaker_annotations: bool = True,
+    judgment_runtime: object | None = None,
 ) -> dict:
     """Search canonical archived turns only.
 
@@ -3699,9 +3704,9 @@ def find_quote(
             response, speaker_conditioning, None,
         )
         return response
-    query_intent = _detect_query_intent(query)
+    query_intent = _detect_query_intent(query, runtime=judgment_runtime)
     if query_intent == "default" and intent_context.strip():
-        query_intent = _detect_query_intent(intent_context)
+        query_intent = _detect_query_intent(intent_context, runtime=judgment_runtime)
 
     if session_filter.strip():
         # Session drill-down is summary/segment oriented; keep quote search

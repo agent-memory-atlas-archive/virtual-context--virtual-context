@@ -2359,6 +2359,7 @@ async def prepare_payload(
                     summary_ratio=_summary_ratio,
                     client_truncated=_client_truncated,
                     turn_tag_index=state.engine._turn_tag_index,
+                    judgment_runtime=getattr(state.engine, "judgment_runtime", None),
                 )
                 if _client_truncated:
                     _recovery_turns = _fill_turns

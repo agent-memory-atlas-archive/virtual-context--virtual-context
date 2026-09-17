@@ -79,6 +79,8 @@ class CompactionPipeline:
 
     Constructor dependencies mirror what the engine previously wired internally.
     """
+    _judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     def __init__(
         self,
@@ -95,6 +97,7 @@ class CompactionPipeline:
         save_state_callback: Callable,
         session_state_provider=None,
         worker_id: str | None = None,
+        judgment_runtime=None,
         prewarm_context_hint_callback: Callable[[], str] | None = None,
     ) -> None:
         self._compactor = compactor
@@ -103,6 +106,7 @@ class CompactionPipeline:
         self._turn_tag_index = turn_tag_index
         self._engine_state = engine_state
         self._config = config
+        self._judgment_runtime = judgment_runtime
         self._supersession_checker = supersession_checker
         self._fact_curator = fact_curator
         self._semantic = semantic
@@ -212,6 +216,7 @@ class CompactionPipeline:
             admission_provider=self._actor_card_admission_provider,
             evidence_segments=self._actor_card_evidence_segments,
             prompt_turns=self._actor_card_prompt_turns,
+            judgment_runtime=getattr(self, "_judgment_runtime", None),
         )
 
     def _actor_card_evidence_service(self) -> ActorCardEvidenceService:
@@ -1044,6 +1049,7 @@ class CompactionPipeline:
                 tag_rollup_sources,
                 physical_by_id,
                 conversation_id=self._config.conversation_id,
+                judgment_runtime=getattr(self, "_judgment_runtime", None),
             )
         except Exception as exc:
             logger.warning(
@@ -1054,6 +1060,7 @@ class CompactionPipeline:
             )
             validated_tag_rollup_inputs = validate_tag_rollup_inputs(
                 (), {}, conversation_id=self._config.conversation_id,
+                judgment_runtime=getattr(self, "_judgment_runtime", None),
             )
         unique_source_refs = {
             str(getattr(summary, "ref", "") or "")

@@ -132,6 +132,8 @@ class TemporalResolver:
         search_engine:  a SearchEngine instance (for ``find_quote``)
         config:         a VirtualContextConfig instance
     """
+    _judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     # Bounded LRU cap on the summary-embedding cache. Sized to cover a large
     # segment set against a reasonable number of distinct query texts without
@@ -148,9 +150,11 @@ class TemporalResolver:
         search_engine: SearchEngine,
         config: VirtualContextConfig,
         semantic: SemanticSearchManager | None = None,
+        judgment_runtime=None,
     ) -> None:
         self._store = store
         self._search = search_engine
+        self._judgment_runtime = judgment_runtime
         self._semantic = semantic
         self._config = config
         self.reference_date: date | None = None
@@ -470,6 +474,7 @@ class TemporalResolver:
             conversation_id=conversation_id,
             speaker_context=speaker_context,
             depth="segments",
+            judgment_runtime=self._judgment_runtime,
         )
         rendered_by_ref = dict(zip(loaded_refs, rendered, strict=True))
         resolved = resolve_summary_speaker_attributions(

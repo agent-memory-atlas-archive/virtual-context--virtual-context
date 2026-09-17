@@ -26,6 +26,8 @@ _RETRIEVAL_BREAKDOWN_LOG_THRESHOLD_MS = 500.0
 
 
 class ContextRetriever:
+    judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
+
 
     def __init__(
         self,
@@ -37,8 +39,10 @@ class ContextRetriever:
         conversation_id: str | None = None,
         session_state_provider=None,
         query_embed_fn=None,
+        judgment_runtime=None,
     ) -> None:
         self.tag_generator = tag_generator
+        self.judgment_runtime = judgment_runtime
         self.store = store
         self.config = config
         self._turn_tag_index = turn_tag_index
@@ -297,6 +301,7 @@ class ContextRetriever:
         from .judgment import judge_temporal_intent
         return judge_temporal_intent(
             message, lambda: detect_temporal_heuristic(message, self._temporal_patterns),
+            runtime=self.judgment_runtime,
         )
 
     def retrieve(
@@ -559,7 +564,7 @@ class ContextRetriever:
             return (best_rrf, idf_overlap)
         all_summaries.sort(key=_summary_sort_key, reverse=True)
         from .judgment import rerank_summaries as _rerank_summaries
-        all_summaries = _rerank_summaries(lookup_text, all_summaries)
+        all_summaries = _rerank_summaries(lookup_text, all_summaries, runtime=self.judgment_runtime)
 
         selected: list[StoredSummary] = []
         selected_refs: set[str] = set()

@@ -3138,6 +3138,7 @@ def fill_pass(
     summary_ratio: float = 0.60,
     client_truncated: bool = False,
     turn_tag_index: "TurnTagIndex | None" = None,
+    judgment_runtime=None,
 ) -> tuple[dict, int, int]:
     """Fill payload from VC floor up to target threshold.
 
@@ -3184,6 +3185,7 @@ def fill_pass(
                 or SpeakerRetrievalContext.ineligible()
             ),
             depth="segments",
+            judgment_runtime=judgment_runtime,
         )
         for summary, rendered_summary in zip(
             overflow, rendered_overflow, strict=True,
@@ -3200,6 +3202,7 @@ def fill_pass(
                 summary.primary_tag,
                 [summary],
                 rendered_summary_by_object={id(summary): rendered_summary},
+                judgment_runtime=judgment_runtime,
             )
             tokens = len(text) // 4  # rough estimate
             if tokens_used + tokens > summary_budget:
@@ -3233,6 +3236,7 @@ def fill_pass(
                 else None
             ) or SpeakerRetrievalContext.ineligible(),
             depth="summary",
+            judgment_runtime=judgment_runtime,
         )
         for ts, rendered_summary in zip(
             ordered_tag_summaries, rendered_tag_summaries, strict=True,
@@ -3378,6 +3382,7 @@ def fill_pass(
                 conversation_id=conversation_id,
                 speaker_context=speaker_context,
                 depth="full",
+                judgment_runtime=judgment_runtime,
             ) if candidates else []
 
             # Prefer newest rows, but emit surviving envelopes in historical

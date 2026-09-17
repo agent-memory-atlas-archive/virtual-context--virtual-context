@@ -113,13 +113,17 @@ def infer_temporal_status(text: str) -> str:
     return ""
 
 
-def is_safety_critical_personal_evidence(text: str) -> bool:
-    """Mode-aware wrapper; see ``is_safety_critical_personal_evidence_legacy``."""
+def is_safety_critical_personal_evidence(text: str, *, runtime=None) -> bool:
+    """Mode-aware wrapper; see ``is_safety_critical_personal_evidence_legacy``.
+
+    ``runtime`` is the owning engine's ``JudgmentRuntime``; ``None`` means the
+    module default (legacy unless a test or harness overrides it).
+    """
     value = (text or "").strip()
     if not value:
         return False
     from .judgment import judge_safety_critical
-    return judge_safety_critical(value, lambda: is_safety_critical_personal_evidence_legacy(value))
+    return judge_safety_critical(value, lambda: is_safety_critical_personal_evidence_legacy(value), runtime=runtime)
 
 
 def is_safety_critical_personal_evidence_legacy(text: str) -> bool:
@@ -431,6 +435,7 @@ def _validated_tag_rollup_segment(
     rows_by_id: Mapping[object, object],
     *,
     conversation_id: str,
+    judgment_runtime=None,
 ) -> _ValidatedTagRollupSegment | None:
     """Authenticate one stored segment against its exact canonical rows."""
     # Local imports keep this low-level digest module independent of the types
@@ -579,7 +584,7 @@ def _validated_tag_rollup_segment(
     required_critical_ids = {
         canonical_id
         for canonical_id, record in admissible_by_id.items()
-        if is_safety_critical_personal_evidence(str(record["content"]))
+        if is_safety_critical_personal_evidence(str(record["content"]), runtime=judgment_runtime)
     }
     if not required_critical_ids.issubset(claimed_source_ids):
         return None
@@ -603,6 +608,7 @@ def validate_tag_rollup_inputs(
     rows_by_id: Mapping[object, object],
     *,
     conversation_id: str,
+    judgment_runtime=None,
 ) -> ValidatedTagRollupInputs:
     """Return an opaque proof containing only physically valid segments.
 
@@ -615,6 +621,7 @@ def validate_tag_rollup_inputs(
     for summary in summaries:
         signature = _validated_tag_rollup_segment(
             summary, rows_by_id, conversation_id=conversation_id,
+            judgment_runtime=judgment_runtime,
         )
         ref = str(_value(summary, "ref", "") or "")
         if signature is None or not ref or ref in conflicted_refs:
@@ -635,6 +642,7 @@ def apply_tag_claim_safety_floor(
     selected: Iterable[object],
     *,
     limit: int = 16,
+    judgment_runtime=None,
 ) -> tuple[object, ...]:
     """Make exact personal corrections mandatory without semantic guessing.
 
@@ -663,6 +671,7 @@ def apply_tag_claim_safety_floor(
             fingerprint not in mandatory_fingerprints
             and is_safety_critical_personal_evidence(
                 str(getattr(claim, "text", "") or ""),
+                runtime=judgment_runtime,
             )
         ):
             mandatory_fingerprints.add(fingerprint)
