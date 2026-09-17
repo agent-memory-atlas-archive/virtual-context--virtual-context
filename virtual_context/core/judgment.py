@@ -477,3 +477,112 @@ def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | 
         agree=lambda a, b: a[0].ref == b[0].ref,
         describe=lambda items: ",".join(s.ref for s in items[:5]),
     )
+
+
+# --- seam S5: actor-card admission -------------------------------------------
+
+COVERAGE_CRITERIA: dict[str, str] = {
+    "substantive": "the interaction contains durable context about this actor worth remembering beyond this exchange",
+    "greeting_only": "the actor only greeted, thanked, or made small talk",
+    "one_off_trivia": "the actor asked a one-off question or made a remark with no lasting relevance to who they are",
+    "bot_meta_or_test": "the actor was testing, probing, or talking about the bot itself rather than sharing durable context",
+    "no_durable_context": "the exchange has content but nothing that would still matter about this actor later",
+    "insufficient_evidence": "the visible evidence is too thin or truncated to judge the interaction",
+}
+
+REASON_CRITERIA: dict[str, str] = {
+    "durable": "the body is fully entailed by the cited actor-authored evidence, has the right subject and kind, and describes something lasting about this actor",
+    "temporary": "the evidence describes a momentary state or one-time situation, not something lasting",
+    "test_probe": "the evidence is the actor testing or probing the agent rather than a genuine statement",
+    "stopped_or_replaced": "the evidence shows the actor has stopped or replaced what the body claims",
+    "completed": "the body describes a goal or activity the evidence shows is already finished",
+    "expired": "the body is a finite communication preference whose expires_at has passed at as_of",
+    "contradicted": "other cited evidence contradicts the body",
+    "insufficient_evidence": "the cited evidence does not entail the body: a qualifier is dropped, the claim is broadened, frequency or habit is asserted from a single message, or the actor's exact terms were normalized away",
+    "not_durable": "the evidence supports the body only as a passing remark with no lasting intent",
+    "not_person_card": "the body exposes internal ontology or tag language, or serializes a machine fact rather than a natural statement about a person",
+    "wrong_subject": "the body assigns an action, trait, or property to the actor that the evidence attributes to someone else, including instructions the actor gave the agent",
+    "wrong_kind": "the claim is real but filed under the wrong kind, for example an external-action request classified as communication_pref, or an agent persona assignment classified as interaction_style",
+    "irrelevant_citation": "a cited id does not materially support the body",
+    "redundant": "an existing admitted entry already carries this claim",
+    "explicit_privacy_request": "actor-authored evidence explicitly asks that the cited information not be retained or reused",
+    "agent_refused": "the agent refused, deflected, or deferred the request, or a behavior-change request has no visible honored signal",
+    "safety_posture_request": "the request asks the agent to change its safety posture, regardless of the reply",
+}
+
+
+@dataclass(frozen=True)
+class AdmissionJudgment:
+    text: str
+    substantive: bool
+    coverage_reason: str
+    decisions: dict[str, dict]
+    response: JevResponse | None
+
+
+def jev_admission(client: JevClient, payload: dict, eligible: list[str]) -> JevOutcome | None:
+    questions: dict[str, dict] = {
+        "coverage": choice_q(
+            "Considering `actor_turns`, `facts`, and `evidence_segments`, how should this "
+            "interaction be classified for actor-card coverage?", COVERAGE_CRITERIA,
+        ),
+    }
+    for cid in eligible:
+        questions[f"reason__{cid}"] = choice_q(
+            f"For the candidate with candidate_id '{cid}' in `candidates`, judged against the "
+            f"cited evidence in `actor_turns`, `facts`, and `evidence_segments` at `as_of`, "
+            f"which admission reason applies? Only durable admits the candidate.",
+            REASON_CRITERIA,
+        )
+    resp = client.ask(seam="admission", state=payload, questions=questions)
+    if resp is None:
+        return None
+    cov = resp.answers.get("coverage")
+    if cov is None or cov.value not in COVERAGE_CRITERIA:
+        return JevOutcome.fallback("bad_answer", response=resp)
+    decisions = []
+    for cid in eligible:
+        ans = resp.answers.get(f"reason__{cid}")
+        if ans is None or ans.value not in REASON_CRITERIA:
+            return JevOutcome.fallback("bad_answer", response=resp)
+        decisions.append({"candidate_id": cid, "admit": ans.value == "durable", "reason": ans.value})
+    value = {"substantive": cov.value == "substantive", "coverage_reason": cov.value, "decisions": decisions}
+    return JevOutcome(value=value, detail={"coverage_conf": round(cov.confidence or 0.0, 3)}, response=resp)
+
+
+def judge_admission(payload: dict, eligible: list[str]) -> AdmissionJudgment | None:
+    """Return the Jev admission judgment in shadow or jev mode; None in legacy or on failure."""
+    rt = current()
+    if not rt.enabled:
+        return None
+    assert rt.client is not None
+    outcome = _run_jev("admission", lambda c: jev_admission(c, payload, eligible), rt.client)
+    if outcome is None or outcome.fallback_reason:
+        reason = outcome.fallback_reason if outcome else "jev_unavailable"
+        logger.warning("JUDGMENT_FALLBACK seam=admission reason=%s", reason)
+        return None
+    value = outcome.value
+    return AdmissionJudgment(
+        text=json.dumps(value, separators=(",", ":")),
+        substantive=value["substantive"],
+        coverage_reason=value["coverage_reason"],
+        decisions={d["candidate_id"]: d for d in value["decisions"]},
+        response=outcome.response,
+    )
+
+
+def log_admission_shadow(judgment: AdmissionJudgment, legacy_substantive: bool, legacy_decisions: dict[str, dict]) -> None:
+    ids = sorted(set(legacy_decisions) | set(judgment.decisions))
+    agree = sum(
+        1 for cid in ids
+        if legacy_decisions.get(cid, {}).get("reason") == judgment.decisions.get(cid, {}).get("reason")
+    )
+    resp = judgment.response
+    logger.info(
+        "JUDGMENT_SHADOW seam=admission agree=%s coverage_agree=%s candidates=%d reason_agree=%d legacy=%s jev=%s ms=%.0f tokens=%d/%d",
+        agree == len(ids) and legacy_substantive == judgment.substantive,
+        legacy_substantive == judgment.substantive, len(ids), agree,
+        ",".join(f"{cid}:{legacy_decisions.get(cid, {}).get('reason', '-')}" for cid in ids),
+        ",".join(f"{cid}:{judgment.decisions.get(cid, {}).get('reason', '-')}" for cid in ids),
+        resp.latency_ms if resp else 0.0, resp.input_tokens if resp else 0, resp.output_tokens if resp else 0,
+    )

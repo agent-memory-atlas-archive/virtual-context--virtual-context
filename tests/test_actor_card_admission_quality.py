@@ -69,11 +69,9 @@ def test_both_prompt_surfaces_reference_the_judgment_rules():
     curation_src = inspect.getsource(
         cp.ActorCardCurationService.curate_partition
     )
-    admission_src = inspect.getsource(
-        cp.ActorCardAdmissionService.admit_entries
-    )
+    from virtual_context.core.community import actor_card_admission as adm
     assert "_ACTOR_CARD_JUDGMENT_RULES" in curation_src
-    assert "_ACTOR_CARD_JUDGMENT_RULES" in admission_src
+    assert cp._ACTOR_CARD_JUDGMENT_RULES in adm.ADMISSION_SYSTEM_PROMPT
     assert "_ACTOR_CARD_CONFIDENCE_SCALE" in curation_src
 
 
