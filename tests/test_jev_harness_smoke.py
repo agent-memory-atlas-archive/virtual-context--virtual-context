@@ -25,3 +25,18 @@ def test_cli_writes_a_result_file(tmp_path):
     assert rc == 0
     files = list(Path(tmp_path).glob("intent-*.json"))
     assert len(files) == 1
+
+
+from benchmarks.jev.admission import load_sets, run_admission
+
+
+def test_admission_sets_load_and_offline_run_scores_jev_only():
+    sets = load_sets()
+    assert len(sets) >= 6
+    for s in sets:
+        ids = {c["candidate_id"] for c in s["candidates"]}
+        assert set(s["expected"]["decisions"]) == ids
+        assert s["expected"]["coverage_reason"] in ("substantive", "greeting_only", "one_off_trivia", "bot_meta_or_test", "no_durable_context", "insufficient_evidence")
+    result = run_admission(_fake_runtime(), limit=2, offline=True)
+    assert result["n_sets"] == 2 and result["legacy"]["reason_accuracy"] is None
+    assert 0.0 <= result["jev"]["reason_accuracy"] <= 1.0
