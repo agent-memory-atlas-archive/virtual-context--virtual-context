@@ -15,7 +15,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--out", type=Path, default=report.RESULTS_DIR)
     p.add_argument("--fake", action="store_true", help="offline fake Jev client (smoke)")
+    p.add_argument("--no-legacy", action="store_true", help="admission: skip the legacy model side")
     p.add_argument("--dataset", type=Path, default=None, help="LongMemEval 500q file for weak labels / rerank")
+    p.add_argument("--budgets", default=None, help="rerank grid: comma-separated absolute summary budgets in tokens")
+    p.add_argument("--min-probs", default=None, help="rerank grid: comma-separated rerank_min_probability values")
     args = p.parse_args(argv)
     runtime = build_fake_runtime() if args.fake else build_live_runtime()
     areas = AREAS if args.area == "all" else (args.area,)
@@ -24,11 +27,17 @@ def main(argv: list[str]) -> int:
             from .labeled import run_area
             result = run_area(area, runtime, limit=args.limit, dataset_path=args.dataset)
         elif area == "rerank":
-            from .rerank import run_rerank
-            result = run_rerank(runtime, limit=args.limit, dataset_path=args.dataset)
+            if args.budgets or args.min_probs:
+                from .rerank import run_rerank_grid
+                budgets = tuple(int(x) for x in (args.budgets or "7500").split(","))
+                min_probs = tuple(float(x) for x in (args.min_probs or "0").split(","))
+                result = run_rerank_grid(runtime, budgets=budgets, min_probs=min_probs, limit=args.limit, dataset_path=args.dataset)
+            else:
+                from .rerank import run_rerank
+                result = run_rerank(runtime, limit=args.limit, dataset_path=args.dataset)
         else:
             from .admission import run_admission
-            result = run_admission(runtime, limit=args.limit, offline=args.fake)
+            result = run_admission(runtime, limit=args.limit, offline=args.fake or args.no_legacy)
         path = report.write(result, args.out)
         print(report.table(result))
         print(f"\nwrote {path}")
