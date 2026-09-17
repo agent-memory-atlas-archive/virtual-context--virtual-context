@@ -63,6 +63,15 @@ paging:
 # type: "llm"     — LLM generates tags (best quality, requires provider)
 # type: "keyword" — deterministic keyword/regex matching (no LLM needed)
 
+judgment:
+  mode: legacy                    # legacy | shadow | jev (VC_JUDGMENT_MODE env overrides)
+  model: jev-latest               # TypeSafe System One model
+  api_key_env: TYPESAFE_API_KEY   # env var holding the TypeSafe API key
+  timeout_s: 3.0                  # per-call timeout; any failure falls back to legacy
+  noul_threshold: 0.5             # yes/no cut for temporal and safety judgments
+  rerank_min_probability: 0.0     # candidates below this move to the end of the shortlist
+  rerank_max_state_bytes: 200000  # skip the rerank call when the state would exceed this
+
 tag_generator:
   type: "llm"
   provider: "ollama"                                # must match a key in providers section

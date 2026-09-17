@@ -3225,6 +3225,28 @@ class CurationConfig:
     max_response_tokens: int = 2048
 
 
+JUDGMENT_MODES: tuple[str, ...] = ("legacy", "shadow", "jev")
+
+
+@dataclass
+class JudgmentConfig:
+    """Typed-judgment layer (TypeSafe Jev) switch.
+
+    ``mode``: ``legacy`` (default, Jev never called), ``shadow`` (legacy answer
+    used, Jev answer logged for comparison), ``jev`` (Jev answer used, legacy
+    fallback on any failure). ``VC_JUDGMENT_MODE`` overrides ``mode`` at engine
+    construction. Not tenant-settable in cloud.
+    """
+    mode: str = "legacy"
+    model: str = "jev-latest"
+    api_key_env: str = "TYPESAFE_API_KEY"
+    base_url: str = "https://api.typesafe.ai/v1/systemone"
+    timeout_s: float = 3.0
+    noul_threshold: float = 0.5
+    rerank_min_probability: float = 0.0
+    rerank_max_state_bytes: int = 200_000
+
+
 @dataclass
 class VirtualContextConfig:
     version: str = "0.2"
@@ -3248,6 +3270,7 @@ class VirtualContextConfig:
     facts: FactsConfig = field(default_factory=FactsConfig)
     supersession: SupersessionConfig = field(default_factory=SupersessionConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
+    judgment: JudgmentConfig = field(default_factory=JudgmentConfig)
     providers: dict[str, dict] = field(default_factory=dict)
     conversation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     # The agent's OWN platform user ids, keyed by platform:

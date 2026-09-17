@@ -38,6 +38,7 @@ from .types import (
     ToolOutputRule,
     VirtualContextConfig,
 )
+from .types import JUDGMENT_MODES, JudgmentConfig
 
 CONFIG_FILENAMES = [
     "virtual-context.yaml",
@@ -142,6 +143,29 @@ def _parse_strategy_configs(raw: dict[str, Any]) -> dict[str, StrategyConfig]:
     if "default" not in configs:
         configs["default"] = StrategyConfig()
     return configs
+
+
+def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
+    defaults = JudgmentConfig()
+    mode = raw.get("mode", defaults.mode)
+    if not isinstance(mode, str) or mode not in JUDGMENT_MODES:
+        raise ValueError(
+            f"judgment.mode must be one of {', '.join(JUDGMENT_MODES)}; got {mode!r}"
+        )
+    return JudgmentConfig(
+        mode=mode,
+        model=str(raw.get("model", defaults.model)),
+        api_key_env=str(raw.get("api_key_env", defaults.api_key_env)),
+        base_url=str(raw.get("base_url", defaults.base_url)),
+        timeout_s=float(raw.get("timeout_s", defaults.timeout_s)),
+        noul_threshold=float(raw.get("noul_threshold", defaults.noul_threshold)),
+        rerank_min_probability=float(
+            raw.get("rerank_min_probability", defaults.rerank_min_probability)
+        ),
+        rerank_max_state_bytes=int(
+            raw.get("rerank_max_state_bytes", defaults.rerank_max_state_bytes)
+        ),
+    )
 
 
 def _build_config(raw: dict[str, Any], *, validate: bool = True) -> VirtualContextConfig:
@@ -469,6 +493,8 @@ def _build_config(raw: dict[str, Any], *, validate: bool = True) -> VirtualConte
         max_response_tokens=cur_raw.get("max_response_tokens", 2048),
     )
 
+    judgment_config = _parse_judgment(raw.get("judgment", {}) or {})
+
     cfg = VirtualContextConfig(
         version=raw.get("version", "0.2"),
         storage_root=storage_root,
@@ -491,6 +517,7 @@ def _build_config(raw: dict[str, Any], *, validate: bool = True) -> VirtualConte
         facts=facts_config,
         supersession=supersession_config,
         curation=curation_config,
+        judgment=judgment_config,
         providers=raw.get("providers", {}),
     )
     # Accept both "conversation_id" (preferred) and "session_id" (legacy)

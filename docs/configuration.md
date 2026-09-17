@@ -390,6 +390,26 @@ tag_rules:
 
 `match` is a glob-style (fnmatch) pattern over tag names, `priority` breaks ties when several rules match (default 5, lower wins), and `summary_prompt` overrides the default summarization prompt for matching segments. Tag rules do not force segments into the assembled context.
 
+### judgment
+
+Routes five internal decisions (retrieval shortlist order, query intent, inbound
+temporal intent, safety-critical evidence, actor-card admission) through a
+typed-judgment model when mode is `shadow` or `jev`. `shadow` keeps legacy
+behavior and logs `JUDGMENT_SHADOW` lines for comparison. `jev` uses the model's
+answer and falls back to legacy on any failure (`JUDGMENT_FALLBACK`). The
+default `legacy` never calls the model.
+
+```yaml
+judgment:
+  mode: legacy                    # legacy | shadow | jev (VC_JUDGMENT_MODE env overrides)
+  model: jev-latest               # TypeSafe System One model
+  api_key_env: TYPESAFE_API_KEY   # env var holding the TypeSafe API key
+  timeout_s: 3.0                  # per-call timeout; any failure falls back to legacy
+  noul_threshold: 0.5             # yes/no cut for temporal and safety judgments
+  rerank_min_probability: 0.0     # candidates below this move to the end of the shortlist
+  rerank_max_state_bytes: 200000  # skip the rerank call when the state would exceed this
+```
+
 ## Presets
 
 Virtual-context ships with two presets:
@@ -424,6 +444,8 @@ Reports missing required fields, invalid types, and cross-field constraint viola
 | `DATABASE_URL` | Postgres DSN fallback for the CLI. Storage precedence: explicit storage flag (`--postgres-dsn` / `--sqlite-path`) > `-c` config > `DATABASE_URL`, consulted only when neither flag nor config was given. Lets `admin` subcommands run bare inside a container that has the environment but no mounted config file |
 | `VC_DATA_DIR` | Data directory for deployments whose store has no local database path (default `/data/tenants`). Media originals saved by image compression land under `$VC_DATA_DIR/media/`, per conversation, and are cleaned up when a conversation is deleted |
 | `VIRTUAL_CONTEXT_CONFIG` | Config file path override, read by the MCP server only; the CLI uses `-c` and auto-discovery |
+| `VC_JUDGMENT_MODE` | Overrides `judgment.mode` (`legacy`, `shadow`, `jev`); read once at engine construction and pinned; an invalid value raises |
+| `TYPESAFE_API_KEY` | API key for the typed-judgment model when `judgment.mode` is `shadow` or `jev` (name configurable via `judgment.api_key_env`) |
 
 ### Native semantic ranking
 
