@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -48,6 +47,23 @@ def gold_segment_refs(store_path: Path, gold_sessions: list[list[dict]]) -> set[
     finally:
         conn.close()
     return refs
+
+
+def _copy_store(src: Path, dst: Path) -> None:
+    """Consistent read-only copy of a WAL-mode SQLite store via the backup API.
+
+    A raw file copy of store.db plus its -wal/-shm siblings can yield a
+    "database disk image is malformed" read; the backup API folds the WAL in.
+    """
+    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    try:
+        dest = sqlite3.connect(dst)
+        try:
+            source.backup(dest)
+        finally:
+            dest.close()
+    finally:
+        source.close()
 
 
 def first_gold_rank(order: list[str], gold: set[str]) -> int | None:
@@ -113,9 +129,7 @@ def run_rerank(runtime: JudgmentRuntime, *, limit: int | None = None, dataset_pa
         src = cache_root / qid
         with tempfile.TemporaryDirectory(prefix=f"jev-rerank-{qid}-") as tmp:
             tmpdir = Path(tmp)
-            for name in ("store.db", "store.db-wal", "store.db-shm"):
-                if (src / name).exists():
-                    shutil.copy2(src / name, tmpdir / name)
+            _copy_store(src / "store.db", tmpdir / "store.db")
             gold = gold_segment_refs(tmpdir / "store.db", _gold_sessions(q))
             engine = _build_engine(tmpdir, qid, embedder)
             row = {"id": qid, "type": q["question_type"], "question": q["question"], "n_gold_segments": len(gold)}
