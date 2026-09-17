@@ -42,7 +42,7 @@ def table(result: dict) -> str:
             lines.append(f"| {b} | " + " | ".join(cells) + " |")
         return "\n".join(lines)
     if area == "admission":
-        lines = [f"## admission (sets={result['n_sets']}, candidates={result['n_candidates']})", "",
+        lines = [f"## admission (sets={result['n_sets']}, candidates={result['n_candidates']}, legacy arm={result.get('legacy_arm')})", "",
                  "| side | reason accuracy | admit/reject accuracy | coverage accuracy | mean ms | mean input tokens |", "|---|---|---|---|---|---|"]
         for side in ("legacy", "jev"):
             m = result[side]

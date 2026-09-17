@@ -19,7 +19,32 @@ def load_sets() -> list[dict]:
     return [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
 
 
+def legacy_arm_label() -> str:
+    provider = os.environ.get("VC_JEV_ADMISSION_PROVIDER", "openrouter")
+    model = os.environ.get("VC_JEV_ADMISSION_MODEL", DEFAULT_LEGACY_MODEL if provider == "openrouter" else "k3")
+    thinking = os.environ.get("VC_JEV_ADMISSION_THINKING", "off")
+    return f"{provider}:{model}" + (f":thinking-{thinking}" if provider == "kimi" else "")
+
+
 def _legacy_provider():
+    """The model side of the comparison: OpenRouter (default) or the Kimi Code endpoint.
+
+    VC_JEV_ADMISSION_PROVIDER=openrouter|kimi, VC_JEV_ADMISSION_MODEL, and for kimi
+    VC_JEV_ADMISSION_THINKING=on|off (default off).
+    """
+    provider = os.environ.get("VC_JEV_ADMISSION_PROVIDER", "openrouter")
+    if provider == "kimi":
+        from virtual_context.providers.anthropic import AnthropicProvider
+        key = os.environ.get("KIMI_API_KEY")
+        if not key:
+            raise SystemExit("KIMI_API_KEY is not set; needed for the Kimi Code admission model")
+        return AnthropicProvider(
+            api_key=key,
+            model=os.environ.get("VC_JEV_ADMISSION_MODEL", "k3"),
+            temperature=0.0,
+            base_url="https://api.kimi.com/coding",
+            disable_thinking=os.environ.get("VC_JEV_ADMISSION_THINKING", "off") != "on",
+        )
     from virtual_context.providers.generic_openai import GenericOpenAIProvider
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
@@ -28,6 +53,7 @@ def _legacy_provider():
         base_url="https://openrouter.ai/api/v1",
         model=os.environ.get("VC_JEV_ADMISSION_MODEL", DEFAULT_LEGACY_MODEL),
         api_key=key,
+        temperature=0.0,
     )
 
 
@@ -84,7 +110,8 @@ def run_admission(runtime: JudgmentRuntime, *, limit: int | None = None, offline
         rows.append(row)
     both = [c for r in rows for c in r["candidates_scored"] if c.get("legacy") is not None and c.get("jev") is not None]
     return {
-        "area": "admission", "n_sets": len(rows), "n_candidates": sum(len(r["candidates_scored"]) for r in rows),
+        "area": "admission", "legacy_arm": (legacy_arm_label() if provider is not None else None),
+        "n_sets": len(rows), "n_candidates": sum(len(r["candidates_scored"]) for r in rows),
         "legacy": _score(rows, "legacy"), "jev": _score(rows, "jev"),
         "agreement": (sum(1 for c in both if c["legacy"] == c["jev"]) / len(both)) if both else None,
         "rows": rows,
