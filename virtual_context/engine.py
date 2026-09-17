@@ -171,6 +171,8 @@ class VirtualContextEngine:
     ) -> None:
         self._config_path = str(config_path) if config_path else None
         self.config = config or load_config(config_path)
+        from .core.judgment import build_runtime as _build_judgment_runtime, install as _install_judgment
+        _install_judgment(_build_judgment_runtime(self.config.judgment))
         self._token_counter = create_token_counter(self.config.token_counter)
         self._session_cache = session_cache
         self._session_state_provider = session_state_provider
