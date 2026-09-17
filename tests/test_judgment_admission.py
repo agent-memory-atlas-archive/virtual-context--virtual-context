@@ -63,7 +63,7 @@ def test_parse_admission_response_accepts_valid_and_rejects_invalid():
         parse_admission_response("nope", parse_json=parse_llm_json, eligible=["e1"])
 
 
-def _runtime(mode, coverage, reasons):
+def _runtime(mode, coverage, reasons, subjects=None):
     seen = []
     def handler(request):
         body = json.loads(request.content)
@@ -75,6 +75,9 @@ def _runtime(mode, coverage, reasons):
                 cid = key[len("reason__"):]
                 answers[key] = {"type": "choice", "choice": reasons[cid], "confidence": 0.8,
                                 "probabilities": {reasons[cid]: 0.8}}
+            elif key.startswith("subject__"):
+                cid = key[len("subject__"):]
+                answers[key] = {"type": "noul", "noul": (subjects or {}).get(cid, 0.9)}
         return httpx.Response(200, json={"model": "jev-t", "answers": answers,
                                          "usage": {"input_tokens": 3, "output_tokens": 1}})
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -96,7 +99,7 @@ def test_judge_admission_jev_mode_produces_validator_compatible_text():
     assert substantive is True and decisions["e1"]["admit"] is False and decisions["e2"]["admit"] is True
     body = seen[0]
     assert body["state"] == req["payload"]
-    assert set(body["questions"]) == {"coverage", "reason__e1", "reason__e2"}
+    assert set(body["questions"]) == {"coverage", "reason__e1", "reason__e2", "subject__e1", "subject__e2"}
     assert set(body["questions"]["reason__e1"]["criteria"]) == set(ADMISSION_REASONS)
     assert "candidate_id 'e1'" in body["questions"]["reason__e1"]["instructions"]
 
@@ -115,3 +118,22 @@ def test_judge_admission_failure_returns_none():
     req = build_admission_request(candidates=CANDS, compact_facts=[], actor_turns=[], evidence_segments=[], curator_substantive=True)
     with judgment.override(rt):
         assert judge_admission(req["payload"], ["e1", "e2"]) is None
+
+
+def test_subject_gate_turns_a_durable_answer_into_wrong_subject():
+    rt, _ = _runtime("jev", "substantive", {"e1": "durable", "e2": "durable"}, subjects={"e1": 0.1, "e2": 0.95})
+    req = build_admission_request(candidates=CANDS, compact_facts=[], actor_turns=[], evidence_segments=[], curator_substantive=True)
+    with judgment.override(rt):
+        out = judge_admission(req["payload"], ["e1", "e2"])
+    assert out.decisions["e1"] == {"candidate_id": "e1", "admit": False, "reason": "wrong_subject"}
+    assert out.decisions["e2"]["admit"] is True
+    parse_admission_response(out.text, parse_json=parse_llm_json, eligible=["e1", "e2"])
+
+
+def test_subject_gate_leaves_non_durable_reasons_alone():
+    rt, _ = _runtime("jev", "substantive", {"e1": "insufficient_evidence", "e2": "durable"}, subjects={"e1": 0.1, "e2": 0.1})
+    req = build_admission_request(candidates=CANDS, compact_facts=[], actor_turns=[], evidence_segments=[], curator_substantive=True)
+    with judgment.override(rt):
+        out = judge_admission(req["payload"], ["e1", "e2"])
+    assert out.decisions["e1"]["reason"] == "insufficient_evidence"
+    assert out.decisions["e2"]["reason"] == "wrong_subject"

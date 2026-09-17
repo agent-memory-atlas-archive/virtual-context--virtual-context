@@ -538,7 +538,7 @@ class AdmissionJudgment:
     response: JevResponse | None
 
 
-def jev_admission(client: JevClient, payload: dict, eligible: list[str]) -> JevOutcome | None:
+def jev_admission(client: JevClient, payload: dict, eligible: list[str], *, subject_threshold: float = 0.5) -> JevOutcome | None:
     questions: dict[str, dict] = {
         "coverage": choice_q(
             "Considering `actor_turns`, `facts`, and `evidence_segments`, how should this "
@@ -552,6 +552,13 @@ def jev_admission(client: JevClient, payload: dict, eligible: list[str]) -> JevO
             f"which admission reason applies? Only durable admits the candidate.",
             REASON_CRITERIA,
         )
+        questions[f"subject__{cid}"] = noul_q(
+            f"Is the claim in the candidate with candidate_id '{cid}' in `candidates` about the "
+            f"actor themselves, the author of the messages in `actor_turns`?",
+            true="the body describes the actor's own traits, facts, preferences, goals, or history",
+            false="the body describes another person, or turns an instruction the actor gave the "
+                  "agent into a property of the actor",
+        )
     resp = client.ask(seam="admission", state=payload, questions=questions)
     if resp is None:
         return None
@@ -559,13 +566,20 @@ def jev_admission(client: JevClient, payload: dict, eligible: list[str]) -> JevO
     if cov is None or cov.value not in COVERAGE_CRITERIA:
         return JevOutcome.fallback("bad_answer", response=resp)
     decisions = []
+    subject_flips = 0
     for cid in eligible:
         ans = resp.answers.get(f"reason__{cid}")
         if ans is None or ans.value not in REASON_CRITERIA:
             return JevOutcome.fallback("bad_answer", response=resp)
-        decisions.append({"candidate_id": cid, "admit": ans.value == "durable", "reason": ans.value})
+        reason = ans.value
+        subject = resp.answers.get(f"subject__{cid}")
+        if reason == "durable" and subject is not None and subject.kind == "noul" and subject.value < subject_threshold:
+            reason = "wrong_subject"
+            subject_flips += 1
+        decisions.append({"candidate_id": cid, "admit": reason == "durable", "reason": reason})
     value = {"substantive": cov.value == "substantive", "coverage_reason": cov.value, "decisions": decisions}
-    return JevOutcome(value=value, detail={"coverage_conf": round(cov.confidence or 0.0, 3)}, response=resp)
+    return JevOutcome(value=value, detail={"coverage_conf": round(cov.confidence or 0.0, 3),
+                                          "subject_flips": subject_flips}, response=resp)
 
 
 def judge_admission(payload: dict, eligible: list[str]) -> AdmissionJudgment | None:
@@ -574,7 +588,11 @@ def judge_admission(payload: dict, eligible: list[str]) -> AdmissionJudgment | N
     if not rt.enabled_for("admission"):
         return None
     assert rt.client is not None
-    outcome = _run_jev("admission", lambda c: jev_admission(c, payload, eligible), rt.client)
+    outcome = _run_jev(
+        "admission",
+        lambda c: jev_admission(c, payload, eligible, subject_threshold=rt.config.noul_threshold),
+        rt.client,
+    )
     if outcome is None or outcome.fallback_reason:
         reason = outcome.fallback_reason if outcome else "jev_unavailable"
         logger.warning("JUDGMENT_FALLBACK seam=admission reason=%s", reason)
