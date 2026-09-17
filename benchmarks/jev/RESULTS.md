@@ -141,6 +141,46 @@ finished marathon rejected as `completed` although the kind is relevant_history)
 reason errors all still land on reject. Coverage: legacy labeled four substantive
 interactions `no_durable_context`; Jev labeled one (`privacy`).
 
+## rerank budget grid (added after the first run; all Jev requests were cache hits)
+
+Cell = gold-in-selected rate / mean selected tokens / mean summaries selected. `jev@p`
+is jev mode with `rerank_min_probability = p`. n=140.
+
+| budget tokens | legacy | jev@0.0 | jev@0.3 | jev@0.5 | jev@0.7 |
+|---|---|---|---|---|---|
+| 7500 | 94.3% / 1390 / 14.3 | 94.3% / 1390 / 14.3 | 94.3% / 1390 / 14.3 | 94.3% / 1390 / 14.3 | 94.3% / 1390 / 14.3 |
+| 3000 | 94.3% / 1352 / 14.0 | 94.3% / 1352 / 14.0 | 94.3% / 1352 / 14.0 | 94.3% / 1352 / 14.0 | 94.3% / 1352 / 14.0 |
+| 1500 | 94.3% / 1112 / 12.1 | 94.3% / 1114 / 11.9 | 94.3% / 1114 / 11.9 | 94.3% / 1114 / 11.9 | 94.3% / 1114 / 11.9 |
+| 1000 | 92.1% / 866 / 9.6 | 94.3% / 864 / 9.5 | | | |
+| 750 | 91.4% / 676 / 7.7 | 94.3% / 678 / 7.5 | 94.3% / 678 / 7.5 | 94.3% / 678 / 7.5 | 94.3% / 678 / 7.5 |
+| 500 | 87.1% / 462 / 5.4 | 94.3% / 463 / 5.2 | | | |
+| 375 | 81.4% / 342 / 4.2 | 94.3% / 345 / 3.9 | | | |
+| 250 | 77.1% / 227 / 2.9 | 92.1% / 227 / 2.7 | | | |
+
+Observations from the grid: with Jev ordering the gold summary stays inside the selected
+set at 94.3% down to a 375-token budget (345 tokens selected on average against 1390 at
+the default budget), while legacy ordering falls to 81.4% at the same budget. The
+`rerank_min_probability` threshold made no difference at any budget tested, because the
+budget cut already removes the same low-probability tail.
+
+## admission, second run with the subject gate
+
+A per-candidate yes/no question ("is this claim about the actor themselves") now turns a
+`durable` answer into `wrong_subject` when its probability is below `noul_threshold`.
+Jev-only rerun on the same 13 candidates (legacy side unchanged from the first run; the
+harness OpenRouter account had no credit left for a second legacy pass):
+
+| side | reason accuracy | admit/reject accuracy | coverage accuracy | mean ms | mean input tokens |
+|---|---|---|---|---|---|
+| legacy (first run) | 61.5% | 92.3% | 60.0% | 2074 | 3568 |
+| jev, before gate | 61.5% | 76.9% | 80.0% | 264 | 1609 |
+| jev, with gate | 69.2% | 84.6% | 80.0% | 218 | 1736 |
+
+The `third_party` candidate is now rejected as `wrong_subject`. The remaining Jev
+admit/reject misses are `durable_history c1` (a completed marathon in relevant_history,
+answered `completed`) and `agent_persona c2` (a finite honored preference, answered
+`temporary`).
+
 ## Not measured here
 Tag select-instead-of-generate, summary faithfulness, retrieval gate, tag consolidation,
 hint ranking. Production shadow mode has not been enabled anywhere; every deployment stays
