@@ -393,3 +393,87 @@ def judge_safety_critical(text: str, legacy: Callable[[], bool]) -> bool:
     return decide("safety_critical", legacy,
                   lambda c: jev_safety_critical(c, text, threshold=rt.config.noul_threshold),
                   runtime=rt, describe=str)
+
+
+# --- seam S1: retrieval shortlist rerank -------------------------------------
+
+def spearman(order_a: list, order_b: list) -> float:
+    """Spearman rank correlation between two orderings of the same items."""
+    n = len(order_a)
+    if n < 2 or set(order_a) != set(order_b):
+        return 0.0
+    pos_b = {item: i for i, item in enumerate(order_b)}
+    d2 = sum((i - pos_b[item]) ** 2 for i, item in enumerate(order_a))
+    return round(1.0 - (6.0 * d2) / (n * (n * n - 1)), 4)
+
+
+def jev_rerank(
+    client: JevClient, query: str, candidates: list[tuple[str, str]], *, max_state_bytes: int,
+) -> JevOutcome | None:
+    state = {"query": query, "candidates": {key: text for key, text in candidates}}
+    if len(json.dumps(state)) > max_state_bytes:
+        logger.info("JUDGMENT_SKIP seam=rerank reason=state_size candidates=%d", len(candidates))
+        return JevOutcome.fallback("state_size")
+    questions = {
+        key: noul_q(
+            f"Does `candidates.{key}` contain information needed to answer `query`?",
+            true="states facts, preferences, events, or decisions the query asks about",
+            false="same general topic without the asked-for information, or unrelated",
+        )
+        for key, _ in candidates
+    }
+    resp = client.ask(seam="rerank", state=state, questions=questions)
+    if resp is None:
+        return None
+    probs: dict[str, float] = {}
+    for key, _ in candidates:
+        ans = resp.answers.get(key)
+        if ans is None or ans.kind != "noul":
+            return JevOutcome.fallback("bad_answer", response=resp)
+        probs[key] = float(ans.value)
+    return JevOutcome(value=probs, detail={}, response=resp)
+
+
+def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | None = None) -> list:
+    """Reorder the retriever's candidate summaries in shadow/jev mode.
+
+    Stable sort by descending relevance probability; candidates below
+    ``rerank_min_probability`` move to the end. Nothing is dropped. Returns
+    the input list object untouched in legacy mode.
+    """
+    rt = runtime if runtime is not None else current()
+    if not rt.enabled or len(summaries) < 2:
+        return summaries
+    cfg = rt.config
+    keys = [f"c{i}" for i in range(len(summaries))]
+
+    def legacy() -> list:
+        return list(summaries)
+
+    def jev(client: JevClient) -> JevOutcome | None:
+        outcome = jev_rerank(client, query, [(k, s.summary) for k, s in zip(keys, summaries)],
+                             max_state_bytes=cfg.rerank_max_state_bytes)
+        if outcome is None or outcome.fallback_reason:
+            return outcome
+        probs = outcome.value
+        order = sorted(
+            range(len(summaries)),
+            key=lambda i: (0 if probs[keys[i]] >= cfg.rerank_min_probability else 1, -probs[keys[i]], i),
+        )
+        reordered = [summaries[i] for i in order]
+        legacy_refs = [s.ref for s in summaries]
+        jev_refs = [s.ref for s in reordered]
+        detail = {
+            "spearman": spearman(legacy_refs, jev_refs),
+            "top1_legacy": legacy_refs[0],
+            "top1_jev": jev_refs[0],
+            "p_top": round(probs[keys[order[0]]], 3),
+            "n": len(summaries),
+        }
+        return JevOutcome(value=reordered, detail=detail, response=outcome.response)
+
+    return decide(
+        "rerank", legacy, jev, runtime=rt,
+        agree=lambda a, b: a[0].ref == b[0].ref,
+        describe=lambda items: ",".join(s.ref for s in items[:5]),
+    )

@@ -558,6 +558,8 @@ class ContextRetriever:
             idf_overlap = sum(idf_weights.get(t, 1.0) for t in s.tags if t in query_tag_set)
             return (best_rrf, idf_overlap)
         all_summaries.sort(key=_summary_sort_key, reverse=True)
+        from .judgment import rerank_summaries as _rerank_summaries
+        all_summaries = _rerank_summaries(lookup_text, all_summaries)
 
         selected: list[StoredSummary] = []
         selected_refs: set[str] = set()
