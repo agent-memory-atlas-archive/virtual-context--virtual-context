@@ -6,6 +6,7 @@ jev mode, and score the candidate order against the gold answer sessions.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import sqlite3
@@ -177,3 +178,62 @@ def run_rerank(runtime: JudgmentRuntime, *, limit: int | None = None, dataset_pa
         b["jev"] = b["jev_hits"] / b["n"]
     return {"area": "rerank", "n": len(rows), "n_unscored_no_gold_match": sum(1 for r in rows if r["n_gold_segments"] == 0),
             "legacy": _agg("legacy"), "jev": _agg("jev"), "by_type": by_type, "rows": rows}
+
+
+def _set_budget_tokens(engine: VirtualContextEngine, budget_tokens: int) -> None:
+    """Set the retriever's absolute summary budget (tag_context_max_tokens x max_budget_fraction)."""
+    from virtual_context.types import StrategyConfig
+    cfg = engine._retriever.config
+    strategy = cfg.strategy_configs.get("default") or StrategyConfig()
+    cfg.tag_context_max_tokens = int(round(budget_tokens / strategy.max_budget_fraction))
+
+
+def run_rerank_grid(runtime: JudgmentRuntime, *, budgets: tuple[int, ...], min_probs: tuple[float, ...],
+                    limit: int | None = None, dataset_path: Path | None = None, cache_root: Path | None = None) -> dict:
+    """Legacy vs jev at several budgets and drop thresholds; one engine per question."""
+    cache_root = cache_root or DEFAULT_CACHE_DIR
+    questions = _questions(dataset_path, cache_root)
+    if limit is not None:
+        questions = questions[:limit]
+    from virtual_context.core.embedding_provider import EmbeddingProvider
+    embedder = EmbeddingProvider(model_name="all-MiniLM-L6-v2")
+    arms = [("legacy", _legacy_runtime())] + [
+        (f"jev@{p}", JudgmentRuntime(JudgmentMode.JEV, runtime.client,
+                                     dataclasses.replace(runtime.config, rerank_min_probability=p)))
+        for p in min_probs
+    ]
+    cells: dict[str, dict[str, list]] = {str(b): {arm: [] for arm, _ in arms} for b in budgets}
+    n_scored = 0
+    for q in questions:
+        qid = q["question_id"]
+        with tempfile.TemporaryDirectory(prefix=f"jev-grid-{qid}-") as tmp:
+            tmpdir = Path(tmp)
+            _copy_store(cache_root / qid / "store.db", tmpdir / "store.db")
+            gold = gold_segment_refs(tmpdir / "store.db", _gold_sessions(q))
+            if not gold:
+                continue
+            n_scored += 1
+            engine = _build_engine(tmpdir, qid, embedder)
+            for b in budgets:
+                _set_budget_tokens(engine, b)
+                for arm, rt in arms:
+                    order, tokens, selected = _retrieve(engine, q["question"], rt)
+                    cells[str(b)][arm].append({
+                        "gold_in_selected": any(r in gold for r in selected),
+                        "selected_tokens": tokens,
+                        "n_selected": len(selected),
+                        "first_gold_rank": first_gold_rank(order, gold),
+                    })
+    grid: dict[str, dict[str, dict]] = {}
+    for b, arms_d in cells.items():
+        grid[b] = {}
+        for arm, rows in arms_d.items():
+            if not rows:
+                continue
+            grid[b][arm] = {
+                "gold_in_selected_rate": sum(1 for r in rows if r["gold_in_selected"]) / len(rows),
+                "mean_selected_tokens": mean(r["selected_tokens"] for r in rows),
+                "mean_n_selected": mean(r["n_selected"] for r in rows),
+            }
+    return {"area": "rerank_grid", "n": n_scored, "budgets": list(budgets), "min_probs": list(min_probs),
+            "arms": [a for a, _ in arms], "grid": grid}

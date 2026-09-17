@@ -32,6 +32,15 @@ def table(result: dict) -> str:
         for qt, row in sorted(result["by_type"].items()):
             lines.append(f"| {qt} | {row['n']} | {_pct(row['legacy'])} | {_pct(row['jev'])} |")
         return "\n".join(lines)
+    if area == "rerank_grid":
+        arms = result["arms"]
+        lines = [f"## rerank grid (n={result['n']}; cell = gold-in-selected % / mean selected tokens / mean summaries selected)", "",
+                 "| budget tokens | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
+        for b in result["budgets"]:
+            row = result["grid"][str(b)]
+            cells = [f"{_pct(row[a]['gold_in_selected_rate'])} / {row[a]['mean_selected_tokens']:.0f} / {row[a]['mean_n_selected']:.1f}" if a in row else "-" for a in arms]
+            lines.append(f"| {b} | " + " | ".join(cells) + " |")
+        return "\n".join(lines)
     if area == "admission":
         lines = [f"## admission (sets={result['n_sets']}, candidates={result['n_candidates']})", "",
                  "| side | reason accuracy | admit/reject accuracy | coverage accuracy | mean ms | mean input tokens |", "|---|---|---|---|---|---|"]
