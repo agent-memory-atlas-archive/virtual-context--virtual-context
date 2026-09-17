@@ -151,3 +151,29 @@ def test_decide_jev_swallows_exceptions_from_jev_fn(caplog):
     with caplog.at_level(logging.WARNING):
         assert decide("s", lambda: "L", jev, runtime=_rt("jev")) == "L"
     assert any("JUDGMENT_JEV_ERROR seam=s" in r.message for r in caplog.records)
+
+
+def test_per_seam_modes_override_the_global_mode():
+    http = httpx.Client(transport=httpx.MockTransport(_ok_handler))
+    rt = build_runtime(JudgmentConfig(mode="legacy", seams={"admission": "shadow", "rerank": "jev"}),
+                       environ={"TYPESAFE_API_KEY": "k"}, http_client=http)
+    assert rt.client is not None and rt.enabled
+    assert rt.mode is JudgmentMode.LEGACY
+    assert rt.mode_for("admission") is JudgmentMode.SHADOW
+    assert rt.mode_for("rerank") is JudgmentMode.JEV
+    assert rt.mode_for("query_intent") is JudgmentMode.LEGACY
+    assert rt.enabled_for("query_intent") is False and rt.enabled_for("rerank") is True
+    calls = []
+    def jev(client):
+        calls.append(1)
+        return JevOutcome(value="J", detail={})
+    assert decide("query_intent", lambda: "L", jev, runtime=rt) == "L" and calls == []
+    assert decide("rerank", lambda: "L", jev, runtime=rt) == "J"
+    assert decide("admission", lambda: "L", jev, runtime=rt) == "L" and len(calls) == 2
+
+
+def test_env_override_changes_global_mode_only():
+    http = httpx.Client(transport=httpx.MockTransport(_ok_handler))
+    rt = build_runtime(JudgmentConfig(mode="jev", seams={"admission": "legacy"}),
+                       environ={"TYPESAFE_API_KEY": "k", "VC_JUDGMENT_MODE": "shadow"}, http_client=http)
+    assert rt.mode is JudgmentMode.SHADOW and rt.mode_for("admission") is JudgmentMode.LEGACY

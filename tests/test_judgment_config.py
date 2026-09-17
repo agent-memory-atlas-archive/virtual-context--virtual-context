@@ -46,3 +46,12 @@ def test_judgment_missing_block_uses_defaults():
 def test_judgment_invalid_mode_raises(bad):
     with pytest.raises(ValueError, match="judgment.mode"):
         _build_config({"judgment": {"mode": bad}}, validate=False)
+
+
+def test_judgment_seams_parse_and_validate():
+    cfg = _build_config({"judgment": {"mode": "legacy", "seams": {"admission": "shadow", "rerank": "jev"}}}, validate=False)
+    assert cfg.judgment.seams == {"admission": "shadow", "rerank": "jev"}
+    with pytest.raises(ValueError, match="unknown seam"):
+        _build_config({"judgment": {"seams": {"nope": "shadow"}}}, validate=False)
+    with pytest.raises(ValueError, match="judgment.seams.admission"):
+        _build_config({"judgment": {"seams": {"admission": "always"}}}, validate=False)

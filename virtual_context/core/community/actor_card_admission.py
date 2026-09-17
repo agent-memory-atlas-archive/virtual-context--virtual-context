@@ -171,7 +171,7 @@ class ActorCardAdmissionService:
         request_kwargs = {k: request[k] for k in ("system", "user", "max_tokens")}
         from ..judgment import JudgmentMode, current as _judgment_current, judge_admission, log_admission_shadow
         jev_judgment = judge_admission(request["payload"], list(eligible))
-        if jev_judgment is not None and _judgment_current().mode is JudgmentMode.JEV:
+        if jev_judgment is not None and _judgment_current().mode_for("admission") is JudgmentMode.JEV:
             response_text, _usage, admission_source = jev_judgment.text, {}, "jev"
         else:
             complete_with_source = getattr(provider, "complete_with_source", None)
@@ -192,7 +192,7 @@ class ActorCardAdmissionService:
             independently_substantive, decisions = _parse_admission(
                 response_text,
             )
-            if jev_judgment is not None and _judgment_current().mode is JudgmentMode.SHADOW:
+            if jev_judgment is not None and _judgment_current().mode_for("admission") is JudgmentMode.SHADOW:
                 log_admission_shadow(jev_judgment, independently_substantive, decisions)
         except _ActorCardAdmissionError as primary_exc:
             complete_fallback = getattr(provider, "complete_fallback", None)

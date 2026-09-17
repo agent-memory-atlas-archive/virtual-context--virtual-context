@@ -3226,6 +3226,9 @@ class CurationConfig:
 
 
 JUDGMENT_MODES: tuple[str, ...] = ("legacy", "shadow", "jev")
+JUDGMENT_SEAMS: tuple[str, ...] = (
+    "rerank", "query_intent", "temporal_intent", "safety_critical", "admission",
+)
 
 
 @dataclass
@@ -3235,7 +3238,9 @@ class JudgmentConfig:
     ``mode``: ``legacy`` (default, Jev never called), ``shadow`` (legacy answer
     used, Jev answer logged for comparison), ``jev`` (Jev answer used, legacy
     fallback on any failure). ``VC_JUDGMENT_MODE`` overrides ``mode`` at engine
-    construction. Not tenant-settable in cloud.
+    construction. ``seams`` overrides the mode per seam (keys from
+    ``JUDGMENT_SEAMS``); the env override applies to the global mode only.
+    Not tenant-settable in cloud.
     """
     mode: str = "legacy"
     model: str = "jev-latest"
@@ -3245,6 +3250,7 @@ class JudgmentConfig:
     noul_threshold: float = 0.5
     rerank_min_probability: float = 0.0
     rerank_max_state_bytes: int = 200_000
+    seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 
 @dataclass

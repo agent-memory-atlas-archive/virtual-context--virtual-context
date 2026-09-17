@@ -38,7 +38,7 @@ from .types import (
     ToolOutputRule,
     VirtualContextConfig,
 )
-from .types import JUDGMENT_MODES, JudgmentConfig
+from .types import JUDGMENT_MODES, JUDGMENT_SEAMS, JudgmentConfig
 
 CONFIG_FILENAMES = [
     "virtual-context.yaml",
@@ -152,8 +152,23 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         raise ValueError(
             f"judgment.mode must be one of {', '.join(JUDGMENT_MODES)}; got {mode!r}"
         )
+    seams_raw = raw.get("seams", {}) or {}
+    if not isinstance(seams_raw, dict):
+        raise ValueError("judgment.seams must be a mapping of seam name to mode")
+    seams: dict[str, str] = {}
+    for seam, seam_mode in seams_raw.items():
+        if seam not in JUDGMENT_SEAMS:
+            raise ValueError(
+                f"judgment.seams has unknown seam {seam!r}; known: {', '.join(JUDGMENT_SEAMS)}"
+            )
+        if not isinstance(seam_mode, str) or seam_mode not in JUDGMENT_MODES:
+            raise ValueError(
+                f"judgment.seams.{seam} must be one of {', '.join(JUDGMENT_MODES)}; got {seam_mode!r}"
+            )
+        seams[seam] = seam_mode
     return JudgmentConfig(
         mode=mode,
+        seams=seams,
         model=str(raw.get("model", defaults.model)),
         api_key_env=str(raw.get("api_key_env", defaults.api_key_env)),
         base_url=str(raw.get("base_url", defaults.base_url)),

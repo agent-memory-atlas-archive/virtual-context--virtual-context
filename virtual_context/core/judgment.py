@@ -26,7 +26,7 @@ from typing import Any, TypeVar
 
 import httpx
 
-from ..types import JUDGMENT_MODES, JudgmentConfig
+from ..types import JUDGMENT_MODES, JUDGMENT_SEAMS, JudgmentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -196,10 +196,22 @@ class JudgmentRuntime:
     mode: JudgmentMode
     client: JevClient | None
     config: JudgmentConfig
+    seam_modes: dict[str, JudgmentMode] = field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
-        return self.mode is not JudgmentMode.LEGACY and self.client is not None
+        """True when any seam can reach Jev."""
+        if self.client is None:
+            return False
+        return self.mode is not JudgmentMode.LEGACY or any(
+            m is not JudgmentMode.LEGACY for m in self.seam_modes.values()
+        )
+
+    def mode_for(self, seam: str) -> JudgmentMode:
+        return self.seam_modes.get(seam, self.mode)
+
+    def enabled_for(self, seam: str) -> bool:
+        return self.client is not None and self.mode_for(seam) is not JudgmentMode.LEGACY
 
 
 def build_runtime(
@@ -209,10 +221,15 @@ def build_runtime(
     http_client: httpx.Client | None = None,
 ) -> JudgmentRuntime:
     mode = JudgmentMode.resolve(config.mode, environ=environ)
+    seam_modes: dict[str, JudgmentMode] = {}
+    for seam, raw in (config.seams or {}).items():
+        if seam not in JUDGMENT_SEAMS:
+            raise ValueError(f"unknown judgment seam {seam!r}; known: {', '.join(JUDGMENT_SEAMS)}")
+        seam_modes[seam] = JudgmentMode.parse(raw)
     client = None
-    if mode is not JudgmentMode.LEGACY:
+    if mode is not JudgmentMode.LEGACY or any(m is not JudgmentMode.LEGACY for m in seam_modes.values()):
         client = JevClient(config, http_client=http_client, environ=environ)
-    return JudgmentRuntime(mode=mode, client=client, config=config)
+    return JudgmentRuntime(mode=mode, client=client, config=config, seam_modes=seam_modes)
 
 
 _LEGACY_RUNTIME = JudgmentRuntime(JudgmentMode.LEGACY, None, JudgmentConfig())
@@ -224,7 +241,8 @@ def install(runtime: JudgmentRuntime) -> None:
     global _installed
     with _lock:
         _installed = runtime
-    logger.info("JUDGMENT_RUNTIME mode=%s model=%s", runtime.mode.value, runtime.config.model)
+    logger.info("JUDGMENT_RUNTIME mode=%s model=%s seams=%s", runtime.mode.value, runtime.config.model,
+                ",".join(f"{k}:{v.value}" for k, v in sorted(runtime.seam_modes.items())) or "-")
 
 
 def current() -> JudgmentRuntime:
@@ -270,10 +288,10 @@ def decide(
     describe: Callable[[T], str] = repr,
 ) -> T:
     rt = runtime if runtime is not None else current()
-    if not rt.enabled:
+    if not rt.enabled_for(seam):
         return legacy()
     assert rt.client is not None
-    if rt.mode is JudgmentMode.SHADOW:
+    if rt.mode_for(seam) is JudgmentMode.SHADOW:
         legacy_value = legacy()
         outcome = _run_jev(seam, jev, rt.client)
         if outcome is None or outcome.fallback_reason:
@@ -442,7 +460,7 @@ def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | 
     the input list object untouched in legacy mode.
     """
     rt = runtime if runtime is not None else current()
-    if not rt.enabled or len(summaries) < 2:
+    if not rt.enabled_for("rerank") or len(summaries) < 2:
         return summaries
     cfg = rt.config
     keys = [f"c{i}" for i in range(len(summaries))]
@@ -553,7 +571,7 @@ def jev_admission(client: JevClient, payload: dict, eligible: list[str]) -> JevO
 def judge_admission(payload: dict, eligible: list[str]) -> AdmissionJudgment | None:
     """Return the Jev admission judgment in shadow or jev mode; None in legacy or on failure."""
     rt = current()
-    if not rt.enabled:
+    if not rt.enabled_for("admission"):
         return None
     assert rt.client is not None
     outcome = _run_jev("admission", lambda c: jev_admission(c, payload, eligible), rt.client)

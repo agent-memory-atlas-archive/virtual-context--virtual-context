@@ -408,7 +408,12 @@ judgment:
   noul_threshold: 0.5             # yes/no cut for temporal and safety judgments
   rerank_min_probability: 0.0     # candidates below this move to the end of the shortlist
   rerank_max_state_bytes: 200000  # skip the rerank call when the state would exceed this
+  seams:                          # optional per-seam override of mode
+    admission: shadow             # names: rerank, query_intent, temporal_intent, safety_critical, admission
 ```
+
+`seams` lets each decision run in its own mode; a seam not listed follows `mode`. The
+`VC_JUDGMENT_MODE` override changes `mode` only.
 
 ## Presets
 
