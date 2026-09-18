@@ -34,7 +34,7 @@ from .structured_summary import (
     event_time_is_supported,
     infer_modality,
     infer_temporal_status,
-    is_safety_critical_personal_evidence,
+    is_safety_critical_personal_evidence_legacy,
     statuses_conflict,
     structured_claim_fingerprint,
     structured_source_digest,
@@ -1710,7 +1710,6 @@ def _validated_structured_claims(
     conversation_id: str,
     speaker_context: "SpeakerRetrievalContext",
     colliding_labels: frozenset[str],
-    judgment_runtime: object | None = None,
 ) -> tuple[ValidatedSummaryClaim, ...]:
     structured = _structured_summary_for(item)
     if (
@@ -1777,7 +1776,7 @@ def _validated_structured_claims(
                 admitted_actor_ids.add(actor_id)
             if len(requester_text) <= STRUCTURED_SUMMARY_MAX_EXCERPT_CHARS:
                 required_source_ids.add(canonical_id)
-            elif is_safety_critical_personal_evidence(requester_text, runtime=judgment_runtime):
+            elif is_safety_critical_personal_evidence_legacy(requester_text):
                 return ()
     elif is_tag_summary:
         # The selected-claim digest proves only the compact layer-two
@@ -1823,7 +1822,7 @@ def _validated_structured_claims(
             ).strip()
             if (
                 requester_text
-                and is_safety_critical_personal_evidence(requester_text, runtime=judgment_runtime)
+                and is_safety_critical_personal_evidence_legacy(requester_text)
             ):
                 required_source_ids.add(canonical_id)
     if structured_claims_contain_internal_identity(
@@ -1889,7 +1888,7 @@ def _validated_structured_claims(
         critical = sorted(
             (
                 entry for entry in validated
-                if is_safety_critical_personal_evidence(entry[1].text, runtime=judgment_runtime)
+                if is_safety_critical_personal_evidence_legacy(entry[1].text)
             ),
             key=lambda entry: segment_source_order[entry[0]],
             reverse=True,
@@ -2238,6 +2237,12 @@ def render_summary_items_for_model(
 ) -> list[str]:
     """Render mixed SUMMARY/SEGMENTS/FULL requests with one row hydration.
 
+    ``judgment_runtime`` is accepted for call-site uniformity but deliberately
+    not applied to claim validation: rendering runs on the prepare path for
+    every request, so it must stay deterministic and free of network calls.
+    The safety-critical judgment seam applies where claims are built, at
+    compaction, not where stored claims are re-validated for display.
+
     Version-one segment claims are validated independently. Version-one tag
     selections validate atomically so a failed newer correction cannot expose
     only an older surviving state. If validation fails (or the item is legacy),
@@ -2340,7 +2345,6 @@ def render_summary_items_for_model(
             conversation_id=conversation_id,
             speaker_context=speaker_context,
             colliding_labels=colliding_labels,
-            judgment_runtime=judgment_runtime,
         )
         candidate = render_structured_claims_for_model(claims, depth=depth)
         if candidate != SUMMARY_ATTRIBUTION_QUARANTINE:

@@ -17,7 +17,6 @@ SEAM_CALLS = (
     "is_safety_critical_personal_evidence",
     "_build_structured_summary",
     "build_deterministic_structured_summary",
-    "_validated_structured_claims",
     "_contain_summary_results_for_speaker_context",
     "_find_quote",
     "_search_summaries",
