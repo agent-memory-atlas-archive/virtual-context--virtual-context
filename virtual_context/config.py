@@ -180,6 +180,16 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         rerank_max_state_bytes=int(
             raw.get("rerank_max_state_bytes", defaults.rerank_max_state_bytes)
         ),
+        admission_max_state_bytes=int(
+            raw.get("admission_max_state_bytes", defaults.admission_max_state_bytes)
+        ),
+        tag_reuse_candidates=int(raw.get("tag_reuse_candidates", defaults.tag_reuse_candidates)),
+        curation_min_probability=float(
+            raw.get("curation_min_probability", defaults.curation_min_probability)
+        ),
+        grounding_max_state_bytes=int(
+            raw.get("grounding_max_state_bytes", defaults.grounding_max_state_bytes)
+        ),
     )
 
 

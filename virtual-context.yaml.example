@@ -68,11 +68,17 @@ judgment:
   model: jev-latest               # TypeSafe System One model
   api_key_env: TYPESAFE_API_KEY   # env var holding the TypeSafe API key
   timeout_s: 3.0                  # per-call timeout; any failure falls back to legacy
-  noul_threshold: 0.5             # yes/no cut for temporal and safety judgments
+  noul_threshold: 0.5             # yes/no cut for the noul (probability) judgments
   rerank_min_probability: 0.0     # candidates below this move to the end of the shortlist
   rerank_max_state_bytes: 200000  # skip the rerank call when the state would exceed this
+  admission_max_state_bytes: 120000  # trim admission evidence, then uncited turns, to fit
+  tag_reuse_candidates: 12        # existing tags offered per freshly minted tag
+  curation_min_probability: 0.3   # facts at or above this stay in the curated block
+  grounding_max_state_bytes: 120000  # skip the summary grounding call above this size
   # seams:                        # per-seam override of mode; names: rerank, query_intent,
-  #   admission: shadow            #   temporal_intent, safety_critical, admission
+  #   admission: shadow            #   temporal_intent, safety_critical, admission, tag_reuse,
+  #   tag_reuse: shadow            #   supersession, tag_consolidation, fact_curation,
+  #                                #   tag_split, summary_grounding
 
 tag_generator:
   type: "llm"

@@ -392,9 +392,15 @@ tag_rules:
 
 ### judgment
 
-Routes five internal decisions (retrieval shortlist order, query intent, inbound
-temporal intent, safety-critical evidence, actor-card admission) through a
-typed-judgment model when mode is `shadow` or `jev`. `shadow` keeps legacy
+Routes eleven internal decisions through a typed-judgment model when mode is
+`shadow` or `jev`: retrieval shortlist order (`rerank`), query intent
+(`query_intent`), inbound temporal intent (`temporal_intent`), safety-critical
+evidence (`safety_critical`), actor-card admission (`admission`), whether a freshly
+minted tag duplicates an existing one (`tag_reuse`), which stored facts a new fact
+supersedes, duplicates, or contradicts (`supersession`), which tag names cover the
+same topic (`tag_consolidation`), which facts stay in the curated facts block
+(`fact_curation`), whether a broad tag spans several topics (`tag_split`), and
+whether a segment summary is grounded in its source (`summary_grounding`). `shadow` keeps legacy
 behavior and logs `JUDGMENT_SHADOW` lines for comparison. `jev` uses the model's
 answer and falls back to legacy on any failure (`JUDGMENT_FALLBACK`). The
 default `legacy` never calls the model.
@@ -405,15 +411,32 @@ judgment:
   model: jev-latest               # TypeSafe System One model
   api_key_env: TYPESAFE_API_KEY   # env var holding the TypeSafe API key
   timeout_s: 3.0                  # per-call timeout; any failure falls back to legacy
-  noul_threshold: 0.5             # yes/no cut for temporal and safety judgments
+  noul_threshold: 0.5             # yes/no cut for the noul (probability) judgments
   rerank_min_probability: 0.0     # candidates below this move to the end of the shortlist
   rerank_max_state_bytes: 200000  # skip the rerank call when the state would exceed this
+  admission_max_state_bytes: 120000  # trim evidence segments, then uncited turns, to fit
+  tag_reuse_candidates: 12        # existing tags offered per freshly minted tag
+  curation_min_probability: 0.3   # facts at or above this probability stay in the block
+  grounding_max_state_bytes: 120000  # skip the grounding call above this state size
   seams:                          # optional per-seam override of mode
-    admission: shadow             # names: rerank, query_intent, temporal_intent, safety_critical, admission
+    admission: shadow
+    tag_reuse: shadow
 ```
 
-`seams` lets each decision run in its own mode; a seam not listed follows `mode`. The
-`VC_JUDGMENT_MODE` override changes `mode` only.
+`seams` lets each decision run in its own mode; a seam not listed follows `mode`. Seam
+names: `rerank`, `query_intent`, `temporal_intent`, `safety_critical`, `admission`,
+`tag_reuse`, `supersession`, `tag_consolidation`, `fact_curation`, `tag_split`,
+`summary_grounding`. The `VC_JUDGMENT_MODE` override changes `mode` only.
+
+In `jev` mode the seams change behavior as follows. `tag_reuse` replaces a minted tag
+with the existing tag the model picks. `supersession` decides the superseded set (and
+the fact links) without the comparison model. `tag_consolidation` builds groups from
+pairwise same-topic answers over lexically or semantically close tag names.
+`fact_curation` keeps facts at or above `curation_min_probability`. `tag_split` skips
+the split model when the tag holds one topic. `summary_grounding` adds the reject reason
+`jev_ungrounded` to the segment-summary gate, which triggers the existing retry. An
+admission payload above `admission_max_state_bytes` is trimmed (`JUDGMENT_TRIM`) or,
+when the cited material alone does not fit, skipped (`JUDGMENT_SKIP`).
 
 Each engine owns its judgment runtime, so engines built with different configs in one
 process never share a mode.
