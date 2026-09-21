@@ -5,6 +5,25 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-078 — Store pools pinned Postgres connections until the server ran out of slots
+
+- **Symptom**: After a container recreate, `PostgresStore.__init__` failed with
+  `psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec` while the server
+  logged `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
+  attribute`; prepare returned 500 and the sweeper looped on `ensure_loaded_none`.
+  `pg_stat_activity` held 197 of 200 slots, 196 idle, all from the app user.
+- **Root cause**: every store pool was built with `min_size=1, max_idle=300`, so each engine
+  pinned at least one connection for its lifetime. A multi-worker deployment caches one
+  engine per conversation per worker, so the backlog sweeper walking a dozen large
+  conversations on eight workers right after a recreate opened more pools than the server
+  had slots. A store whose bootstrap then failed left its pool alive and reconnecting in the
+  background.
+- **Fix**: pools open connections on demand (`min_size=0`) and release idle ones after 60
+  seconds; a failed schema bootstrap closes the pool before the error propagates.
+- **Tests**:
+  - `test_postgres_store.py::test_postgres_store_uses_bounded_connection_pool`
+  - `test_postgres_store.py::test_postgres_store_closes_pool_when_schema_bootstrap_fails`
+
 ### BUG-077 — Reply-aware participant continuity
 
 - `test_reply_participant_continuity.py::test_third_party_reply_serves_history_without_borrowing_preferences` — current requester keeps their card while the referenced participant contributes attributed history only.
@@ -665,6 +684,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_postgres_store.py` | BUG-078 |
 | `test_tui.py` | BUG-002 |
 | `test_compactor.py` | BUG-003, BUG-004 |
 | `test_recall_all.py` | (replaces BUG-007 broad detection) |

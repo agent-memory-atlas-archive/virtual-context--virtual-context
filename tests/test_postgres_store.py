@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 # Mirrored from the assertions in ``_assert_canonical_message_source_schema``.
 # Stated once here so a double that drifts from the relation the store demands
 # fails loudly on the shape rather than silently on a None row.
@@ -245,6 +247,7 @@ class _FakePool:
         self.conn.close()
 
 
+@pytest.mark.regression("BUG-078")
 def test_postgres_store_uses_bounded_connection_pool(monkeypatch):
     from virtual_context.storage import postgres as pg
 
@@ -270,6 +273,7 @@ def test_postgres_store_uses_bounded_connection_pool(monkeypatch):
     assert pool.conn.closed
 
 
+@pytest.mark.regression("BUG-078")
 def test_postgres_store_closes_pool_when_schema_bootstrap_fails(monkeypatch):
     """A store whose bootstrap raises must not leave a live pool behind.
 
