@@ -1322,17 +1322,29 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         # weaker mode. Per fencing plan §9.0.
         self._compaction_fence_mode = _CFM.resolve(compaction_fence_mode)
         self.dsn = dsn
+        # Every engine owns a store, and a multi-worker deployment caches one
+        # engine per conversation per worker, so the pool must hold nothing
+        # while idle: min_size 0 opens connections on demand and max_idle
+        # returns them a minute after the last use. A pinned connection per
+        # pool multiplied across workers and cached conversations exhausted
+        # the server's connection slots.
         self.pool = ConnectionPool(
             self.dsn,
-            min_size=1,
+            min_size=0,
             max_size=8,
             timeout=30.0,
-            max_idle=300.0,
+            max_idle=60.0,
             kwargs={"row_factory": dict_row, "autocommit": True},
         )
         self.search_config = None  # set by engine after construction
         if initialize_schema:
-            self._ensure_schema()
+            try:
+                self._ensure_schema()
+            except BaseException:
+                # An orphaned pool keeps reconnecting in the background and
+                # holds server slots no store will ever use.
+                self.close()
+                raise
         else:
             # Administrative planning opens an already upgraded schema and
             # must not run unrelated startup migrations on source data.

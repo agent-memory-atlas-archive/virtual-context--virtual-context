@@ -256,16 +256,46 @@ def test_postgres_store_uses_bounded_connection_pool(monkeypatch):
 
     assert pool.conninfo == "postgresql://example"
     assert pool.kwargs == {
-        "min_size": 1,
+        "min_size": 0,
         "max_size": 8,
         "timeout": 30.0,
-        "max_idle": 300.0,
+        "max_idle": 60.0,
         "kwargs": {"row_factory": pg.dict_row, "autocommit": True},
     }
     assert pool.checkouts > 0
 
     store.close()
 
+    assert pool.closed
+    assert pool.conn.closed
+
+
+def test_postgres_store_closes_pool_when_schema_bootstrap_fails(monkeypatch):
+    """A store whose bootstrap raises must not leave a live pool behind.
+
+    An orphaned pool keeps reconnecting in the background and holds server
+    connection slots that no store will ever use, so a transient exhaustion
+    turns into a permanent one as failed constructions pile up.
+    """
+    import pytest
+
+    from virtual_context.storage import postgres as pg
+
+    _FakePool.instances.clear()
+    monkeypatch.setattr(pg, "ConnectionPool", _FakePool)
+
+    survivors = []  # keep the half-built store referenced so __del__ cannot mask a leak
+
+    def _boom(self):
+        survivors.append(self)
+        raise TimeoutError("couldn't get a connection")
+
+    monkeypatch.setattr(pg.PostgresStore, "_ensure_schema", _boom)
+
+    with pytest.raises(TimeoutError):
+        pg.PostgresStore("postgresql://example")
+
+    pool = _FakePool.instances[0]
     assert pool.closed
     assert pool.conn.closed
 
