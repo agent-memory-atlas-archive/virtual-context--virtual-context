@@ -121,6 +121,7 @@ def consolidate_tags(
     batch_size: int = 500,
     judgment_runtime=None,
     embed_fn=None,
+    max_pairs: int = 200,
 ) -> ConsolidationResult:
     """Run tag consolidation on *store*.
 
@@ -138,13 +139,17 @@ def consolidate_tags(
         batch_size: Max tags per LLM call (for very large stores).
         judgment_runtime: Engine judgment runtime for the tag_consolidation seam.
         embed_fn: Optional tag embedding function used to propose candidate pairs.
+        max_pairs: Cap on candidate pairs put to the judgment seam.
 
     Returns:
         ConsolidationResult with groups found and counts of writes.
     """
     # Layer-2 summaries and orphan segment snippets have no audience-bound
     # speaker proof at this stateless model boundary. Use names only.
-    all_tags = store.get_all_tags()
+    # Reads are scoped to the store's conversation: on a shared backend an
+    # unscoped read would mix every conversation's vocabulary into one job.
+    conversation_id = _store_conversation_id(store)
+    all_tags = store.get_all_tags(conversation_id=conversation_id or None)
     tag_names = [ts.tag for ts in all_tags]
 
     if not tag_names:
@@ -174,6 +179,7 @@ def consolidate_tags(
         runtime=judgment_runtime,
         canonical_rank={ts.tag: int(getattr(ts, "usage_count", 0) or 0) for ts in all_tags},
         embed_fn=embed_fn,
+        max_pairs=max_pairs,
     )
     all_groups = [
         ConsolidationGroup(canonical=g["canonical"], aliases=list(g["aliases"]), reason=g.get("reason", ""))
@@ -208,7 +214,7 @@ def consolidate_tags(
     logger.info("Wrote %d new aliases.", result.aliases_written)
 
     # Backfill segment_tags — add canonical tag to segments that have alias tags
-    result.segment_tags_added = _backfill_segment_tags(store, all_groups)
+    result.segment_tags_added = _backfill_segment_tags(store, all_groups, conversation_id=conversation_id)
     logger.info("Backfilled %d segment_tags entries.", result.segment_tags_added)
 
     return result
@@ -289,6 +295,7 @@ def _merge_transitive_groups(
 def _backfill_segment_tags(
     store: ContextStore,
     groups: list[ConsolidationGroup],
+    conversation_id: str = "",
 ) -> int:
     """For each group, add the canonical tag to segments that only have aliases.
 
@@ -304,6 +311,7 @@ def _backfill_segment_tags(
             tags=group.aliases,
             min_overlap=1,
             limit=1000,
+            conversation_id=conversation_id or None,
         )
 
         # Find segments that already have the canonical tag
@@ -311,6 +319,7 @@ def _backfill_segment_tags(
             tags=[group.canonical],
             min_overlap=1,
             limit=1000,
+            conversation_id=conversation_id or None,
         )
         canonical_refs = {s.ref for s in canonical_segments}
 

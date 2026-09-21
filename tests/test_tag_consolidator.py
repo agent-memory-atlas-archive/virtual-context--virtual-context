@@ -50,7 +50,7 @@ def _make_store(
     _segments_by_tag = segments_by_tag or {}
     _segments = segments or {}
 
-    def _get_summaries_by_tags(tags, min_overlap=1, limit=1000):
+    def _get_summaries_by_tags(tags, min_overlap=1, limit=1000, conversation_id=None):
         result = []
         seen = set()
         for t in tags:

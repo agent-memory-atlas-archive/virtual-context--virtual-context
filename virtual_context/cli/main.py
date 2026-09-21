@@ -1997,6 +1997,100 @@ def cmd_admin_backfill_reply_roles(args):
     ))
 
 
+def _consolidation_judgment_runtime(args):
+    """Judgment runtime for the consolidate-tags command: jev on the seam when --jev is set."""
+    from virtual_context.core.judgment import build_runtime
+    from virtual_context.types import JudgmentConfig
+    if not getattr(args, "jev", False):
+        return None
+    return build_runtime(JudgmentConfig(
+        mode="legacy",
+        seams={"tag_consolidation": "jev"},
+        noul_threshold=float(getattr(args, "threshold", 0.5) or 0.5),
+        timeout_s=30.0,
+    ))
+
+
+def _sidecar_embed_fn(url: str):
+    """Embed through an embedding sidecar (``POST /embed {"texts"} -> {"vectors"}``)."""
+    import urllib.request
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), 256):
+            batch = texts[start:start + 256]
+            req = urllib.request.Request(
+                url, data=json.dumps({"texts": batch}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                vectors.extend(json.load(resp)["vectors"])
+        return vectors
+
+    return embed
+
+
+def cmd_admin_consolidate_tags(args):
+    """Group near-duplicate tags of one conversation into alias groups. Dry run by default."""
+    from virtual_context.core.tag_consolidator import consolidate_tags
+    from virtual_context.engine import VirtualContextEngine
+
+    conversation_id = (getattr(args, "conversation_id", "") or "").strip()
+    tenant_id = (getattr(args, "tenant_id", "") or "").strip()
+    if not conversation_id:
+        print(json.dumps({"status": "error", "stage": "args", "error": "<conversation_id> is required"}))
+        sys.exit(2)
+    try:
+        config = load_config(args.config)
+        config.conversation_id = conversation_id
+        if tenant_id:
+            config.tenant_id = tenant_id
+        _apply_storage_overrides(config, args)
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"status": "error", "stage": "load_config", "error": repr(exc)}))
+        sys.exit(1)
+
+    class _NoopEmbeddingProvider:
+        @staticmethod
+        def get_embed_fn():
+            return None
+
+    config.retriever.inbound_tagger_type = "disabled"
+    try:
+        engine = VirtualContextEngine(config=config, embedding_provider=_NoopEmbeddingProvider())
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"status": "error", "stage": "engine_construct", "error": repr(exc)}))
+        sys.exit(1)
+    dry_run = not bool(getattr(args, "apply", False))
+    embed_url = (getattr(args, "embed_url", "") or "").strip()
+    try:
+        result = consolidate_tags(
+            engine._store,
+            engine._llm_provider,
+            dry_run=dry_run,
+            judgment_runtime=_consolidation_judgment_runtime(args),
+            embed_fn=_sidecar_embed_fn(embed_url) if embed_url else None,
+            max_pairs=int(getattr(args, "max_pairs", 200) or 200),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"status": "error", "stage": "consolidate", "error": repr(exc)}))
+        sys.exit(1)
+    finally:
+        try:
+            engine.close()
+        except Exception:  # noqa: BLE001
+            pass
+    print(json.dumps({
+        "status": "ok",
+        "conversation_id": conversation_id,
+        "dry_run": dry_run,
+        "groups": [{"canonical": g.canonical, "aliases": list(g.aliases), "reason": g.reason} for g in result.groups],
+        "group_count": len(result.groups),
+        "aliases_written": result.aliases_written,
+        "segment_tags_added": result.segment_tags_added,
+    }))
+
+
 def cmd_admin_backfill_assistant_audience(args):
     # Dry-run by default: the shared shell reads ``dry_run``, and this
     # surface inverts ``--apply`` into it rather than exposing ``--dry-run``.
@@ -2802,6 +2896,22 @@ def main():
     migrate_vector_parser.add_argument(
         "--apply", action="store_true", help="Install and backfill caches; default only checks",
     )
+
+    consolidate_parser = admin_sub.add_parser(
+        "consolidate-tags",
+        help="Group near-duplicate tags of one conversation into aliases (dry run by default)",
+    )
+    consolidate_parser.add_argument("conversation_id", help="Conversation id to consolidate")
+    consolidate_parser.add_argument("--tenant-id", default="", help="Tenant id to set on the engine config")
+    consolidate_parser.add_argument("--apply", action="store_true", help="Write aliases and backfill segment tags")
+    consolidate_parser.add_argument("--max-pairs", type=int, default=200, help="Cap on candidate pairs judged")
+    consolidate_parser.add_argument("--embed-url", default="", help="Embedding sidecar URL used to propose pairs")
+    consolidate_parser.add_argument("--jev", action="store_true", help="Judge pairs with the tag_consolidation seam in jev mode")
+    consolidate_parser.add_argument("--threshold", type=float, default=0.5, help="Probability cut for a same-topic pair")
+    consolidate_parser.add_argument("--storage-backend", choices=("sqlite", "postgres", "filesystem"))
+    consolidate_parser.add_argument("--postgres-dsn")
+    consolidate_parser.add_argument("--sqlite-path")
+    consolidate_parser.set_defaults(func=cmd_admin_consolidate_tags)
 
     backfill_ts_parser = admin_sub.add_parser(
         "backfill-tag-summaries",
