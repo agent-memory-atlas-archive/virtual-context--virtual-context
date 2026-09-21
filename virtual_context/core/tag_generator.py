@@ -431,7 +431,13 @@ class LLMTagGenerator:
         return result
 
     def _reuse_candidates(self, proposed: str, pool: list[str], limit: int) -> list[str]:
-        """Existing tags closest to a proposed one: name similarity plus cached embedding cosine."""
+        """Existing tags closest to a proposed one: name similarity plus cached embedding cosine.
+
+        Aliased tags are left out so a reuse decision lands on a canonical tag.
+        """
+        aliases = self._canonicalizer.get_aliases() if self._canonicalizer is not None else {}
+        if aliases:
+            pool = [t for t in pool if t not in aliases]
         extra: dict[str, float] | None = None
         if self._store_tag_embeddings and self._embed_fn_factory is not None:
             try:
@@ -481,6 +487,8 @@ class LLMTagGenerator:
                 self._note_breakdown(breakdown, "tag_reuse", started)
         if not any(mapping.values()):
             return result
+        if self._canonicalizer is not None:
+            mapping = {m: (self._canonicalizer.canonicalize(k) if k else k) for m, k in mapping.items()}
         for minted, kept in mapping.items():
             if kept:
                 self._tag_vocabulary.pop(minted, None)

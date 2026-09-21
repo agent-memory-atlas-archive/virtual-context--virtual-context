@@ -268,6 +268,21 @@ class ContextRetriever:
         )
         return union
 
+    def _load_alias_map(self) -> dict[str, str]:
+        """alias -> canonical for this conversation; empty when the store has none."""
+        getter = getattr(self.store, "get_tag_aliases", None)
+        if not callable(getter):
+            return {}
+        try:
+            try:
+                aliases = getter(conversation_id=self._conversation_id)
+            except TypeError:
+                aliases = getter()
+        except Exception:
+            logger.debug("alias map unavailable", exc_info=True)
+            return {}
+        return {str(a): str(c) for a, c in (aliases or {}).items() if a != c}
+
     def _load_all_tag_summaries(self, token_budget: int) -> tuple[list[StoredSummary], int]:
         """Load all tag summaries within *token_budget*.
 
@@ -539,7 +554,22 @@ class ContextRetriever:
             top_k=strategy.max_results,
         )
         _note("score_candidates", _score_stage)
-        retrieval_scores = scores
+        # Alias groups compete as one topic: fold every aliased tag's score into
+        # its canonical so max_results counts distinct topics, then keep the
+        # alias keys so sections rendered under an alias still find their score.
+        alias_map = self._load_alias_map()
+        if alias_map:
+            folded: dict[str, float] = {}
+            for tag, score in scores.items():
+                canonical = alias_map.get(tag, tag)
+                folded[canonical] = max(folded.get(canonical, float("-inf")), score)
+            scores = folded
+            retrieval_scores = dict(folded)
+            for alias, canonical in alias_map.items():
+                if canonical in folded:
+                    retrieval_scores[alias] = folded[canonical]
+        else:
+            retrieval_scores = scores
 
         # Apply token budget
 
@@ -553,11 +583,15 @@ class ContextRetriever:
         retrieval_metadata["tag_token_budget"] = token_budget
 
         top_tags = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)[:strategy.max_results]
+        retrieval_metadata["top_tags"] = list(top_tags)
 
         # Fetch summaries for all top-scored tags at once, then rank by RRF score
         _summary_fetch_stage = time.monotonic()
+        fetch_tags = list(top_tags)
+        if alias_map:
+            fetch_tags += [alias for alias, canonical in alias_map.items() if canonical in set(top_tags)]
         all_summaries = self.store.get_summaries_by_tags(
-            tags=top_tags, min_overlap=1,
+            tags=fetch_tags, min_overlap=1,
             limit=strategy.max_results * 3,
             conversation_id=self._conversation_id,
         )
