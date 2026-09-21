@@ -100,9 +100,12 @@ def _run_tag_reuse(rows, client, provider, threshold, timing):
         existing = list(r["existing"])
         if tagger is not None:
             result = _timed(lambda: tagger.generate_tags(r["text"], existing_tags=existing), timing.legacy_ms)
+            # The production tagger sees the existing tags in its prompt and may emit
+            # several of them; it is credited when the labeled tag is among its output.
             reused = [t for t in result.tags if t in set(existing)]
-            r["legacy"] = reused[0] if reused else "none"
+            r["legacy"] = r["label"] if r["label"] in result.tags else (reused[0] if reused else "none")
             r["legacy_tags"] = list(result.tags)
+            r["legacy_any_existing"] = bool(reused)
         else:
             r["legacy"] = "none"
         raw = jev_tag_reuse(client, r["text"], [r["proposed"]], {r["proposed"]: existing}, min_confidence=0.0)

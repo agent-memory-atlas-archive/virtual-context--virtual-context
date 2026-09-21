@@ -185,3 +185,58 @@ answered `completed`) and `agent_persona c2` (a finite honored preference, answe
 Tag select-instead-of-generate, summary faithfulness, retrieval gate, tag consolidation,
 hint ranking. Production shadow mode has not been enabled anywhere; every deployment stays
 on `legacy`.
+
+## Second seam set (added 2026-09-20, 8:45 PM ET; result files stamped 2026-09-21T00:45Z to 00:48Z)
+
+Six new areas, each a decision the engine previously delegated to the tagger or summarizer
+model. Legacy arm: the production prompt path against `google/gemini-2.5-flash-lite` through
+OpenRouter, the platform tagger and summarizer model; for grounding the legacy arm is the
+compactor's heuristic gate (degenerate, overshoot, ambiguous human referent), which calls no
+model. All labels are hand-written (author bias applies; sets are small). Jev model returned
+by the API: `jev-1.13.0`. Data: `benchmarks/jev/data/{tag_reuse,supersession,consolidation,curation,tag_split,grounding}.jsonl`.
+
+| area | unit | n | legacy | jev raw | jev deployed | Jev ms | Jev input tokens | legacy ms |
+|---|---|---|---|---|---|---|---|---|
+| tag_reuse | proposed tag | 16 | 93.8% | 100.0% | 100.0% | 200 | 526 | 910 |
+| supersession | candidate fact | 32 | 84.4% | 100.0% | 96.9% | 230 | 1163 | 506 |
+| consolidation | tag pair | 20 | 85.0% | 90.0% | 90.0% | 468 | 2342 | 1985 |
+| curation | fact | 40 | 80.0% | 87.5% | 87.5% | 207 | 743 | 500 |
+| tag_split | tag | 12 | 50.0% | 50.0% | 50.0% | 201 | 450 | 615 |
+| grounding | summary | 17 | 52.9% | 100.0% | 100.0% | 196 | 442 | 0 |
+
+"jev raw" cuts noul answers at 0.5 and takes choice answers at any confidence; "jev deployed"
+applies the engine defaults (`noul_threshold` 0.5, choice confidence floor 0.5,
+`curation_min_probability` 0.3). Latencies are per call from the live requests.
+
+Per area:
+
+- **tag_reuse.** The tagger, given the existing tags in its prompt, emitted the labeled
+  existing tag in 15 of 16 rows and some existing tag in 16 of 16 (r10: it returned
+  `injury-recovery` and `bpc-157`, not `peptides`). Jev mapped every proposed tag to the
+  labeled existing tag or `none` with p 0.96 on the two rows the tagger handled differently.
+  The seam's production value is therefore on tags the tagger mints anyway, not on this
+  set; the shadow log carries the mapping per minted tag.
+- **supersession.** Jev's relation matched the labeled relation exactly in 29 of 32 rows and
+  its superseded/independent split in 32 of 32 (raw). The deployed side missed one row
+  (s3:c1, `supersedes` at confidence 0.47, below the 0.5 floor). The production model
+  superseded a candidate newer than the new fact in two rows (s1:c3, s11:c3), superseded an
+  unrelated 2019 event (s9:c1), and missed a stop-then-restart (s2:c2) and a plan replaced by
+  the completed trip (s9:c2).
+- **consolidation.** Jev grouped `peptides`/`supplements` (p 0.69) and
+  `hiring-interviews`/`work-meetings` (p 0.56), both labeled distinct; the production model
+  grouped `peptides`/`supplements` and `car-repair`/`car-insurance` and missed
+  `database-performance`/`postgres-operations`. One Jev call covered all 20 pairs.
+- **curation.** Recall on the 23 relevant facts: legacy 15 (8 dropped, including "moved the
+  nightly vacuum to 3 AM" for "what database issues have we hit"), Jev raw 19, Jev deployed
+  22 (missed q7:f1, "likes Thai food" for a peanut-allergy question, p 0.24). False positives
+  on the 17 irrelevant facts: legacy 0, Jev raw 1, Jev deployed 4 (p 0.32 to 0.51). The
+  curator's stated contract is inclusive, so the deployed profile is the intended one.
+- **tag_split.** Both sides said "splittable" for all 12 tags. The production model split
+  every single-topic set (five turns each on one subject). Jev separated the classes by
+  probability: multi-topic tags p 0.92 to 0.97, single-topic tags p 0.52 to 0.91 (five of
+  six at or below 0.78). Accuracy at a 0.8 cut is 91.7%; the 0.5 default is the wrong cut
+  for this question. Shadow logs carry p, so the cut can be set from production data.
+- **grounding.** The heuristic accepted every ungrounded summary except the overshoot row
+  (g17). Jev put every grounded summary at p 0.79 or higher and every ungrounded one at
+  0.16 or lower, including swapped speakers (g6, g8), inverted outcome (g4), broadened
+  claims (g12), and imported content (g17).
