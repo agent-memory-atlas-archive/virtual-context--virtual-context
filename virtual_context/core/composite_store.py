@@ -312,6 +312,13 @@ class CompositeStore:
     def create_tag_alias_if_absent(self, alias: str, canonical: str, conversation_id: str = "") -> bool:
         return self._segments.create_tag_alias_if_absent(alias, canonical, conversation_id=conversation_id)
 
+    def rebind_tag_alias(
+        self, alias: str, expected_canonical: str, new_canonical: str, conversation_id: str = "",
+    ) -> bool:
+        return self._segments.rebind_tag_alias(
+            alias, expected_canonical, new_canonical, conversation_id=conversation_id,
+        )
+
     def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
         return self._segments.delete_tag_alias(alias, conversation_id=conversation_id)
 

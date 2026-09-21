@@ -4761,6 +4761,18 @@ CREATE TABLE IF NOT EXISTS request_captures (
         conn.commit()
         return int(cursor.rowcount or 0) > 0
 
+    def rebind_tag_alias(
+        self, alias: str, expected_canonical: str, new_canonical: str, conversation_id: str = "",
+    ) -> bool:
+        """Re-point an alias only if it still maps to *expected_canonical*; True when this call changed it."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE tag_aliases SET canonical = ? WHERE alias = ? AND conversation_id = ? AND canonical = ?",
+            (new_canonical, alias, conversation_id or "", expected_canonical),
+        )
+        conn.commit()
+        return int(cursor.rowcount or 0) > 0
+
     def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
         conn = self._get_conn()
         cursor = conn.execute(

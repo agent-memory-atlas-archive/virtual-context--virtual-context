@@ -2056,7 +2056,7 @@ def cmd_admin_consolidate_tags(args):
     """
     from virtual_context.core.judgment import JudgmentUnavailable
     from virtual_context.core.tag_consolidator import (
-        ConsolidationGroup, consolidate_tags, revert_consolidation,
+        ConsolidationApplyError, ConsolidationGroup, consolidate_tags, revert_consolidation,
     )
     from virtual_context.engine import VirtualContextEngine
 
@@ -2147,6 +2147,14 @@ def cmd_admin_consolidate_tags(args):
         )
     except JudgmentUnavailable as exc:
         print(json.dumps({"status": "error", "stage": "judgment", "error": str(exc)}))
+        sys.exit(1)
+    except ConsolidationApplyError as exc:
+        # The writes committed before the failure travel with the error, so
+        # the revert record is printed even when no output file was given.
+        _write_json_out(out_path, {"status": "partial", "conversation_id": conversation_id, "mode": "apply",
+                                   "dry_run": False, "applied": exc.applied})
+        print(json.dumps({"status": "error", "stage": "apply", "error": str(exc),
+                          "applied_so_far": len(exc.applied), "applied": exc.applied, "out": out_path}))
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"status": "error", "stage": "consolidate", "error": repr(exc),

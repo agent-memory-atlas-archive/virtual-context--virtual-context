@@ -176,3 +176,19 @@ def test_each_topic_fetches_its_own_aliases(tmp_sqlite_db):
         store.close()
     assert ["dosing-accuracy"] in calls and ["garden-notes"] in calls  # one alias query per topic
     assert {"adv", "acc", "gar", "gn"} <= {s.ref for s in result.summaries}
+
+
+def test_a_summary_behind_a_two_hop_chain_is_still_retrieved(tmp_sqlite_db):
+    from virtual_context.types import TagResult
+    retriever, store = _make_retriever(tmp_sqlite_db)
+    try:
+        store.store_segment(_seg("old-only", ["dosing-old"]))
+        store.set_tag_alias("dosing-old", "dosing-mid")
+        store.set_tag_alias("dosing-mid", "dosing-advice")
+        retriever.tag_generator.set_override(
+            "dosing", TagResult(tags=["dosing-old"], primary="dosing-old", source="mock"))
+        result = retriever.retrieve("dosing question")
+    finally:
+        store.close()
+    assert result.retrieval_metadata["top_tags"] == ["dosing-advice"]
+    assert "old-only" in {s.ref for s in result.summaries}

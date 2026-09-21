@@ -9,7 +9,9 @@ import pytest
 from virtual_context.core import judgment
 from virtual_context.core.conversation_store import ConversationStoreView, StaleConversationWriteError
 from virtual_context.core.judgment import build_runtime, candidate_tag_pairs, judge_tag_consolidation
-from virtual_context.core.tag_consolidator import ConsolidationGroup, consolidate_tags, revert_consolidation
+from virtual_context.core.tag_consolidator import (
+    ConsolidationApplyError, ConsolidationGroup, consolidate_tags, revert_consolidation,
+)
 from virtual_context.storage.sqlite import SQLiteStore
 from virtual_context.types import JudgmentConfig, SegmentMetadata, StoredSegment
 
@@ -98,8 +100,9 @@ def test_failure_inside_a_group_still_records_the_aliases_it_committed(tmp_sqlit
             raise RuntimeError("connection reset")
 
         raw.add_tag_to_segments_with_tags = boom
-        with pytest.raises(RuntimeError, match="connection reset"):
+        with pytest.raises(ConsolidationApplyError, match="connection reset") as failure:
             consolidate_tags(store, llm=None, dry_run=False, groups=plan, on_group_applied=seen.append)
+        assert failure.value.applied == seen  # the record also travels on the error, callback or not
         # both alias rows committed before the backfill failed, and both are in the record
         assert seen == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy", "dosing-notes"],
                          "aliases_rewritten": [], "segment_refs": []}]
@@ -118,7 +121,7 @@ def test_concurrent_claim_during_an_exact_apply_is_an_error_with_provenance(tmp_
         plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
         raw.create_tag_alias_if_absent = lambda alias, canonical, conversation_id="": False
         seen = []
-        with pytest.raises(RuntimeError, match="claimed concurrently"):
+        with pytest.raises(ConsolidationApplyError, match="claimed concurrently"):
             consolidate_tags(store, llm=None, dry_run=False, groups=plan, on_group_applied=seen.append)
         assert seen == [{"canonical": "dosing-advice", "aliases_written": [], "aliases_rewritten": [], "segment_refs": []}]
         assert store.get_segment("s2").tags == ["dosing-accuracy"]
@@ -199,7 +202,8 @@ def test_view_fences_consolidation_writes_for_stale_generations():
     raw = mock.MagicMock()
     raw.is_conversation_generation_current.return_value = False
     view = ConversationStoreView(raw, "conv-A", 3)
-    for name in ("create_tag_alias_if_absent", "delete_tag_alias", "add_tag_to_segments_with_tags", "remove_tag_from_segments"):
+    for name in ("create_tag_alias_if_absent", "rebind_tag_alias", "delete_tag_alias",
+                 "add_tag_to_segments_with_tags", "remove_tag_from_segments"):
         with pytest.raises(StaleConversationWriteError):
             getattr(view, name)("x", ["y"], conversation_id="conv-A")
     raw.create_tag_alias_if_absent.assert_not_called()
@@ -249,3 +253,66 @@ def test_strict_runs_fail_closed_when_embeddings_are_unavailable():
     with pytest.raises(ConnectionError):
         judge_tag_consolidation(["dosing-a", "dosing-b"], legacy=lambda: [], runtime=rt, canonical_rank={},
                                 embed_fn=broken, strict=True)
+
+
+def test_rebind_is_a_compare_and_swap(tmp_sqlite_db):
+    store = _store(tmp_sqlite_db)
+    try:
+        store.set_tag_alias("dosing-notes", "dosing-accuracy", conversation_id="conv-A")
+        assert store.rebind_tag_alias("dosing-notes", "other", "dosing-advice", conversation_id="conv-A") is False
+        assert store.rebind_tag_alias("dosing-notes", "dosing-accuracy", "dosing-advice", conversation_id="conv-A") is True
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-notes": "dosing-advice"}
+    finally:
+        store.close()
+
+
+def test_apply_error_without_a_callback_still_carries_the_record(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        raw.add_tag_to_segments_with_tags = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("reset"))
+        with pytest.raises(ConsolidationApplyError) as failure:
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        assert failure.value.applied[0]["aliases_written"] == ["dosing-accuracy"]
+        assert revert_consolidation(store, failure.value.applied)["aliases_deleted"] == 1
+        assert store.get_tag_aliases(conversation_id="conv-A") == {}
+    finally:
+        raw.close()
+
+
+def test_chain_rewrite_that_lost_a_race_stops_an_exact_apply(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        raw.set_tag_alias("dosing-notes", "dosing-accuracy", conversation_id="conv-A")
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        real = raw.rebind_tag_alias
+
+        def raced(alias, expected, new, conversation_id=""):
+            raw.set_tag_alias(alias, "squat-form", conversation_id=conversation_id)  # a live writer moved it
+            return real(alias, expected, new, conversation_id=conversation_id)
+
+        raw.rebind_tag_alias = raced
+        with pytest.raises(ConsolidationApplyError, match="changed concurrently") as failure:
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        assert failure.value.applied == [{"canonical": "dosing-advice", "aliases_written": [],
+                                          "aliases_rewritten": [], "segment_refs": []}]
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-notes": "squat-form"}
+    finally:
+        raw.close()
+
+
+def test_revert_leaves_a_rewrite_alone_when_a_later_writer_changed_it(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        raw.set_tag_alias("dosing-notes", "dosing-accuracy", conversation_id="conv-A")
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        raw.set_tag_alias("dosing-notes", "squat-form", conversation_id="conv-A")  # changed after the apply
+        undone = revert_consolidation(store, result.applied)
+        assert undone["aliases_restore_skipped"] == 1 and "aliases_restored" not in undone
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-notes": "squat-form"}
+    finally:
+        raw.close()

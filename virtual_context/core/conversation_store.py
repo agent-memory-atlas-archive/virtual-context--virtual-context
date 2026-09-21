@@ -31,6 +31,7 @@ class ConversationStoreView:
         "set_fact_superseded",
         "set_tag_alias",
         "create_tag_alias_if_absent",
+        "rebind_tag_alias",
         "delete_tag_alias",
         "add_tag_to_segments_with_tags",
         "remove_tag_from_segments",

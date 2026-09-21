@@ -247,6 +247,25 @@ def _require_plan_matches_store(groups: list[ConsolidationGroup], existing: dict
                 raise ValueError(f"alias {alias!r} already maps to {current!r}, not {g.canonical!r}; re-plan")
 
 
+class ConsolidationApplyError(RuntimeError):
+    """An apply run stopped part way; ``applied`` holds every write it committed, for revert."""
+
+    def __init__(self, message: str, *, applied: list[dict]) -> None:
+        super().__init__(message)
+        self.applied = list(applied)
+
+
+def _rebind_alias(store: ContextStore, alias: str, expected: str, new: str, conversation_id: str) -> bool:
+    """Compare-and-swap an alias mapping; False when it no longer maps to *expected*."""
+    rebind = getattr(store, "rebind_tag_alias", None)
+    if callable(rebind):
+        return bool(rebind(alias, expected, new, conversation_id=conversation_id or ""))
+    if (_get_store_aliases(store) or {}).get(alias) != expected:
+        return False
+    _set_store_alias(store, alias, new)
+    return True
+
+
 def _create_alias(store: ContextStore, alias: str, canonical: str, conversation_id: str) -> bool:
     creator = getattr(store, "create_tag_alias_if_absent", None)
     if callable(creator):
@@ -277,11 +296,13 @@ def _apply_groups(
     if dry_run or not all_groups:
         return result
 
-    existing_aliases = dict(_get_store_aliases(store) or {})
     if exact:
         _require_disjoint_groups(all_groups)
-        _require_plan_matches_store(all_groups, existing_aliases)
+        _require_plan_matches_store(all_groups, dict(_get_store_aliases(store) or {}))
 
+    # Live workers also write aliases (tag reuse registers them), so no
+    # snapshot is trusted across a write: the map is re-read per group and
+    # every change to an existing mapping is a compare-and-swap.
     for group in all_groups:
         written: list[str] = []
         rewritten: list[list[str]] = []
@@ -290,23 +311,31 @@ def _apply_groups(
                  "aliases_rewritten": rewritten, "segment_refs": refs}
         backfill: list[str] = []
         try:
+            live = dict(_get_store_aliases(store) or {})
+            if exact:
+                _require_plan_matches_store([group], live)
             for alias in group.aliases:
-                current = existing_aliases.get(alias)
+                current = live.get(alias)
                 if current is not None and current != group.canonical:
                     # Another mapping owns this alias; touching its segments would
                     # contradict the mapping retrieval already follows.
-                    if exact:
-                        raise RuntimeError(f"alias {alias!r} now maps to {current!r}; plan no longer matches the store")
                     result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": current})
                     continue
                 # Tags already aliased onto this alias are re-pointed at the new
-                # canonical, so the alias map stays one hop deep.
-                for deeper, target in list(existing_aliases.items()):
-                    if target == alias and deeper != group.canonical:
-                        _set_store_alias(store, deeper, group.canonical)
-                        existing_aliases[deeper] = group.canonical
+                # canonical, so the alias map stays one hop deep. The swap only
+                # succeeds against the value we read, and that value is what the
+                # revert record restores.
+                for deeper, target in list(live.items()):
+                    if target != alias or deeper == group.canonical:
+                        continue
+                    if _rebind_alias(store, deeper, alias, group.canonical, conversation_id):
+                        live[deeper] = group.canonical
                         rewritten.append([deeper, alias])
                         backfill.append(deeper)
+                    elif exact:
+                        raise RuntimeError(f"alias {deeper!r} changed concurrently; plan no longer matches the store")
+                    else:
+                        result.skipped.append({"alias": deeper, "canonical": group.canonical, "existing": "concurrent"})
                 if current == group.canonical:
                     backfill.append(alias)
                     continue
@@ -315,7 +344,7 @@ def _apply_groups(
                 if _create_alias(store, alias, group.canonical, conversation_id):
                     written.append(alias)
                     backfill.append(alias)
-                    existing_aliases[alias] = group.canonical
+                    live[alias] = group.canonical
                 elif exact:
                     raise RuntimeError(f"alias {alias!r} was claimed concurrently; plan no longer matches the store")
                 else:
@@ -327,13 +356,13 @@ def _apply_groups(
                 refs.extend(store.add_tag_to_segments_with_tags(
                     group.canonical, backfill, conversation_id=conversation_id or "",
                 ))
-        except Exception:
-            # Whatever this group committed before failing is recorded so the
-            # caller can persist it and a revert can undo it.
+        except Exception as exc:
+            # Whatever this group committed before failing is recorded, handed
+            # to the callback, and carried on the error so no caller can lose it.
             result.applied.append(entry)
             if on_group_applied is not None:
                 on_group_applied(entry)
-            raise
+            raise ConsolidationApplyError(str(exc), applied=result.applied) from exc
         result.aliases_written += len(written)
         result.segment_tags_added += len(refs)
         result.applied.append(entry)
@@ -350,6 +379,7 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
     conversation_id = _store_conversation_id(store)
     aliases_deleted = 0
     aliases_restored = 0
+    restore_skipped = 0
     segment_tags_removed = 0
     for entry in applied:
         canonical = str(entry.get("canonical", ""))
@@ -361,11 +391,17 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
         for alias in entry.get("aliases_written", []):
             aliases_deleted += int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
         for deeper, previous in entry.get("aliases_rewritten", []):
-            _set_store_alias(store, str(deeper), str(previous))
-            aliases_restored += 1
+            # Restore only if the mapping is still what this run set; a later
+            # writer's value is not ours to overwrite.
+            if _rebind_alias(store, str(deeper), canonical, str(previous), conversation_id):
+                aliases_restored += 1
+            else:
+                restore_skipped += 1
     out = {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}
     if aliases_restored:
         out["aliases_restored"] = aliases_restored
+    if restore_skipped:
+        out["aliases_restore_skipped"] = restore_skipped
     return out
 
 

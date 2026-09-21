@@ -172,7 +172,8 @@ def test_apply_writes_provenance_per_group_so_a_later_failure_stays_revertable(t
     with pytest.raises(SystemExit):
         cli_main.cmd_admin_consolidate_tags(_args(apply=True, plan=str(plan_file), out=str(out_file)))
     err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert err["status"] == "error" and err["applied_so_far"] == 2
+    assert err["status"] == "error" and err["stage"] == "apply" and err["applied_so_far"] == 2
+    assert [e["canonical"] for e in err["applied"]] == ["dosing-advice", "squat-form"]
     partial = json.loads(out_file.read_text())
     assert partial["status"] == "partial" and partial["conversation_id"] == "conv-A"
     assert partial["applied"] == [
