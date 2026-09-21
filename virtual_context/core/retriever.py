@@ -587,18 +587,30 @@ class ContextRetriever:
 
         # Fetch summaries for all top-scored tags at once, then rank by RRF score
         _summary_fetch_stage = time.monotonic()
-        fetch_tags = list(top_tags)
-        if alias_map:
-            fetch_tags += [alias for alias, canonical in alias_map.items() if canonical in set(top_tags)]
         all_summaries = self.store.get_summaries_by_tags(
-            tags=fetch_tags, min_overlap=1,
+            tags=top_tags, min_overlap=1,
             limit=strategy.max_results * 3,
             conversation_id=self._conversation_id,
         )
+        if alias_map:
+            # Aliases of the chosen topics are fetched separately so one large
+            # alias group cannot crowd the other topics out of the shared limit.
+            alias_tags = [alias for alias, canonical in alias_map.items() if canonical in set(top_tags)]
+            if alias_tags:
+                seen_refs = {s.ref for s in all_summaries}
+                for extra in self.store.get_summaries_by_tags(
+                    tags=alias_tags, min_overlap=1,
+                    limit=strategy.max_results * 3,
+                    conversation_id=self._conversation_id,
+                ):
+                    if extra.ref not in seen_refs:
+                        seen_refs.add(extra.ref)
+                        all_summaries.append(extra)
         _note("fetch_ranked_summaries", _summary_fetch_stage)
-        # Sort by (RRF fused score of best matching tag, IDF query-tag overlap) descending
+        # Sort by (RRF fused score of best matching tag, IDF query-tag overlap) descending;
+        # retrieval_scores carries alias keys so alias-tagged summaries rank with their topic.
         def _summary_sort_key(s: StoredSummary) -> tuple[float, float]:
-            best_rrf = max((scores.get(t, 0.0) for t in s.tags), default=0.0)
+            best_rrf = max((retrieval_scores.get(t, 0.0) for t in s.tags), default=0.0)
             idf_overlap = sum(idf_weights.get(t, 1.0) for t in s.tags if t in query_tag_set)
             return (best_rrf, idf_overlap)
         all_summaries.sort(key=_summary_sort_key, reverse=True)

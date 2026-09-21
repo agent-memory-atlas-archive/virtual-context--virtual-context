@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,11 +16,31 @@ class TagCanonicalizer:
     Normalization (lowercase, hyphenate) is always applied even without aliases.
     """
 
+    # Aliases written by a consolidation run must reach live workers without
+    # an engine restart; the cache is reloaded from the store after this age.
+    ALIAS_REFRESH_S: float = 300.0
+
     def __init__(self, store=None, conversation_id: str = "") -> None:
         self._alias_cache: dict[str, str] = {}
         self._store = store
         self._known_tags: set[str] = set()
         self._conversation_id = conversation_id
+        self._alias_loaded_at: float = 0.0
+
+    def _maybe_refresh(self) -> None:
+        if not self._store or self.ALIAS_REFRESH_S <= 0:
+            return
+        if not self._alias_loaded_at:
+            return  # never loaded: load() decides when the store is first read
+        now = time.monotonic()
+        if now - self._alias_loaded_at < self.ALIAS_REFRESH_S:
+            return
+        try:
+            self._alias_cache = self._load_store_aliases() or {}
+            self._known_tags.update(self._alias_cache.values())
+        except Exception:
+            logger.debug("alias cache refresh failed", exc_info=True)
+        self._alias_loaded_at = now
 
     def _load_store_aliases(self) -> dict[str, str]:
         if not self._store:
@@ -48,6 +69,7 @@ class TagCanonicalizer:
             self._alias_cache = self._load_store_aliases()
             # Seed known tags from canonical values
             self._known_tags.update(self._alias_cache.values())
+            self._alias_loaded_at = time.monotonic()
 
     def canonicalize(self, tag: str) -> str:
         """Resolve a tag to its canonical form.
@@ -55,6 +77,7 @@ class TagCanonicalizer:
         Checks explicit aliases first, then auto-folds simple plurals
         (e.g. "filters" → "filter") when the singular is already known.
         """
+        self._maybe_refresh()
         tag = tag.lower().strip().replace(" ", "-").replace("_", "-")
         tag = re.sub(r"-+", "-", tag).strip("-")
 
@@ -91,6 +114,7 @@ class TagCanonicalizer:
         self._store_alias(normalized, canonical)
 
     def get_aliases(self) -> dict[str, str]:
+        self._maybe_refresh()
         return dict(self._alias_cache)
 
     def auto_detect_aliases(self, threshold: float = 0.85) -> list[tuple[str, str]]:

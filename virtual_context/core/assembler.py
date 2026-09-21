@@ -766,6 +766,22 @@ class ContextAssembler:
             )
         return "", 0, [], []
 
+    def _load_alias_map(self) -> dict[str, str]:
+        """alias -> canonical for the assembler's conversation; empty without a store."""
+        store = getattr(self, "_store", None)
+        getter = getattr(store, "get_tag_aliases", None) if store is not None else None
+        if not callable(getter):
+            return {}
+        try:
+            try:
+                aliases = getter(conversation_id=getattr(self, "_conversation_id", ""))
+            except TypeError:
+                aliases = getter()
+        except Exception:
+            logger.debug("assembler alias map unavailable", exc_info=True)
+            return {}
+        return {str(a): str(c) for a, c in (aliases or {}).items() if a != c}
+
     def assemble(
         self,
         core_context: str,
@@ -818,11 +834,13 @@ class ContextAssembler:
         hint_tokens = self.token_counter(context_hint) if context_hint else 0
         _note("count_hint_tokens", _stage)
 
-        # Group summaries by primary_tag
+        # Group summaries by primary_tag, folded onto the canonical tag when
+        # the store aliases it, so one topic renders as one section.
         _stage = time.monotonic()
+        alias_map = self._load_alias_map()
         summaries_by_tag: dict[str, list[StoredSummary]] = {}
         for s in retrieval_result.summaries:
-            summaries_by_tag.setdefault(s.primary_tag, []).append(s)
+            summaries_by_tag.setdefault(alias_map.get(s.primary_tag, s.primary_tag), []).append(s)
         for tag_summary in (
             getattr(retrieval_result, "tag_summaries", None) or []
         ):
