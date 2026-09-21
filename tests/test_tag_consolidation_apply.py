@@ -105,7 +105,8 @@ def test_apply_from_a_plan_records_provenance_and_reverts(tmp_sqlite_db):
         plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="plan")]
         result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
         assert result.aliases_written == 1 and result.segment_tags_added == 1
-        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"], "segment_refs": ["s2"]}]
+        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"],
+                                   "aliases_rewritten": [], "segment_refs": ["s2"]}]
         assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "dosing-advice"}
         assert "dosing-advice" in store.get_segment("s2").tags
         undone = revert_consolidation(store, result.applied)

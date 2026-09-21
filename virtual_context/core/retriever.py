@@ -20,6 +20,8 @@ from ..types import (
     StoredSummary,
 )
 
+from .tag_canonicalizer import flatten_alias_map
+
 logger = logging.getLogger(__name__)
 
 _RETRIEVAL_BREAKDOWN_LOG_THRESHOLD_MS = 500.0
@@ -281,7 +283,7 @@ class ContextRetriever:
         except Exception:
             logger.debug("alias map unavailable", exc_info=True)
             return {}
-        return {str(a): str(c) for a, c in (aliases or {}).items() if a != c}
+        return flatten_alias_map(aliases or {})
 
     def _load_all_tag_summaries(self, token_budget: int) -> tuple[list[StoredSummary], int]:
         """Load all tag summaries within *token_budget*.
@@ -593,11 +595,14 @@ class ContextRetriever:
             conversation_id=self._conversation_id,
         )
         if alias_map:
-            # Aliases of the chosen topics are fetched separately so one large
-            # alias group cannot crowd the other topics out of the shared limit.
-            alias_tags = [alias for alias, canonical in alias_map.items() if canonical in set(top_tags)]
-            if alias_tags:
-                seen_refs = {s.ref for s in all_summaries}
+            # Each chosen topic's aliases are fetched in their own query, so
+            # one large alias group cannot crowd another topic out of a
+            # shared result limit.
+            seen_refs = {s.ref for s in all_summaries}
+            for canonical in top_tags:
+                alias_tags = [alias for alias, target in alias_map.items() if target == canonical]
+                if not alias_tags:
+                    continue
                 for extra in self.store.get_summaries_by_tags(
                     tags=alias_tags, min_overlap=1,
                     limit=strategy.max_results * 3,

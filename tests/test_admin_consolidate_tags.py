@@ -172,10 +172,13 @@ def test_apply_writes_provenance_per_group_so_a_later_failure_stays_revertable(t
     with pytest.raises(SystemExit):
         cli_main.cmd_admin_consolidate_tags(_args(apply=True, plan=str(plan_file), out=str(out_file)))
     err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert err["status"] == "error" and err["applied_so_far"] == 1
+    assert err["status"] == "error" and err["applied_so_far"] == 2
     partial = json.loads(out_file.read_text())
     assert partial["status"] == "partial" and partial["conversation_id"] == "conv-A"
-    assert partial["applied"] == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"], "segment_refs": ["ref-1"]}]
+    assert partial["applied"] == [
+        {"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"], "aliases_rewritten": [], "segment_refs": ["ref-1"]},
+        {"canonical": "squat-form", "aliases_written": ["squat-technique"], "aliases_rewritten": [], "segment_refs": []},
+    ]  # the failed group's committed alias is in the record too
     raw.close()
 
 

@@ -135,3 +135,44 @@ def test_canonicalizer_refreshes_aliases_written_after_load(monkeypatch):
     time.sleep(0.001)
     assert canon.canonicalize("dosing-accuracy") == "dosing-advice"
     assert canon.get_aliases() == {"dosing-accuracy": "dosing-advice"}
+
+
+def test_alias_chains_resolve_to_the_terminal_canonical(tmp_sqlite_db):
+    from virtual_context.core.tag_canonicalizer import flatten_alias_map
+    assert flatten_alias_map({"a": "b", "b": "c", "x": "x"}) == {"a": "c", "b": "c"}
+    assert flatten_alias_map({"a": "b", "b": "a"}) == {}  # a cycle is not an alias group
+    retriever, store = _make_retriever(tmp_sqlite_db)
+    try:
+        store.set_tag_alias("dosing-notes", "dosing-accuracy")
+        store.set_tag_alias("dosing-accuracy", "dosing-advice")
+        assert retriever._load_alias_map() == {"dosing-notes": "dosing-advice", "dosing-accuracy": "dosing-advice"}
+        canon = TagCanonicalizer(store)
+        canon.load()
+        assert canon.canonicalize("dosing-notes") == "dosing-advice"
+    finally:
+        store.close()
+
+
+def test_each_topic_fetches_its_own_aliases(tmp_sqlite_db):
+    from virtual_context.types import TagResult
+    retriever, store = _make_retriever(tmp_sqlite_db)
+    try:
+        for ref, tag in [("adv", "dosing-advice"), ("acc", "dosing-accuracy"), ("gar", "gardening"), ("gn", "garden-notes")]:
+            store.store_segment(_seg(ref, [tag]))
+        store.set_tag_alias("dosing-accuracy", "dosing-advice")
+        store.set_tag_alias("garden-notes", "gardening")
+        calls = []
+        real = store.get_summaries_by_tags
+
+        def recording(*args, **kwargs):
+            calls.append(list(kwargs.get("tags") or (args[0] if args else [])))
+            return real(*args, **kwargs)
+
+        store.get_summaries_by_tags = recording
+        retriever.tag_generator.set_override(
+            "dosing", TagResult(tags=["dosing-advice", "gardening"], primary="dosing-advice", source="mock"))
+        result = retriever.retrieve("dosing question")
+    finally:
+        store.close()
+    assert ["dosing-accuracy"] in calls and ["garden-notes"] in calls  # one alias query per topic
+    assert {"adv", "acc", "gar", "gn"} <= {s.ref for s in result.summaries}

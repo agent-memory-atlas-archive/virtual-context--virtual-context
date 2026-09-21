@@ -2169,6 +2169,8 @@ def cmd_admin_consolidate_tags(args):
         "applied": result.applied,
         "skipped": result.skipped,
     }
+    if result.skipped and not dry_run:
+        payload["status"] = "partial"
     _write_json_out(out_path, payload)
     print(json.dumps(payload))
 

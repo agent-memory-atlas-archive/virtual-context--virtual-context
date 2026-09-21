@@ -9,6 +9,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def flatten_alias_map(aliases: dict) -> dict[str, str]:
+    """Resolve alias chains (a -> b -> c) so every alias maps to its terminal canonical.
+
+    A chain can appear when a tag that already had aliases is itself aliased
+    later; readers must not stop after one hop or the older aliases silently
+    fall out of the group. Cycles are cut at the first repeated tag.
+    """
+    raw = {str(a): str(c) for a, c in (aliases or {}).items() if a and c and a != c}
+    flat: dict[str, str] = {}
+    for alias in raw:
+        seen = {alias}
+        target = raw[alias]
+        while target in raw and target not in seen:
+            seen.add(target)
+            target = raw[target]
+        if target != alias:  # a cycle resolves to no alias at all
+            flat[alias] = target
+    return flat
+
+
 class TagCanonicalizer:
     """Maps tag variants to canonical forms.
 
@@ -49,9 +69,10 @@ class TagCanonicalizer:
         if not callable(getter):
             return {}
         try:
-            return getter(conversation_id=self._conversation_id)
+            aliases = getter(conversation_id=self._conversation_id)
         except TypeError:
-            return getter()
+            aliases = getter()
+        return flatten_alias_map(aliases or {})
 
     def _store_alias(self, alias: str, canonical: str) -> None:
         if not self._store:

@@ -780,7 +780,8 @@ class ContextAssembler:
         except Exception:
             logger.debug("assembler alias map unavailable", exc_info=True)
             return {}
-        return {str(a): str(c) for a, c in (aliases or {}).items() if a != c}
+        from .tag_canonicalizer import flatten_alias_map
+        return flatten_alias_map(aliases or {})
 
     def assemble(
         self,

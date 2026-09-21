@@ -50,18 +50,101 @@ def test_tag_removal_and_alias_creation_are_conversation_scoped(tmp_sqlite_db):
         store.close()
 
 
-def test_alias_owned_by_another_canonical_is_skipped_not_overwritten(tmp_sqlite_db):
+def test_judged_apply_skips_an_alias_owned_by_another_canonical(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        raw.set_tag_alias("dosing-accuracy", "other-topic", conversation_id="conv-A")
+        rt, _ = _jev({frozenset(("dosing-accuracy", "dosing-advice")): 0.9})
+        result = consolidate_tags(store, llm=None, dry_run=False, judgment_runtime=rt, strict=True)
+        assert [(g.canonical, g.aliases) for g in result.groups] == [("dosing-advice", ["dosing-accuracy"])]
+        assert result.aliases_written == 0 and result.segment_tags_added == 0
+        assert result.skipped == [{"alias": "dosing-accuracy", "canonical": "dosing-advice", "existing": "other-topic"}]
+        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": [], "aliases_rewritten": [],
+                                   "segment_refs": []}]
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "other-topic"}
+        assert store.get_segment("s2").tags == ["dosing-accuracy"]
+    finally:
+        raw.close()
+
+
+def test_reviewed_plan_is_refused_before_any_write_when_the_store_drifted(tmp_sqlite_db):
     raw = _store(tmp_sqlite_db)
     store = ConversationStoreView(raw, "conv-A", 0)
     try:
         raw.set_tag_alias("dosing-accuracy", "other-topic", conversation_id="conv-A")
         plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="plan")]
-        result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
-        assert result.aliases_written == 0 and result.segment_tags_added == 0
-        assert result.skipped == [{"alias": "dosing-accuracy", "canonical": "dosing-advice", "existing": "other-topic"}]
-        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": [], "segment_refs": []}]
-        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "other-topic"}
+        with pytest.raises(ValueError, match="already maps to 'other-topic'"):
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        raw.delete_tag_alias("dosing-accuracy", conversation_id="conv-A")
+        raw.set_tag_alias("dosing-advice", "other-topic", conversation_id="conv-A")
+        with pytest.raises(ValueError, match="is already an alias"):
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-advice": "other-topic"}
         assert store.get_segment("s2").tags == ["dosing-accuracy"]
+    finally:
+        raw.close()
+
+
+def test_failure_inside_a_group_still_records_the_aliases_it_committed(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        raw.store_segment(_segment("s8", ["dosing-notes"]))
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy", "dosing-notes"], reason="")]
+        seen = []
+
+        def boom(*a, **k):
+            raise RuntimeError("connection reset")
+
+        raw.add_tag_to_segments_with_tags = boom
+        with pytest.raises(RuntimeError, match="connection reset"):
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan, on_group_applied=seen.append)
+        # both alias rows committed before the backfill failed, and both are in the record
+        assert seen == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy", "dosing-notes"],
+                         "aliases_rewritten": [], "segment_refs": []}]
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "dosing-advice",
+                                                                    "dosing-notes": "dosing-advice"}
+        assert revert_consolidation(store, seen) == {"aliases_deleted": 2, "segment_tags_removed": 0}
+        assert store.get_tag_aliases(conversation_id="conv-A") == {}
+    finally:
+        raw.close()
+
+
+def test_concurrent_claim_during_an_exact_apply_is_an_error_with_provenance(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        raw.create_tag_alias_if_absent = lambda alias, canonical, conversation_id="": False
+        seen = []
+        with pytest.raises(RuntimeError, match="claimed concurrently"):
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan, on_group_applied=seen.append)
+        assert seen == [{"canonical": "dosing-advice", "aliases_written": [], "aliases_rewritten": [], "segment_refs": []}]
+        assert store.get_segment("s2").tags == ["dosing-accuracy"]
+    finally:
+        raw.close()
+
+
+def test_apply_flattens_alias_chains_and_revert_restores_them(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        raw.store_segment(_segment("s8", ["dosing-notes"]))
+        raw.set_tag_alias("dosing-notes", "dosing-accuracy", conversation_id="conv-A")  # pre-existing hop
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "dosing-advice",
+                                                                    "dosing-notes": "dosing-advice"}
+        entry = result.applied[0]
+        assert entry["aliases_written"] == ["dosing-accuracy"]
+        assert entry["aliases_rewritten"] == [["dosing-notes", "dosing-accuracy"]]
+        assert sorted(entry["segment_refs"]) == ["s2", "s8"]
+        assert "dosing-advice" in store.get_segment("s8").tags
+        undone = revert_consolidation(store, result.applied)
+        assert undone == {"aliases_deleted": 1, "segment_tags_removed": 2, "aliases_restored": 1}
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-notes": "dosing-accuracy"}
+        assert store.get_segment("s8").tags == ["dosing-notes"]
     finally:
         raw.close()
 
@@ -74,7 +157,8 @@ def test_alias_already_pointing_at_the_canonical_is_backfilled_but_not_claimed(t
         plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="plan")]
         result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
         assert result.aliases_written == 0 and result.segment_tags_added == 1
-        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": [], "segment_refs": ["s2"]}]
+        assert result.applied == [{"canonical": "dosing-advice", "aliases_written": [], "aliases_rewritten": [],
+                                   "segment_refs": ["s2"]}]
         # revert removes only what this run wrote: the pre-existing alias survives
         assert revert_consolidation(store, result.applied) == {"aliases_deleted": 0, "segment_tags_removed": 1}
         assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "dosing-advice"}

@@ -166,10 +166,9 @@ def consolidate_tags(
     conversation_id = _store_conversation_id(store)
     if groups is not None:
         plan_groups = list(groups)
-        _require_disjoint_groups(plan_groups)
         logger.info("Applying %d pre-computed consolidation groups verbatim.", len(plan_groups))
         return _apply_groups(
-            store, plan_groups, conversation_id, dry_run=dry_run, on_group_applied=on_group_applied,
+            store, plan_groups, conversation_id, dry_run=dry_run, on_group_applied=on_group_applied, exact=True,
         )
 
     all_tags = store.get_all_tags(conversation_id=conversation_id or None)
@@ -236,6 +235,18 @@ def _require_disjoint_groups(groups: list[ConsolidationGroup]) -> None:
             seen[tag] = g.canonical
 
 
+def _require_plan_matches_store(groups: list[ConsolidationGroup], existing: dict[str, str]) -> None:
+    """Refuse a reviewed plan the store has drifted away from, before any write."""
+    for g in groups:
+        owner = existing.get(g.canonical)
+        if owner is not None and owner != g.canonical:
+            raise ValueError(f"canonical {g.canonical!r} is already an alias of {owner!r}; re-plan")
+        for alias in g.aliases:
+            current = existing.get(alias)
+            if current is not None and current != g.canonical:
+                raise ValueError(f"alias {alias!r} already maps to {current!r}, not {g.canonical!r}; re-plan")
+
+
 def _create_alias(store: ContextStore, alias: str, canonical: str, conversation_id: str) -> bool:
     creator = getattr(store, "create_tag_alias_if_absent", None)
     if callable(creator):
@@ -251,41 +262,80 @@ def _apply_groups(
     *,
     dry_run: bool,
     on_group_applied=None,
+    exact: bool = False,
 ) -> ConsolidationResult:
+    """Write alias groups to the store.
+
+    ``exact`` is the reviewed-plan mode: the plan is checked against the
+    live alias map before any write and a conflict discovered mid-run is
+    an error, never a silent skip, so the result either matches the plan or
+    the run stops with its writes so far recorded for revert. Without
+    ``exact`` (judged groups) an alias owned elsewhere is skipped and
+    reported.
+    """
     result = ConsolidationResult(groups=all_groups)
     if dry_run or not all_groups:
         return result
 
-    existing_aliases = _get_store_aliases(store)
+    existing_aliases = dict(_get_store_aliases(store) or {})
+    if exact:
+        _require_disjoint_groups(all_groups)
+        _require_plan_matches_store(all_groups, existing_aliases)
+
     for group in all_groups:
         written: list[str] = []
+        rewritten: list[list[str]] = []
+        refs: list[str] = []
+        entry = {"canonical": group.canonical, "aliases_written": written,
+                 "aliases_rewritten": rewritten, "segment_refs": refs}
         backfill: list[str] = []
-        for alias in group.aliases:
-            current = existing_aliases.get(alias)
-            if current is not None and current != group.canonical:
-                # Another mapping owns this alias; touching its segments would
-                # contradict the mapping retrieval already follows.
-                result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": current})
-                continue
-            if current == group.canonical:
-                backfill.append(alias)
-                continue
-            # Conditional insert: only the run that created the row records it,
-            # so a concurrent apply cannot claim (and later revert) our mapping.
-            if _create_alias(store, alias, group.canonical, conversation_id):
-                written.append(alias)
-                backfill.append(alias)
-            else:
-                result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": "concurrent"})
+        try:
+            for alias in group.aliases:
+                current = existing_aliases.get(alias)
+                if current is not None and current != group.canonical:
+                    # Another mapping owns this alias; touching its segments would
+                    # contradict the mapping retrieval already follows.
+                    if exact:
+                        raise RuntimeError(f"alias {alias!r} now maps to {current!r}; plan no longer matches the store")
+                    result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": current})
+                    continue
+                # Tags already aliased onto this alias are re-pointed at the new
+                # canonical, so the alias map stays one hop deep.
+                for deeper, target in list(existing_aliases.items()):
+                    if target == alias and deeper != group.canonical:
+                        _set_store_alias(store, deeper, group.canonical)
+                        existing_aliases[deeper] = group.canonical
+                        rewritten.append([deeper, alias])
+                        backfill.append(deeper)
+                if current == group.canonical:
+                    backfill.append(alias)
+                    continue
+                # Conditional insert: only the run that created the row records it,
+                # so a concurrent apply cannot claim (and later revert) our mapping.
+                if _create_alias(store, alias, group.canonical, conversation_id):
+                    written.append(alias)
+                    backfill.append(alias)
+                    existing_aliases[alias] = group.canonical
+                elif exact:
+                    raise RuntimeError(f"alias {alias!r} was claimed concurrently; plan no longer matches the store")
+                else:
+                    result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": "concurrent"})
+            # Set-based on segment_tags: nothing is read back and rewritten, so a
+            # compaction landing on the same segment cannot be overwritten, and
+            # every alias-tagged segment is reached, not a bounded page of them.
+            if backfill:
+                refs.extend(store.add_tag_to_segments_with_tags(
+                    group.canonical, backfill, conversation_id=conversation_id or "",
+                ))
+        except Exception:
+            # Whatever this group committed before failing is recorded so the
+            # caller can persist it and a revert can undo it.
+            result.applied.append(entry)
+            if on_group_applied is not None:
+                on_group_applied(entry)
+            raise
         result.aliases_written += len(written)
-        # Set-based on segment_tags: nothing is read back and rewritten, so a
-        # compaction landing on the same segment cannot be overwritten, and
-        # every alias-tagged segment is reached, not a bounded page of them.
-        refs = list(store.add_tag_to_segments_with_tags(
-            group.canonical, backfill, conversation_id=conversation_id or "",
-        )) if backfill else []
         result.segment_tags_added += len(refs)
-        entry = {"canonical": group.canonical, "aliases_written": written, "segment_refs": refs}
         result.applied.append(entry)
         if on_group_applied is not None:
             on_group_applied(entry)
@@ -299,6 +349,7 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
     """Undo the exact writes recorded in ``ConsolidationResult.applied``."""
     conversation_id = _store_conversation_id(store)
     aliases_deleted = 0
+    aliases_restored = 0
     segment_tags_removed = 0
     for entry in applied:
         canonical = str(entry.get("canonical", ""))
@@ -309,7 +360,14 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
             ) or 0)
         for alias in entry.get("aliases_written", []):
             aliases_deleted += int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
-    return {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}
+        for deeper, previous in entry.get("aliases_rewritten", []):
+            _set_store_alias(store, str(deeper), str(previous))
+            aliases_restored += 1
+    out = {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}
+    if aliases_restored:
+        out["aliases_restored"] = aliases_restored
+    return out
+
 
 def _merge_transitive_groups(
     groups: list[ConsolidationGroup],

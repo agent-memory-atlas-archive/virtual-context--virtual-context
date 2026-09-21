@@ -340,7 +340,8 @@ class TestConsolidateTags:
         # The canonical tag is added set-based on segment_tags, never by rewriting the segment row
         store.add_tag_to_segments_with_tags.assert_called_once_with("canon", ["alias1"], conversation_id="")
         store.store_segment.assert_not_called()
-        assert result.applied == [{"canonical": "canon", "aliases_written": ["alias1"], "segment_refs": [seg_ref]}]
+        assert result.applied == [{"canonical": "canon", "aliases_written": ["alias1"], "aliases_rewritten": [],
+                                   "segment_refs": [seg_ref]}]
 
     def test_llm_failure_graceful(self):
         """LLM raising an exception doesn't crash consolidation."""
