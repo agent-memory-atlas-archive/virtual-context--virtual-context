@@ -255,21 +255,38 @@ class ConsolidationApplyError(RuntimeError):
         self.applied = list(applied)
 
 
-def _rebind_alias(store: ContextStore, alias: str, expected: str, new: str, conversation_id: str) -> bool:
-    """Compare-and-swap an alias mapping; False when it no longer maps to *expected*."""
+def _supports_conditional_aliases(store: ContextStore) -> bool:
+    return callable(getattr(store, "rebind_tag_alias", None))
+
+
+def _rebind_alias(store: ContextStore, alias: str, expected: str, new: str, conversation_id: str) -> bool | None:
+    """Compare-and-swap an alias mapping.
+
+    False when it no longer maps to *expected*; None when the store has no
+    conditional primitive (a read-then-write here would race live writers,
+    so no rewrite is attempted on such stores).
+    """
     rebind = getattr(store, "rebind_tag_alias", None)
-    if callable(rebind):
-        return bool(rebind(alias, expected, new, conversation_id=conversation_id or ""))
-    if (_get_store_aliases(store) or {}).get(alias) != expected:
-        return False
-    _set_store_alias(store, alias, new)
-    return True
+    if not callable(rebind):
+        return None
+    return bool(rebind(alias, expected, new, conversation_id=conversation_id or ""))
+
+
+def _delete_alias_if(store: ContextStore, alias: str, expected: str, conversation_id: str) -> int | None:
+    """Delete an alias only while it still maps to *expected*; None without the primitive."""
+    if not _supports_conditional_aliases(store):
+        return None
+    return int(store.delete_tag_alias(alias, conversation_id=conversation_id or "", expected_canonical=expected) or 0)
 
 
 def _create_alias(store: ContextStore, alias: str, canonical: str, conversation_id: str) -> bool:
     creator = getattr(store, "create_tag_alias_if_absent", None)
     if callable(creator):
         return bool(creator(alias, canonical, conversation_id=conversation_id or ""))
+    # Stores without a conditional insert (single-process file stores): never
+    # replace a mapping that appeared since the group's map was read.
+    if alias in (_get_store_aliases(store) or {}):
+        return False
     _set_store_alias(store, alias, canonical)
     return True
 
@@ -297,8 +314,20 @@ def _apply_groups(
         return result
 
     if exact:
+        if not _supports_conditional_aliases(store):
+            raise ValueError("store has no conditional alias updates; a reviewed plan needs a SQLite or Postgres store")
         _require_disjoint_groups(all_groups)
         _require_plan_matches_store(all_groups, dict(_get_store_aliases(store) or {}))
+
+    def _notify(entry: dict) -> None:
+        if on_group_applied is None:
+            return
+        try:
+            on_group_applied(entry)
+        except Exception as exc:
+            # The callback is how the caller persists progress; if it fails the
+            # record must still reach the caller, on the error.
+            raise ConsolidationApplyError(f"progress callback failed: {exc}", applied=result.applied) from exc
 
     # Live workers also write aliases (tag reuse registers them), so no
     # snapshot is trusted across a write: the map is re-read per group and
@@ -328,14 +357,16 @@ def _apply_groups(
                 for deeper, target in list(live.items()):
                     if target != alias or deeper == group.canonical:
                         continue
-                    if _rebind_alias(store, deeper, alias, group.canonical, conversation_id):
+                    swapped = _rebind_alias(store, deeper, alias, group.canonical, conversation_id)
+                    if swapped:
                         live[deeper] = group.canonical
                         rewritten.append([deeper, alias])
                         backfill.append(deeper)
                     elif exact:
                         raise RuntimeError(f"alias {deeper!r} changed concurrently; plan no longer matches the store")
                     else:
-                        result.skipped.append({"alias": deeper, "canonical": group.canonical, "existing": "concurrent"})
+                        result.skipped.append({"alias": deeper, "canonical": group.canonical,
+                                               "existing": "unsupported" if swapped is None else "concurrent"})
                 if current == group.canonical:
                     backfill.append(alias)
                     continue
@@ -356,18 +387,22 @@ def _apply_groups(
                 refs.extend(store.add_tag_to_segments_with_tags(
                     group.canonical, backfill, conversation_id=conversation_id or "",
                 ))
+        except ConsolidationApplyError:
+            raise
         except Exception as exc:
             # Whatever this group committed before failing is recorded, handed
             # to the callback, and carried on the error so no caller can lose it.
             result.applied.append(entry)
             if on_group_applied is not None:
-                on_group_applied(entry)
+                try:
+                    on_group_applied(entry)
+                except Exception:
+                    logger.warning("progress callback failed while reporting a failed group", exc_info=True)
             raise ConsolidationApplyError(str(exc), applied=result.applied) from exc
         result.aliases_written += len(written)
         result.segment_tags_added += len(refs)
         result.applied.append(entry)
-        if on_group_applied is not None:
-            on_group_applied(entry)
+        _notify(entry)
 
     logger.info("Wrote %d new aliases; backfilled %d segment_tags entries; skipped %d aliases.",
                 result.aliases_written, result.segment_tags_added, len(result.skipped))
@@ -375,9 +410,17 @@ def _apply_groups(
 
 
 def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
-    """Undo the exact writes recorded in ``ConsolidationResult.applied``."""
+    """Undo the exact writes recorded in ``ConsolidationResult.applied``.
+
+    Every alias change is conditional on the mapping still being the one the
+    run wrote, so a later writer's mapping is left alone and counted as
+    skipped. The check is by value: a mapping another writer changed away
+    and then back to the run's value is indistinguishable from the run's own,
+    which is why a revert belongs shortly after its apply.
+    """
     conversation_id = _store_conversation_id(store)
     aliases_deleted = 0
+    delete_skipped = 0
     aliases_restored = 0
     restore_skipped = 0
     segment_tags_removed = 0
@@ -389,7 +432,18 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
                 canonical, refs, conversation_id=conversation_id or "",
             ) or 0)
         for alias in entry.get("aliases_written", []):
-            aliases_deleted += int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
+            deleted = _delete_alias_if(store, str(alias), canonical, conversation_id)
+            if deleted is None:
+                # No conditional delete on this store: check the value first so a
+                # mapping another writer has since re-pointed is left alone.
+                if (_get_store_aliases(store) or {}).get(str(alias)) == canonical:
+                    deleted = int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
+                else:
+                    deleted = 0
+            if deleted:
+                aliases_deleted += deleted
+            else:
+                delete_skipped += 1
         for deeper, previous in entry.get("aliases_rewritten", []):
             # Restore only if the mapping is still what this run set; a later
             # writer's value is not ours to overwrite.
@@ -398,6 +452,8 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
             else:
                 restore_skipped += 1
     out = {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}
+    if delete_skipped:
+        out["aliases_delete_skipped"] = delete_skipped
     if aliases_restored:
         out["aliases_restored"] = aliases_restored
     if restore_skipped:

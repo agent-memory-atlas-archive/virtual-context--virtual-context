@@ -319,8 +319,14 @@ class CompositeStore:
             alias, expected_canonical, new_canonical, conversation_id=conversation_id,
         )
 
-    def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
-        return self._segments.delete_tag_alias(alias, conversation_id=conversation_id)
+    def delete_tag_alias(
+        self, alias: str, conversation_id: str = "", *, expected_canonical: str | None = None,
+    ) -> int:
+        if expected_canonical is None:
+            return self._segments.delete_tag_alias(alias, conversation_id=conversation_id)
+        return self._segments.delete_tag_alias(
+            alias, conversation_id=conversation_id, expected_canonical=expected_canonical,
+        )
 
     def delete_tag_aliases_for_conversation(self, conversation_id: str) -> int:
         delete_aliases = getattr(self._segments, "delete_tag_aliases_for_conversation", None)

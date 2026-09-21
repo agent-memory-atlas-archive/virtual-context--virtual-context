@@ -316,3 +316,69 @@ def test_revert_leaves_a_rewrite_alone_when_a_later_writer_changed_it(tmp_sqlite
         assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-notes": "squat-form"}
     finally:
         raw.close()
+
+
+def test_revert_skips_an_alias_a_later_writer_re_pointed(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        result = consolidate_tags(store, llm=None, dry_run=False, groups=plan)
+        raw.set_tag_alias("dosing-accuracy", "squat-form", conversation_id="conv-A")  # moved after the apply
+        undone = revert_consolidation(store, result.applied)
+        assert undone == {"aliases_deleted": 0, "segment_tags_removed": 1, "aliases_delete_skipped": 1}
+        assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "squat-form"}
+        assert store.delete_tag_alias("dosing-accuracy", conversation_id="conv-A", expected_canonical="nope") == 0
+        assert store.delete_tag_alias("dosing-accuracy", conversation_id="conv-A", expected_canonical="squat-form") == 1
+    finally:
+        raw.close()
+
+
+def test_a_failing_progress_callback_does_not_lose_the_record(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+    store = ConversationStoreView(raw, "conv-A", 0)
+    try:
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+
+        def unwritable(entry):
+            raise OSError("disk full")
+
+        with pytest.raises(ConsolidationApplyError, match="progress callback failed") as failure:
+            consolidate_tags(store, llm=None, dry_run=False, groups=plan, on_group_applied=unwritable)
+        assert failure.value.applied == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"],
+                                          "aliases_rewritten": [], "segment_refs": ["s2"]}]
+        assert revert_consolidation(store, failure.value.applied) == {"aliases_deleted": 1, "segment_tags_removed": 1}
+    finally:
+        raw.close()
+
+
+def test_exact_apply_needs_conditional_alias_primitives(tmp_sqlite_db):
+    raw = _store(tmp_sqlite_db)
+
+    class NoConditionalWrites:
+        conversation_id = "conv-A"
+
+        def __getattr__(self, name):
+            if name in ("rebind_tag_alias", "create_tag_alias_if_absent"):
+                raise AttributeError(name)
+            return getattr(raw, name)
+
+    try:
+        plan = [ConsolidationGroup(canonical="dosing-advice", aliases=["dosing-accuracy"], reason="")]
+        with pytest.raises(ValueError, match="conditional alias updates"):
+            consolidate_tags(NoConditionalWrites(), llm=None, dry_run=False, groups=plan)
+        assert raw.get_tag_aliases(conversation_id="conv-A") == {}
+        # judged groups on such a store never rewrite an existing mapping
+        raw.set_tag_alias("dosing-notes", "dosing-accuracy", conversation_id="conv-A")
+        rt, _ = _jev({frozenset(("dosing-accuracy", "dosing-advice")): 0.9})
+        result = consolidate_tags(NoConditionalWrites(), llm=None, dry_run=False, judgment_runtime=rt, strict=True)
+        assert {"alias": "dosing-notes", "canonical": "dosing-advice", "existing": "unsupported"} in result.skipped
+        assert raw.get_tag_aliases(conversation_id="conv-A")["dosing-notes"] == "dosing-accuracy"
+        # a revert on such a store still leaves a mapping a later writer re-pointed
+        assert result.applied[0]["aliases_written"] == ["dosing-accuracy"]
+        raw.set_tag_alias("dosing-accuracy", "squat-form", conversation_id="conv-A")
+        undone = revert_consolidation(NoConditionalWrites(), result.applied)
+        assert undone["aliases_delete_skipped"] == 1 and undone["aliases_deleted"] == 0
+        assert raw.get_tag_aliases(conversation_id="conv-A")["dosing-accuracy"] == "squat-form"
+    finally:
+        raw.close()

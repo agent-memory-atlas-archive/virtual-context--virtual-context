@@ -4224,12 +4224,17 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             )
             return int(cur.rowcount or 0) > 0
 
-    def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
+    def delete_tag_alias(
+        self, alias: str, conversation_id: str = "", *, expected_canonical: str | None = None,
+    ) -> int:
+        """Delete an alias; with *expected_canonical*, only while it still maps there."""
+        query = "DELETE FROM tag_aliases WHERE alias = %s AND conversation_id = %s"
+        params: list = [alias, conversation_id or ""]
+        if expected_canonical is not None:
+            query += " AND canonical = %s"
+            params.append(expected_canonical)
         with self.pool.connection() as conn:
-            cur = conn.execute(
-                "DELETE FROM tag_aliases WHERE alias = %s AND conversation_id = %s",
-                (alias, conversation_id or ""),
-            )
+            cur = conn.execute(query, params)
             return int(cur.rowcount or 0)
 
     def delete_tag_aliases_for_conversation(self, conversation_id: str) -> int:

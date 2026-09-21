@@ -189,3 +189,31 @@ def test_max_pairs_default_covers_a_large_vocabulary(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["virtual-context", "admin", "consolidate-tags", "conv-9", "--tenant-id", "t1"])
     cli_main.main()
     assert calls[0].max_pairs == 5000
+
+
+def test_an_unwritable_out_file_still_prints_the_revert_record(tmp_sqlite_db, tmp_path, monkeypatch, capsys):
+    from virtual_context.core.conversation_store import ConversationStoreView
+    from virtual_context.storage.sqlite import SQLiteStore
+    from virtual_context.types import SegmentMetadata, StoredSegment
+
+    raw = SQLiteStore(db_path=tmp_sqlite_db)
+    now = datetime.now(timezone.utc)
+    for i, tag in enumerate(["dosing-advice", "dosing-accuracy"]):
+        raw.store_segment(StoredSegment(ref=f"ref-{i}", conversation_id="conv-A", primary_tag=tag, tags=[tag], summary="s",
+                                        summary_tokens=1, full_tokens=2, full_text="t", metadata=SegmentMetadata(),
+                                        created_at=now, start_timestamp=now, end_timestamp=now))
+    store = ConversationStoreView(raw, "conv-A", 0)
+    _stub_engine(monkeypatch, store)
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps({"conversation_id": "conv-A", "groups": [
+        {"canonical": "dosing-advice", "aliases": ["dosing-accuracy"]}]}))
+    missing_dir = tmp_path / "no-such-dir" / "applied.json"
+    with pytest.raises(SystemExit):
+        cli_main.cmd_admin_consolidate_tags(_args(apply=True, plan=str(plan_file), out=str(missing_dir)))
+    lines = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()]
+    err = lines[-1]
+    assert err["status"] == "error" and err["stage"] == "apply"
+    assert err["applied"] == [{"canonical": "dosing-advice", "aliases_written": ["dosing-accuracy"],
+                               "aliases_rewritten": [], "segment_refs": ["ref-1"]}]
+    assert store.get_tag_aliases(conversation_id="conv-A") == {"dosing-accuracy": "dosing-advice"}
+    raw.close()

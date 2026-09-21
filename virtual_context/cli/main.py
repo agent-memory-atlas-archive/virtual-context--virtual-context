@@ -2150,9 +2150,14 @@ def cmd_admin_consolidate_tags(args):
         sys.exit(1)
     except ConsolidationApplyError as exc:
         # The writes committed before the failure travel with the error, so
-        # the revert record is printed even when no output file was given.
-        _write_json_out(out_path, {"status": "partial", "conversation_id": conversation_id, "mode": "apply",
-                                   "dry_run": False, "applied": exc.applied})
+        # the revert record is printed even when the output file cannot be
+        # written or none was given.
+        record = {"status": "partial", "conversation_id": conversation_id, "mode": "apply",
+                  "dry_run": False, "applied": exc.applied}
+        try:
+            _write_json_out(out_path, record)
+        except Exception as write_exc:  # noqa: BLE001
+            print(json.dumps({"status": "warning", "stage": "write_out", "error": repr(write_exc), "out": out_path}))
         print(json.dumps({"status": "error", "stage": "apply", "error": str(exc),
                           "applied_so_far": len(exc.applied), "applied": exc.applied, "out": out_path}))
         sys.exit(1)

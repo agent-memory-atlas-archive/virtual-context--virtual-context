@@ -4773,12 +4773,17 @@ CREATE TABLE IF NOT EXISTS request_captures (
         conn.commit()
         return int(cursor.rowcount or 0) > 0
 
-    def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
+    def delete_tag_alias(
+        self, alias: str, conversation_id: str = "", *, expected_canonical: str | None = None,
+    ) -> int:
+        """Delete an alias; with *expected_canonical*, only while it still maps there."""
         conn = self._get_conn()
-        cursor = conn.execute(
-            "DELETE FROM tag_aliases WHERE alias = ? AND conversation_id = ?",
-            (alias, conversation_id or ""),
-        )
+        query = "DELETE FROM tag_aliases WHERE alias = ? AND conversation_id = ?"
+        params: list = [alias, conversation_id or ""]
+        if expected_canonical is not None:
+            query += " AND canonical = ?"
+            params.append(expected_canonical)
+        cursor = conn.execute(query, params)
         conn.commit()
         return int(cursor.rowcount or 0)
 
