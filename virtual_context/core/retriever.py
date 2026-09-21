@@ -440,6 +440,7 @@ class ContextRetriever:
             # Summary floor: post-compaction, no query tags — inject all tag summaries
             if post_compaction:
                 token_budget = self.config.tag_context_max_tokens
+                retrieval_metadata["tag_token_budget"] = token_budget
                 floor_summaries, floor_tokens = self._load_all_tag_summaries(token_budget)
                 if floor_summaries:
                     elapsed = time.monotonic() - start_time
@@ -546,6 +547,9 @@ class ContextRetriever:
             scale = max(0.1, 1.0 - current_utilization)
             budget_fraction *= scale
         token_budget = int(self.config.tag_context_max_tokens * budget_fraction)
+        # The assembler renders these summaries as larger structured blocks;
+        # it bounds the rendered sections by the same budget selected here.
+        retrieval_metadata["tag_token_budget"] = token_budget
 
         top_tags = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)[:strategy.max_results]
 

@@ -889,6 +889,15 @@ class ContextAssembler:
 
         pool = max(0, base_pool - card_tokens - reply_participant_tokens - roster_tokens)
         tag_cap = self.config.tag_context_max_tokens
+        # The retriever chose its summaries within a budget measured on stored
+        # summary sizes; the rendered structured sections are many times
+        # larger. Retrieved sections are therefore admitted against that same
+        # budget measured on rendered cost. Working-set entries are topics the
+        # model paged in explicitly and keep the configured cap.
+        retrieved_cap = tag_cap
+        _retrieval_budget = retrieval_result.retrieval_metadata.get("tag_token_budget")
+        if isinstance(_retrieval_budget, int) and not isinstance(_retrieval_budget, bool) and _retrieval_budget >= 0:
+            retrieved_cap = min(tag_cap, _retrieval_budget)
         # Consolidated Facts are model-generated indexes, not source evidence.
         # Their subject/verb/object/dimension prose may collapse speakers,
         # modality, and time even when the row carries a real actor id.  Until
@@ -1458,6 +1467,8 @@ class ContextAssembler:
         # Greedy fill with soft caps
         _stage = time.monotonic()
         tag_tokens = 0
+        retrieved_tokens = 0
+        tags_over_budget = 0
         facts_tokens = 0
         pool_used = 0
         tag_sections: dict[str, str] = {}
@@ -1469,12 +1480,23 @@ class ContextAssembler:
                 if tag_tokens + tokens > tag_cap:
                     logger.info("Tag '%s' SKIP (tag cap: %d+%d > %d)", key, tag_tokens, tokens, tag_cap)
                     continue
+                _paged_in = bool(working_set and key in working_set)
+                # The top-scored retrieved section is always admitted: a budget
+                # scaled down under high utilization must not leave the model
+                # with no retrieved evidence at all.
+                if not _paged_in and retrieved_tokens and retrieved_tokens + tokens > retrieved_cap:
+                    tags_over_budget += 1
+                    logger.info("Tag '%s' SKIP (retrieval budget: %d+%d > %d rendered)",
+                                key, retrieved_tokens, tokens, retrieved_cap)
+                    continue
                 if pool_used + tokens > pool:
                     logger.info("Tag '%s' SKIP (pool: need %dt, have %dt remaining of %dt)",
                                 key, tokens, pool - pool_used, pool)
                     continue
                 tag_sections[key] = _built_sections[key]
                 tag_tokens += tokens
+                if not _paged_in:
+                    retrieved_tokens += tokens
                 pool_used += tokens
                 logger.info("Pool: '%s' INCLUDE (tag, score=%.2f, %dt, pool %d/%dt)",
                             key, score, tokens, pool_used, pool)
@@ -1893,8 +1915,11 @@ class ContextAssembler:
             )[:_ASSEMBLE_BREAKDOWN_MAX_STAGES]
             stage_bits = [f"{stage}={ms:.1f}ms" for stage, ms in stages]
             logger.info(
-                "ASSEMBLE_BREAKDOWN tags=%d facts=%d history=%d total=%sms %s",
+                "ASSEMBLE_BREAKDOWN tags=%d tag_tokens=%d tag_budget=%d over_budget=%d facts=%d history=%d total=%sms %s",
                 len(tag_sections),
+                tag_tokens,
+                retrieved_cap,
+                tags_over_budget,
                 len(selected_facts),
                 len(trimmed),
                 total_ms,
@@ -1935,6 +1960,8 @@ class ContextAssembler:
             conversation_history=trimmed,
             total_tokens=total_tokens,
             budget_breakdown=_budget_breakdown,
+            tag_token_budget=retrieved_cap,
+            tags_over_budget=tags_over_budget,
             actor_card_text=actor_card_text,
             speaker_roster_text=roster_text,
             speaker_roster_snapshot=roster_snapshot,

@@ -2729,6 +2729,10 @@ class AssembledContext:
     conversation_history: list[Message] = field(default_factory=list)
     total_tokens: int = 0
     budget_breakdown: dict[str, int] = field(default_factory=dict)
+    # Retrieved tag sections were admitted against this rendered-token cap;
+    # tags_over_budget counts the retrieved sections it excluded.
+    tag_token_budget: int = 0
+    tags_over_budget: int = 0
     prepend_text: str = ""
     # Ephemeral, escaped canonical tail rendered inside ``prepend_text``.
     # This contains reference-only rows from other guild members. Exact rows
