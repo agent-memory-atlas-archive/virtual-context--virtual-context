@@ -1976,6 +1976,15 @@ class ContextAssembler:
         serialization_tokens = total_tokens - sum(_budget_breakdown.values())
         if serialization_tokens:
             _budget_breakdown["serialization"] = serialization_tokens
+        # Always logged: the per-component cost of what this request injects,
+        # so a bloated payload can be attributed without a replay.
+        logger.info(
+            "ASSEMBLE_BUDGET total=%d pool=%d tag_budget=%d %s",
+            total_tokens,
+            int(base_pool),
+            int(retrieved_cap),
+            " ".join(f"{key}={int(value)}" for key, value in _budget_breakdown.items()),
+        )
 
         return AssembledContext(
             core_context=core,

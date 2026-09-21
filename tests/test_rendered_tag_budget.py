@@ -114,3 +114,16 @@ def test_unscored_alias_ride_along_cannot_take_the_guaranteed_slot():
                          retrieval_metadata={"tag_token_budget": 1})
     result = assembler.assemble(core_context="core", retrieval_result=rr, conversation_history=[], token_budget=10_000)
     assert list(result.tag_sections) == ["primary"]
+
+
+def test_every_assembly_logs_its_component_budget(caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="virtual_context.core.assembler")
+    _assembler().assemble(core_context="core", retrieval_result=_three(None), conversation_history=[], token_budget=10_000)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ASSEMBLE_BUDGET ")]
+    assert len(lines) == 1
+    line = lines[0]
+    for key in ("total=", "pool=", "tag_budget=", "core=", "context_hint=", "tags=", "facts=", "conversation="):
+        assert key in line, line
+    parts = dict(bit.split("=", 1) for bit in line.split()[1:])
+    assert int(parts["tags"]) > 0 and int(parts["total"]) >= int(parts["tags"])
