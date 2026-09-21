@@ -86,6 +86,8 @@ class ConsolidationResult:
     # Exact writes made by an apply run, one entry per group, so a run can be
     # reverted: {"canonical", "aliases_written": [...], "segment_refs": [...]}.
     applied: list[dict] = field(default_factory=list)
+    # Aliases left alone because they already map to a different canonical.
+    skipped: list[dict] = field(default_factory=list)
 
 
 # ── core logic ──────────────────────────────────────────────────────────
@@ -127,6 +129,7 @@ def consolidate_tags(
     max_pairs: int = 200,
     strict: bool = False,
     groups: list[ConsolidationGroup] | None = None,
+    on_group_applied=None,
 ) -> ConsolidationResult:
     """Run tag consolidation on *store*.
 
@@ -148,7 +151,10 @@ def consolidate_tags(
         strict: In jev mode, a missing model answer raises instead of
             applying legacy groups.
         groups: Pre-computed groups (a reviewed dry-run plan) to apply
-            verbatim; no judgment runs when given.
+            verbatim; no judgment runs and no regrouping happens when given.
+        on_group_applied: Called with each group's provenance entry as soon as
+            its writes are committed, so a caller can persist progress before
+            a later group fails.
 
     Returns:
         ConsolidationResult with groups found and counts of writes.
@@ -159,9 +165,12 @@ def consolidate_tags(
     # unscoped read would mix every conversation's vocabulary into one job.
     conversation_id = _store_conversation_id(store)
     if groups is not None:
-        all_groups = _merge_transitive_groups(list(groups))
-        logger.info("Applying %d pre-computed consolidation groups.", len(all_groups))
-        return _apply_groups(store, all_groups, conversation_id, dry_run=dry_run)
+        plan_groups = list(groups)
+        _require_disjoint_groups(plan_groups)
+        logger.info("Applying %d pre-computed consolidation groups verbatim.", len(plan_groups))
+        return _apply_groups(
+            store, plan_groups, conversation_id, dry_run=dry_run, on_group_applied=on_group_applied,
+        )
 
     all_tags = store.get_all_tags(conversation_id=conversation_id or None)
     tag_names = [ts.tag for ts in all_tags]
@@ -213,7 +222,26 @@ def consolidate_tags(
     for g in all_groups:
         logger.info("  %s ← %s (%s)", g.canonical, g.aliases, g.reason)
 
-    return _apply_groups(store, all_groups, conversation_id, dry_run=dry_run)
+    return _apply_groups(
+        store, all_groups, conversation_id, dry_run=dry_run, on_group_applied=on_group_applied,
+    )
+
+
+def _require_disjoint_groups(groups: list[ConsolidationGroup]) -> None:
+    seen: dict[str, str] = {}
+    for g in groups:
+        for tag in (g.canonical, *g.aliases):
+            if tag in seen and seen[tag] != g.canonical:
+                raise ValueError(f"plan groups overlap on tag {tag!r} ({seen[tag]!r} and {g.canonical!r})")
+            seen[tag] = g.canonical
+
+
+def _create_alias(store: ContextStore, alias: str, canonical: str, conversation_id: str) -> bool:
+    creator = getattr(store, "create_tag_alias_if_absent", None)
+    if callable(creator):
+        return bool(creator(alias, canonical, conversation_id=conversation_id or ""))
+    _set_store_alias(store, alias, canonical)
+    return True
 
 
 def _apply_groups(
@@ -222,6 +250,7 @@ def _apply_groups(
     conversation_id: str,
     *,
     dry_run: bool,
+    on_group_applied=None,
 ) -> ConsolidationResult:
     result = ConsolidationResult(groups=all_groups)
     if dry_run or not all_groups:
@@ -230,26 +259,39 @@ def _apply_groups(
     existing_aliases = _get_store_aliases(store)
     for group in all_groups:
         written: list[str] = []
+        backfill: list[str] = []
         for alias in group.aliases:
-            if alias not in existing_aliases:
-                _set_store_alias(store, alias, group.canonical)
+            current = existing_aliases.get(alias)
+            if current is not None and current != group.canonical:
+                # Another mapping owns this alias; touching its segments would
+                # contradict the mapping retrieval already follows.
+                result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": current})
+                continue
+            if current == group.canonical:
+                backfill.append(alias)
+                continue
+            # Conditional insert: only the run that created the row records it,
+            # so a concurrent apply cannot claim (and later revert) our mapping.
+            if _create_alias(store, alias, group.canonical, conversation_id):
                 written.append(alias)
+                backfill.append(alias)
+            else:
+                result.skipped.append({"alias": alias, "canonical": group.canonical, "existing": "concurrent"})
         result.aliases_written += len(written)
         # Set-based on segment_tags: nothing is read back and rewritten, so a
         # compaction landing on the same segment cannot be overwritten, and
         # every alias-tagged segment is reached, not a bounded page of them.
         refs = list(store.add_tag_to_segments_with_tags(
-            group.canonical, list(group.aliases), conversation_id=conversation_id or "",
-        ))
+            group.canonical, backfill, conversation_id=conversation_id or "",
+        )) if backfill else []
         result.segment_tags_added += len(refs)
-        result.applied.append({
-            "canonical": group.canonical,
-            "aliases_written": written,
-            "segment_refs": refs,
-        })
+        entry = {"canonical": group.canonical, "aliases_written": written, "segment_refs": refs}
+        result.applied.append(entry)
+        if on_group_applied is not None:
+            on_group_applied(entry)
 
-    logger.info("Wrote %d new aliases; backfilled %d segment_tags entries.",
-                result.aliases_written, result.segment_tags_added)
+    logger.info("Wrote %d new aliases; backfilled %d segment_tags entries; skipped %d aliases.",
+                result.aliases_written, result.segment_tags_added, len(result.skipped))
     return result
 
 
@@ -262,7 +304,9 @@ def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
         canonical = str(entry.get("canonical", ""))
         refs = [str(r) for r in entry.get("segment_refs", [])]
         if canonical and refs:
-            segment_tags_removed += int(store.remove_tag_from_segments(canonical, refs) or 0)
+            segment_tags_removed += int(store.remove_tag_from_segments(
+                canonical, refs, conversation_id=conversation_id or "",
+            ) or 0)
         for alias in entry.get("aliases_written", []):
             aliases_deleted += int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
     return {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}

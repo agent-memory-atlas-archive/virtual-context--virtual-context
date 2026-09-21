@@ -4185,15 +4185,33 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             ).fetchall()
         return sorted(str(r["segment_ref"] if isinstance(r, dict) else r[0]) for r in rows)
 
-    def remove_tag_from_segments(self, tag: str, segment_refs: list[str]) -> int:
+    def remove_tag_from_segments(
+        self, tag: str, segment_refs: list[str], *, conversation_id: str = "",
+    ) -> int:
         if not segment_refs:
             return 0
+        scope = ""
+        params: list = [tag, list(segment_refs)]
+        if conversation_id:
+            scope = " AND segment_ref IN (SELECT ref FROM segments WHERE conversation_id = %s)"
+            params.append(conversation_id)
         with self.pool.connection() as conn:
             cur = conn.execute(
-                "DELETE FROM segment_tags WHERE tag = %s AND segment_ref = ANY(%s)",
-                (tag, list(segment_refs)),
+                f"DELETE FROM segment_tags WHERE tag = %s AND segment_ref = ANY(%s){scope}",
+                params,
             )
             return int(cur.rowcount or 0)
+
+    def create_tag_alias_if_absent(self, alias: str, canonical: str, conversation_id: str = "") -> bool:
+        """Insert the alias only when no mapping exists; True when this call created it."""
+        with self.pool.connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO tag_aliases (alias, conversation_id, canonical)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (alias, conversation_id) DO NOTHING""",
+                (alias, conversation_id or "", canonical),
+            )
+            return int(cur.rowcount or 0) > 0
 
     def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
         with self.pool.connection() as conn:

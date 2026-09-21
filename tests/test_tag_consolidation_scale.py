@@ -81,7 +81,7 @@ def test_consolidate_tags_scopes_reads_to_the_store_conversation_and_caps_pairs(
     store.get_all_tags.assert_called_once_with(conversation_id="conv-A")
     assert len(seen[0]["state"]["pairs"]) <= 2
     assert [(g.canonical, g.aliases) for g in result.groups] == [("dosing-advice", ["dosing-accuracy"])]
-    store.set_tag_alias.assert_called_once_with("dosing-accuracy", "dosing-advice", conversation_id="conv-A")
+    store.create_tag_alias_if_absent.assert_called_once_with("dosing-accuracy", "dosing-advice", conversation_id="conv-A")
     store.add_tag_to_segments_with_tags.assert_called_once_with("dosing-advice", ["dosing-accuracy"], conversation_id="conv-A")
     assert result.segment_tags_added == 1
 

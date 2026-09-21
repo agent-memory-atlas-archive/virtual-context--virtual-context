@@ -2065,6 +2065,7 @@ def cmd_admin_consolidate_tags(args):
     if not conversation_id:
         print(json.dumps({"status": "error", "stage": "args", "error": "<conversation_id> is required"}))
         sys.exit(2)
+    progress: list[dict] = []
     try:
         config = load_config(args.config)
         config.conversation_id = conversation_id
@@ -2107,6 +2108,8 @@ def cmd_admin_consolidate_tags(args):
         if revert_path:
             with open(revert_path, encoding="utf-8") as fh:
                 recorded = json.load(fh)
+            if recorded.get("conversation_id") not in ("", None, conversation_id):
+                raise ValueError(f"apply record is for conversation {recorded.get('conversation_id')!r}")
             undone = revert_consolidation(engine._store, list(recorded.get("applied", [])))
             payload = {"status": "ok", "conversation_id": conversation_id, "mode": "revert", **undone}
             _write_json_out(out_path, payload)
@@ -2122,21 +2125,32 @@ def cmd_admin_consolidate_tags(args):
                 ConsolidationGroup(canonical=g["canonical"], aliases=list(g["aliases"]), reason=g.get("reason", ""))
                 for g in plan.get("groups", [])
             ]
+        def _persist_progress(entry: dict) -> None:
+            # Provenance is written as each group commits, so a failure in a
+            # later group never leaves committed rows without a revert record.
+            progress.append(entry)
+            _write_json_out(out_path, {
+                "status": "partial", "conversation_id": conversation_id, "mode": "apply",
+                "dry_run": False, "applied": list(progress),
+            })
+
         result = consolidate_tags(
             engine._store,
             engine._llm_provider,
             dry_run=dry_run,
             judgment_runtime=_consolidation_judgment_runtime(args, config),
             embed_fn=embed_fn,
-            max_pairs=int(getattr(args, "max_pairs", 200) or 200),
+            max_pairs=int(getattr(args, "max_pairs", 5000) or 5000),
             strict=bool(getattr(args, "jev", False)),
             groups=groups,
+            on_group_applied=(_persist_progress if (not dry_run and out_path) else None),
         )
     except JudgmentUnavailable as exc:
         print(json.dumps({"status": "error", "stage": "judgment", "error": str(exc)}))
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"status": "error", "stage": "consolidate", "error": repr(exc)}))
+        print(json.dumps({"status": "error", "stage": "consolidate", "error": repr(exc),
+                          "applied_so_far": len(progress) if not dry_run else 0, "out": out_path}))
         sys.exit(1)
     finally:
         try:
@@ -2153,6 +2167,7 @@ def cmd_admin_consolidate_tags(args):
         "aliases_written": result.aliases_written,
         "segment_tags_added": result.segment_tags_added,
         "applied": result.applied,
+        "skipped": result.skipped,
     }
     _write_json_out(out_path, payload)
     print(json.dumps(payload))
@@ -2971,7 +2986,7 @@ def main():
     consolidate_parser.add_argument("conversation_id", help="Conversation id to consolidate")
     consolidate_parser.add_argument("--tenant-id", default="", help="Tenant id to set on the engine config")
     consolidate_parser.add_argument("--apply", action="store_true", help="Write aliases and backfill segment tags")
-    consolidate_parser.add_argument("--max-pairs", type=int, default=200, help="Cap on candidate pairs judged")
+    consolidate_parser.add_argument("--max-pairs", type=int, default=5000, help="Cap on candidate pairs judged")
     consolidate_parser.add_argument("--embed-url", default="", help="Embedding sidecar URL used to propose pairs")
     consolidate_parser.add_argument("--jev", action="store_true", help="Judge pairs with the tag_consolidation seam in jev mode")
     consolidate_parser.add_argument("--threshold", type=float, default=None,

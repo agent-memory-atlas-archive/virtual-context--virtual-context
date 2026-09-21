@@ -4718,26 +4718,48 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 ORDER BY st.segment_ref""",
             params,
         ).fetchall()
-        refs = [str(r[0]) for r in rows]
-        if refs:
-            conn.executemany(
+        inserted: list[str] = []
+        for ref in (str(r[0]) for r in rows):
+            # Record only rows this call inserted: a concurrent writer may have
+            # added the same row between the select and the insert.
+            cursor = conn.execute(
                 "INSERT OR IGNORE INTO segment_tags (segment_ref, tag) VALUES (?, ?)",
-                [(ref, canonical) for ref in refs],
+                (ref, canonical),
             )
+            if int(cursor.rowcount or 0) > 0:
+                inserted.append(ref)
+        if inserted:
             conn.commit()
-        return refs
+        return inserted
 
-    def remove_tag_from_segments(self, tag: str, segment_refs: list[str]) -> int:
+    def remove_tag_from_segments(
+        self, tag: str, segment_refs: list[str], *, conversation_id: str = "",
+    ) -> int:
         if not segment_refs:
             return 0
         conn = self._get_conn()
         placeholders = ",".join("?" * len(segment_refs))
+        scope = ""
+        params: list = [tag, *segment_refs]
+        if conversation_id:
+            scope = " AND segment_ref IN (SELECT ref FROM segments WHERE conversation_id = ?)"
+            params.append(conversation_id)
         cursor = conn.execute(
-            f"DELETE FROM segment_tags WHERE tag = ? AND segment_ref IN ({placeholders})",
-            [tag, *segment_refs],
+            f"DELETE FROM segment_tags WHERE tag = ? AND segment_ref IN ({placeholders}){scope}",
+            params,
         )
         conn.commit()
         return int(cursor.rowcount or 0)
+
+    def create_tag_alias_if_absent(self, alias: str, canonical: str, conversation_id: str = "") -> bool:
+        """Insert the alias only when no mapping exists; True when this call created it."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO tag_aliases (alias, conversation_id, canonical) VALUES (?, ?, ?)",
+            (alias, conversation_id or "", canonical),
+        )
+        conn.commit()
+        return int(cursor.rowcount or 0) > 0
 
     def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
         conn = self._get_conn()

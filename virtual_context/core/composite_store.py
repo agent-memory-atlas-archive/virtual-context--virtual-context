@@ -302,8 +302,15 @@ class CompositeStore:
             canonical, alias_tags, conversation_id=conversation_id,
         )
 
-    def remove_tag_from_segments(self, tag: str, segment_refs: list[str]) -> int:
-        return self._segments.remove_tag_from_segments(tag, segment_refs)
+    def remove_tag_from_segments(
+        self, tag: str, segment_refs: list[str], *, conversation_id: str = "",
+    ) -> int:
+        return self._segments.remove_tag_from_segments(
+            tag, segment_refs, conversation_id=conversation_id,
+        )
+
+    def create_tag_alias_if_absent(self, alias: str, canonical: str, conversation_id: str = "") -> bool:
+        return self._segments.create_tag_alias_if_absent(alias, canonical, conversation_id=conversation_id)
 
     def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
         return self._segments.delete_tag_alias(alias, conversation_id=conversation_id)

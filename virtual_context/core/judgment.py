@@ -917,6 +917,7 @@ def candidate_tag_pairs(
     tags: list[str], *, limit: int = 200, min_similarity: float = 0.6,
     embed_fn: Callable[[list[str]], list[list[float]]] | None = None,
     knn: int = 8, min_cosine: float = 0.72, max_block: int = 200,
+    strict_embed: bool = False,
 ) -> list[tuple[str, str]]:
     """Tag pairs worth asking about: shared name token, close spelling, or close embedding.
 
@@ -982,6 +983,8 @@ def candidate_tag_pairs(
                         a, b = (unique[i], unique[j]) if unique[i] < unique[j] else (unique[j], unique[i])
                         scored[(a, b)] = max(scored.get((a, b), 0.0), sim)
         except Exception:
+            if strict_embed:
+                raise
             logger.debug("embedding pair candidates unavailable", exc_info=True)
     ranked = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))
     return [pair for pair, _ in ranked[:limit]]
@@ -1072,7 +1075,7 @@ def judge_tag_consolidation(
         if strict and rt.mode_for("tag_consolidation") is JudgmentMode.JEV:
             raise JudgmentUnavailable("tag_consolidation: no judgment client configured")
         return legacy()
-    pairs = candidate_tag_pairs(tags, limit=max_pairs, embed_fn=embed_fn)
+    pairs = candidate_tag_pairs(tags, limit=max_pairs, embed_fn=embed_fn, strict_embed=strict)
     rank = canonical_rank or {}
     threshold = rt.config.noul_threshold
 
@@ -1082,14 +1085,31 @@ def judge_tag_consolidation(
         out = jev_tag_consolidation(client, pairs)
         if out is None or out.fallback_reason:
             return out
-        probs = out.value
+        probs = dict(out.value)
         kept = [p for p in pairs if probs[p] >= threshold]
         groups = groups_from_pairs(kept, rank)
+        # Closure round: a group joined through a chain (A~B, B~C) may hold
+        # pairs no candidate list ever proposed (A~C). Judge those before
+        # trusting the chain, so sparse candidates cannot hide a contradiction.
+        missing: list[tuple[str, str]] = []
+        for g in groups:
+            members = sorted({g["canonical"], *g["aliases"]})
+            for i, a in enumerate(members):
+                for b in members[i + 1:]:
+                    if (a, b) not in probs:
+                        missing.append((a, b))
+        closure_resp = None
+        if missing:
+            closure = jev_tag_consolidation(client, missing)
+            if closure is None or closure.fallback_reason:
+                return closure
+            probs.update(closure.value)
+            closure_resp = closure.response
         accepted: list[dict] = []
         conflicted = 0
         for g in groups:
             members = {g["canonical"], *g["aliases"]}
-            inside = [(p, probs[p]) for p in pairs if p[0] in members and p[1] in members]
+            inside = [(p, pr) for p, pr in probs.items() if p[0] in members and p[1] in members]
             # A judged pair the model rejected must not be unified by transitivity
             # through its neighbours; the whole group is set aside instead.
             if any(pr < threshold for _, pr in inside):
@@ -1101,7 +1121,8 @@ def judge_tag_consolidation(
             g["reason"] = f"jev: same broad topic (p={round(min(ps), 3)})"
             accepted.append(g)
         return JevOutcome(value=accepted, detail={"pairs": len(pairs), "kept": len(kept), "groups": len(accepted),
-                                                  "conflicted": conflicted}, response=out.response)
+                                                  "conflicted": conflicted, "closure_pairs": len(missing)},
+                          response=_merge_responses([r for r in (out.response, closure_resp) if r is not None]))
 
     if strict and rt.mode_for("tag_consolidation") is JudgmentMode.JEV:
         assert rt.client is not None

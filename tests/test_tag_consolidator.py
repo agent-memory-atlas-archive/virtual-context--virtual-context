@@ -236,8 +236,8 @@ class TestConsolidateTags:
         assert len(result.groups) == 1
         assert result.groups[0].canonical == "scale-model"
         assert result.aliases_written == 2
-        # Verify store.set_tag_alias was called for each alias
-        alias_calls = store.set_tag_alias.call_args_list
+        # Aliases are created conditionally so a concurrent run cannot claim them twice
+        alias_calls = store.create_tag_alias_if_absent.call_args_list
         assert len(alias_calls) == 2
         written_aliases = {call.args[0] for call in alias_calls}
         assert written_aliases == {"model-kit", "model-tanks"}
