@@ -83,6 +83,9 @@ class ConsolidationResult:
     groups: list[ConsolidationGroup] = field(default_factory=list)
     aliases_written: int = 0
     segment_tags_added: int = 0
+    # Exact writes made by an apply run, one entry per group, so a run can be
+    # reverted: {"canonical", "aliases_written": [...], "segment_refs": [...]}.
+    applied: list[dict] = field(default_factory=list)
 
 
 # ── core logic ──────────────────────────────────────────────────────────
@@ -122,6 +125,8 @@ def consolidate_tags(
     judgment_runtime=None,
     embed_fn=None,
     max_pairs: int = 200,
+    strict: bool = False,
+    groups: list[ConsolidationGroup] | None = None,
 ) -> ConsolidationResult:
     """Run tag consolidation on *store*.
 
@@ -140,6 +145,10 @@ def consolidate_tags(
         judgment_runtime: Engine judgment runtime for the tag_consolidation seam.
         embed_fn: Optional tag embedding function used to propose candidate pairs.
         max_pairs: Cap on candidate pairs put to the judgment seam.
+        strict: In jev mode, a missing model answer raises instead of
+            applying legacy groups.
+        groups: Pre-computed groups (a reviewed dry-run plan) to apply
+            verbatim; no judgment runs when given.
 
     Returns:
         ConsolidationResult with groups found and counts of writes.
@@ -149,6 +158,11 @@ def consolidate_tags(
     # Reads are scoped to the store's conversation: on a shared backend an
     # unscoped read would mix every conversation's vocabulary into one job.
     conversation_id = _store_conversation_id(store)
+    if groups is not None:
+        all_groups = _merge_transitive_groups(list(groups))
+        logger.info("Applying %d pre-computed consolidation groups.", len(all_groups))
+        return _apply_groups(store, all_groups, conversation_id, dry_run=dry_run)
+
     all_tags = store.get_all_tags(conversation_id=conversation_id or None)
     tag_names = [ts.tag for ts in all_tags]
 
@@ -180,6 +194,7 @@ def consolidate_tags(
         canonical_rank={ts.tag: int(getattr(ts, "usage_count", 0) or 0) for ts in all_tags},
         embed_fn=embed_fn,
         max_pairs=max_pairs,
+        strict=strict,
     )
     all_groups = [
         ConsolidationGroup(canonical=g["canonical"], aliases=list(g["aliases"]), reason=g.get("reason", ""))
@@ -198,26 +213,59 @@ def consolidate_tags(
     for g in all_groups:
         logger.info("  %s ← %s (%s)", g.canonical, g.aliases, g.reason)
 
-    result = ConsolidationResult(groups=all_groups)
+    return _apply_groups(store, all_groups, conversation_id, dry_run=dry_run)
 
-    if dry_run:
+
+def _apply_groups(
+    store: ContextStore,
+    all_groups: list[ConsolidationGroup],
+    conversation_id: str,
+    *,
+    dry_run: bool,
+) -> ConsolidationResult:
+    result = ConsolidationResult(groups=all_groups)
+    if dry_run or not all_groups:
         return result
 
-    # Write aliases
     existing_aliases = _get_store_aliases(store)
     for group in all_groups:
+        written: list[str] = []
         for alias in group.aliases:
             if alias not in existing_aliases:
                 _set_store_alias(store, alias, group.canonical)
-                result.aliases_written += 1
+                written.append(alias)
+        result.aliases_written += len(written)
+        # Set-based on segment_tags: nothing is read back and rewritten, so a
+        # compaction landing on the same segment cannot be overwritten, and
+        # every alias-tagged segment is reached, not a bounded page of them.
+        refs = list(store.add_tag_to_segments_with_tags(
+            group.canonical, list(group.aliases), conversation_id=conversation_id or "",
+        ))
+        result.segment_tags_added += len(refs)
+        result.applied.append({
+            "canonical": group.canonical,
+            "aliases_written": written,
+            "segment_refs": refs,
+        })
 
-    logger.info("Wrote %d new aliases.", result.aliases_written)
-
-    # Backfill segment_tags — add canonical tag to segments that have alias tags
-    result.segment_tags_added = _backfill_segment_tags(store, all_groups, conversation_id=conversation_id)
-    logger.info("Backfilled %d segment_tags entries.", result.segment_tags_added)
-
+    logger.info("Wrote %d new aliases; backfilled %d segment_tags entries.",
+                result.aliases_written, result.segment_tags_added)
     return result
+
+
+def revert_consolidation(store: ContextStore, applied: list[dict]) -> dict:
+    """Undo the exact writes recorded in ``ConsolidationResult.applied``."""
+    conversation_id = _store_conversation_id(store)
+    aliases_deleted = 0
+    segment_tags_removed = 0
+    for entry in applied:
+        canonical = str(entry.get("canonical", ""))
+        refs = [str(r) for r in entry.get("segment_refs", [])]
+        if canonical and refs:
+            segment_tags_removed += int(store.remove_tag_from_segments(canonical, refs) or 0)
+        for alias in entry.get("aliases_written", []):
+            aliases_deleted += int(store.delete_tag_alias(str(alias), conversation_id=conversation_id or "") or 0)
+    return {"aliases_deleted": aliases_deleted, "segment_tags_removed": segment_tags_removed}
 
 def _merge_transitive_groups(
     groups: list[ConsolidationGroup],
@@ -290,53 +338,6 @@ def _merge_transitive_groups(
         ))
 
     return merged
-
-
-def _backfill_segment_tags(
-    store: ContextStore,
-    groups: list[ConsolidationGroup],
-    conversation_id: str = "",
-) -> int:
-    """For each group, add the canonical tag to segments that only have aliases.
-
-    This ensures segments are discoverable via the canonical tag. The
-    retriever's alias ride-along handles the reverse direction at query
-    time — no need to add every alias to every segment.
-    """
-    added = 0
-
-    for group in groups:
-        # Find segments that have any alias tag
-        alias_segments = store.get_summaries_by_tags(
-            tags=group.aliases,
-            min_overlap=1,
-            limit=1000,
-            conversation_id=conversation_id or None,
-        )
-
-        # Find segments that already have the canonical tag
-        canonical_segments = store.get_summaries_by_tags(
-            tags=[group.canonical],
-            min_overlap=1,
-            limit=1000,
-            conversation_id=conversation_id or None,
-        )
-        canonical_refs = {s.ref for s in canonical_segments}
-
-        for summary in alias_segments:
-            if summary.ref not in canonical_refs:
-                segment = store.get_segment(summary.ref)
-                if segment and group.canonical not in segment.tags:
-                    segment.tags.append(group.canonical)
-                    store.store_segment(segment)
-                    added += 1
-                    logger.debug(
-                        "  Added '%s' to segment %s",
-                        group.canonical,
-                        summary.ref[:12],
-                    )
-
-    return added
 
 
 def _parse_response(response: str) -> list[ConsolidationGroup]:

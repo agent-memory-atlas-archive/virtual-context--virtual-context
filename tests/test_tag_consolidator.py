@@ -334,10 +334,13 @@ class TestConsolidateTags:
             "groups": [{"canonical": "canon", "aliases": ["alias1"], "reason": "same"}]
         })
         llm = _MockLLM(llm_response)
+        store.add_tag_to_segments_with_tags.return_value = [seg_ref]
         result = consolidate_tags(store, llm)
         assert result.segment_tags_added == 1
-        # The segment should now have "canon" in its tags
-        assert "canon" in seg.tags
+        # The canonical tag is added set-based on segment_tags, never by rewriting the segment row
+        store.add_tag_to_segments_with_tags.assert_called_once_with("canon", ["alias1"], conversation_id="")
+        store.store_segment.assert_not_called()
+        assert result.applied == [{"canonical": "canon", "aliases_written": ["alias1"], "segment_refs": [seg_ref]}]
 
     def test_llm_failure_graceful(self):
         """LLM raising an exception doesn't crash consolidation."""

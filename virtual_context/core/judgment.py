@@ -40,6 +40,10 @@ ENV_MODE = "VC_JUDGMENT_MODE"
 T = TypeVar("T")
 
 
+class JudgmentUnavailable(RuntimeError):
+    """Raised by a strict seam when the model answer is required and unavailable."""
+
+
 class JudgmentMode(str, Enum):
     LEGACY = "legacy"
     SHADOW = "shadow"
@@ -1056,10 +1060,17 @@ def judge_tag_consolidation(
     tags: list[str], *, legacy: Callable[[], list[dict]], runtime: JudgmentRuntime | None = None,
     canonical_rank: Mapping[str, int] | None = None,
     embed_fn: Callable[[list[str]], list[list[float]]] | None = None, max_pairs: int = 200,
+    strict: bool = False,
 ) -> list[dict]:
-    """Return consolidation groups as ``{"canonical", "aliases", "reason"}`` dicts."""
+    """Return consolidation groups as ``{"canonical", "aliases", "reason"}`` dicts.
+
+    ``strict`` applies in jev mode: a missing or failed model answer raises
+    ``JudgmentUnavailable`` instead of silently applying the legacy groups.
+    """
     rt = runtime if runtime is not None else current()
     if not rt.enabled_for("tag_consolidation"):
+        if strict and rt.mode_for("tag_consolidation") is JudgmentMode.JEV:
+            raise JudgmentUnavailable("tag_consolidation: no judgment client configured")
         return legacy()
     pairs = candidate_tag_pairs(tags, limit=max_pairs, embed_fn=embed_fn)
     rank = canonical_rank or {}
@@ -1074,12 +1085,32 @@ def judge_tag_consolidation(
         probs = out.value
         kept = [p for p in pairs if probs[p] >= threshold]
         groups = groups_from_pairs(kept, rank)
+        accepted: list[dict] = []
+        conflicted = 0
         for g in groups:
             members = {g["canonical"], *g["aliases"]}
-            ps = [probs[p] for p in kept if p[0] in members and p[1] in members]
+            inside = [(p, probs[p]) for p in pairs if p[0] in members and p[1] in members]
+            # A judged pair the model rejected must not be unified by transitivity
+            # through its neighbours; the whole group is set aside instead.
+            if any(pr < threshold for _, pr in inside):
+                conflicted += 1
+                logger.info("JUDGMENT_CONFLICT seam=tag_consolidation group=%s rejected_pairs=%d",
+                            ",".join(sorted(members)), sum(1 for _, pr in inside if pr < threshold))
+                continue
+            ps = [pr for _, pr in inside]
             g["reason"] = f"jev: same broad topic (p={round(min(ps), 3)})"
-        return JevOutcome(value=groups, detail={"pairs": len(pairs), "kept": len(kept), "groups": len(groups)},
-                          response=out.response)
+            accepted.append(g)
+        return JevOutcome(value=accepted, detail={"pairs": len(pairs), "kept": len(kept), "groups": len(accepted),
+                                                  "conflicted": conflicted}, response=out.response)
+
+    if strict and rt.mode_for("tag_consolidation") is JudgmentMode.JEV:
+        assert rt.client is not None
+        outcome = _run_jev("tag_consolidation", jev, rt.client)
+        if outcome is None or outcome.fallback_reason:
+            raise JudgmentUnavailable(
+                f"tag_consolidation: {outcome.fallback_reason if outcome else 'jev_unavailable'}",
+            )
+        return outcome.value
 
     return decide(
         "tag_consolidation", legacy, jev, runtime=rt,

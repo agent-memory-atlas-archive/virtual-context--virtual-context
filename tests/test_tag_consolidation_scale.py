@@ -76,13 +76,14 @@ def test_consolidate_tags_scopes_reads_to_the_store_conversation_and_caps_pairs(
     store.get_all_tags.return_value = [TagStats(tag="dosing-advice", usage_count=5), TagStats(tag="dosing-accuracy", usage_count=2),
                                        TagStats(tag="dosing-notes", usage_count=1), TagStats(tag="dosing-history", usage_count=1)]
     store.get_tag_aliases.return_value = {}
-    store.get_summaries_by_tags.return_value = []
+    store.add_tag_to_segments_with_tags.return_value = ["seg-9"]
     result = consolidate_tags(store, llm=None, dry_run=False, judgment_runtime=rt, max_pairs=2)
     store.get_all_tags.assert_called_once_with(conversation_id="conv-A")
     assert len(seen[0]["state"]["pairs"]) <= 2
     assert [(g.canonical, g.aliases) for g in result.groups] == [("dosing-advice", ["dosing-accuracy"])]
     store.set_tag_alias.assert_called_once_with("dosing-accuracy", "dosing-advice", conversation_id="conv-A")
-    assert store.get_summaries_by_tags.call_args.kwargs["conversation_id"] == "conv-A"
+    store.add_tag_to_segments_with_tags.assert_called_once_with("dosing-advice", ["dosing-accuracy"], conversation_id="conv-A")
+    assert result.segment_tags_added == 1
 
 
 def test_admin_consolidate_tags_dry_run_then_apply(tmp_sqlite_db, monkeypatch, capsys):

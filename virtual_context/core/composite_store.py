@@ -295,6 +295,19 @@ class CompositeStore:
             )
         return deleted
 
+    def add_tag_to_segments_with_tags(
+        self, canonical: str, alias_tags: list[str], *, conversation_id: str = "",
+    ) -> list[str]:
+        return self._segments.add_tag_to_segments_with_tags(
+            canonical, alias_tags, conversation_id=conversation_id,
+        )
+
+    def remove_tag_from_segments(self, tag: str, segment_refs: list[str]) -> int:
+        return self._segments.remove_tag_from_segments(tag, segment_refs)
+
+    def delete_tag_alias(self, alias: str, conversation_id: str = "") -> int:
+        return self._segments.delete_tag_alias(alias, conversation_id=conversation_id)
+
     def delete_tag_aliases_for_conversation(self, conversation_id: str) -> int:
         delete_aliases = getattr(self._segments, "delete_tag_aliases_for_conversation", None)
         if callable(delete_aliases):
