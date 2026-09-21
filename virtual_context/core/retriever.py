@@ -456,6 +456,7 @@ class ContextRetriever:
                             "tags_from_message": tag_result.tags,
                             "tags_skipped_active": skipped_tags,
                             "summary_floor": True,
+                            "tag_token_budget": token_budget,
                         },
                         cost_report=RetrievalCostReport(
                             tags_queried=[],

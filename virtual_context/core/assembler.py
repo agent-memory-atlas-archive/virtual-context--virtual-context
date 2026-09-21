@@ -1483,8 +1483,18 @@ class ContextAssembler:
                 _paged_in = bool(working_set and key in working_set)
                 # The top-scored retrieved section is always admitted: a budget
                 # scaled down under high utilization must not leave the model
-                # with no retrieved evidence at all.
-                if not _paged_in and retrieved_tokens and retrieved_tokens + tokens > retrieved_cap:
+                # with no retrieved evidence at all. Only a section the retriever
+                # scored can take that guarantee; an alias ride-along carries no
+                # score and sorts on the default priority, above real scores.
+                _floor_eligible = (
+                    not retrieval_result.retrieval_scores
+                    or key in retrieval_result.retrieval_scores
+                )
+                if (
+                    not _paged_in
+                    and (retrieved_tokens or not _floor_eligible)
+                    and retrieved_tokens + tokens > retrieved_cap
+                ):
                     tags_over_budget += 1
                     logger.info("Tag '%s' SKIP (retrieval budget: %d+%d > %d rendered)",
                                 key, retrieved_tokens, tokens, retrieved_cap)

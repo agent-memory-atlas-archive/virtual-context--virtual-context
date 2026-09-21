@@ -91,3 +91,26 @@ def test_working_set_expansion_is_not_capped_by_the_retriever_budget():
     )
     assert "expanded" in result.tag_sections
     assert "t1" in result.tag_sections and "t2" not in result.tag_sections  # paged-in section does not consume the retrieved floor
+
+
+def test_summary_floor_result_carries_the_budget(tmp_sqlite_db):
+    from virtual_context.types import TagSummary
+
+    retriever, store = _make_retriever(tmp_sqlite_db, skip_active=True)
+    try:
+        store.save_tag_summary(TagSummary(tag="legal", summary="Case 24-cv-1234 filing deadline.", summary_tokens=8,
+                                          source_segment_refs=["legal-1"]))
+        result = retriever.retrieve("What about the court filing?", current_active_tags=["legal"], post_compaction=True)
+    finally:
+        store.close()
+    assert result.retrieval_metadata.get("summary_floor") is True
+    assert result.retrieval_metadata["tag_token_budget"] == 30000
+
+
+def test_unscored_alias_ride_along_cannot_take_the_guaranteed_slot():
+    assembler = _assembler()
+    rr = RetrievalResult(tags_matched=["primary"], summaries=[_summary(0, "alias"), _summary(1, "primary")], total_tokens=200,
+                         retrieval_scores={"primary": 0.03},  # the alias ride-along has no score
+                         retrieval_metadata={"tag_token_budget": 1})
+    result = assembler.assemble(core_context="core", retrieval_result=rr, conversation_history=[], token_budget=10_000)
+    assert list(result.tag_sections) == ["primary"]
