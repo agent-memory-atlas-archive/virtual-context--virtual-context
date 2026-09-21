@@ -1997,16 +1997,23 @@ def cmd_admin_backfill_reply_roles(args):
     ))
 
 
-def _consolidation_judgment_runtime(args):
-    """Judgment runtime for the consolidate-tags command: jev on the seam when --jev is set."""
+def _consolidation_judgment_runtime(args, config=None):
+    """Judgment runtime for consolidate-tags: the seam in jev mode when --jev is set.
+
+    The probability cut defaults to the loaded config's ``judgment.noul_threshold``
+    so the command judges pairs the way the platform does, not at a private default.
+    """
     from virtual_context.core.judgment import build_runtime
     from virtual_context.types import JudgmentConfig
     if not getattr(args, "jev", False):
         return None
+    threshold = getattr(args, "threshold", None)
+    if threshold is None:
+        threshold = getattr(getattr(config, "judgment", None), "noul_threshold", 0.5)
     return build_runtime(JudgmentConfig(
         mode="legacy",
         seams={"tag_consolidation": "jev"},
-        noul_threshold=float(getattr(args, "threshold", 0.5) or 0.5),
+        noul_threshold=float(threshold),
         timeout_s=30.0,
     ))
 
@@ -2014,6 +2021,10 @@ def _consolidation_judgment_runtime(args):
 def _sidecar_embed_fn(url: str):
     """Embed through an embedding sidecar (``POST /embed {"texts"} -> {"vectors"}``)."""
     import urllib.request
+
+    url = url.rstrip("/")
+    if not url.endswith("/embed"):
+        url = url + "/embed"
 
     def embed(texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
@@ -2030,9 +2041,23 @@ def _sidecar_embed_fn(url: str):
     return embed
 
 
+def _write_json_out(path: str, payload: dict) -> None:
+    if path:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=1)
+
+
 def cmd_admin_consolidate_tags(args):
-    """Group near-duplicate tags of one conversation into alias groups. Dry run by default."""
-    from virtual_context.core.tag_consolidator import consolidate_tags
+    """Group near-duplicate tags of one conversation into alias groups.
+
+    Dry run by default and prints a plan; ``--apply --plan PLAN`` applies a
+    reviewed plan verbatim; ``--revert APPLIED`` undoes the writes an apply
+    run recorded. ``--out PATH`` writes the JSON result to a file as well.
+    """
+    from virtual_context.core.judgment import JudgmentUnavailable
+    from virtual_context.core.tag_consolidator import (
+        ConsolidationGroup, consolidate_tags, revert_consolidation,
+    )
     from virtual_context.engine import VirtualContextEngine
 
     conversation_id = (getattr(args, "conversation_id", "") or "").strip()
@@ -2050,6 +2075,18 @@ def cmd_admin_consolidate_tags(args):
         print(json.dumps({"status": "error", "stage": "load_config", "error": repr(exc)}))
         sys.exit(1)
 
+    embed_fn = None
+    embed_url = (getattr(args, "embed_url", "") or "").strip()
+    if embed_url:
+        embed_fn = _sidecar_embed_fn(embed_url)
+        try:
+            probe = embed_fn(["probe"])
+            if not probe or not probe[0]:
+                raise ValueError("empty vector")
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"status": "error", "stage": "embed_probe", "error": repr(exc), "embed_url": embed_url}))
+            sys.exit(1)
+
     class _NoopEmbeddingProvider:
         @staticmethod
         def get_embed_fn():
@@ -2061,17 +2098,43 @@ def cmd_admin_consolidate_tags(args):
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"status": "error", "stage": "engine_construct", "error": repr(exc)}))
         sys.exit(1)
+
+    out_path = (getattr(args, "out", "") or "").strip()
+    revert_path = (getattr(args, "revert", "") or "").strip()
+    plan_path = (getattr(args, "plan", "") or "").strip()
     dry_run = not bool(getattr(args, "apply", False))
-    embed_url = (getattr(args, "embed_url", "") or "").strip()
     try:
+        if revert_path:
+            with open(revert_path, encoding="utf-8") as fh:
+                recorded = json.load(fh)
+            undone = revert_consolidation(engine._store, list(recorded.get("applied", [])))
+            payload = {"status": "ok", "conversation_id": conversation_id, "mode": "revert", **undone}
+            _write_json_out(out_path, payload)
+            print(json.dumps(payload))
+            return
+        groups = None
+        if plan_path:
+            with open(plan_path, encoding="utf-8") as fh:
+                plan = json.load(fh)
+            if plan.get("conversation_id") not in ("", None, conversation_id):
+                raise ValueError(f"plan is for conversation {plan.get('conversation_id')!r}")
+            groups = [
+                ConsolidationGroup(canonical=g["canonical"], aliases=list(g["aliases"]), reason=g.get("reason", ""))
+                for g in plan.get("groups", [])
+            ]
         result = consolidate_tags(
             engine._store,
             engine._llm_provider,
             dry_run=dry_run,
-            judgment_runtime=_consolidation_judgment_runtime(args),
-            embed_fn=_sidecar_embed_fn(embed_url) if embed_url else None,
+            judgment_runtime=_consolidation_judgment_runtime(args, config),
+            embed_fn=embed_fn,
             max_pairs=int(getattr(args, "max_pairs", 200) or 200),
+            strict=bool(getattr(args, "jev", False)),
+            groups=groups,
         )
+    except JudgmentUnavailable as exc:
+        print(json.dumps({"status": "error", "stage": "judgment", "error": str(exc)}))
+        sys.exit(1)
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"status": "error", "stage": "consolidate", "error": repr(exc)}))
         sys.exit(1)
@@ -2080,15 +2143,19 @@ def cmd_admin_consolidate_tags(args):
             engine.close()
         except Exception:  # noqa: BLE001
             pass
-    print(json.dumps({
+    payload = {
         "status": "ok",
         "conversation_id": conversation_id,
+        "mode": "dry_run" if dry_run else ("apply_plan" if plan_path else "apply"),
         "dry_run": dry_run,
         "groups": [{"canonical": g.canonical, "aliases": list(g.aliases), "reason": g.reason} for g in result.groups],
         "group_count": len(result.groups),
         "aliases_written": result.aliases_written,
         "segment_tags_added": result.segment_tags_added,
-    }))
+        "applied": result.applied,
+    }
+    _write_json_out(out_path, payload)
+    print(json.dumps(payload))
 
 
 def cmd_admin_backfill_assistant_audience(args):
@@ -2907,7 +2974,11 @@ def main():
     consolidate_parser.add_argument("--max-pairs", type=int, default=200, help="Cap on candidate pairs judged")
     consolidate_parser.add_argument("--embed-url", default="", help="Embedding sidecar URL used to propose pairs")
     consolidate_parser.add_argument("--jev", action="store_true", help="Judge pairs with the tag_consolidation seam in jev mode")
-    consolidate_parser.add_argument("--threshold", type=float, default=0.5, help="Probability cut for a same-topic pair")
+    consolidate_parser.add_argument("--threshold", type=float, default=None,
+                                    help="Probability cut for a same-topic pair (default: judgment.noul_threshold from the config)")
+    consolidate_parser.add_argument("--plan", default="", help="Apply this dry-run plan file verbatim (with --apply)")
+    consolidate_parser.add_argument("--revert", default="", help="Undo the writes recorded in this apply output file")
+    consolidate_parser.add_argument("--out", default="", help="Also write the JSON result to this path")
     consolidate_parser.add_argument("--storage-backend", choices=("sqlite", "postgres", "filesystem"))
     consolidate_parser.add_argument("--postgres-dsn")
     consolidate_parser.add_argument("--sqlite-path")
@@ -3588,6 +3659,8 @@ def main():
             cmd_admin_backfill_reply_roles(args)
         elif args.admin_command == "backfill-assistant-audience":
             cmd_admin_backfill_assistant_audience(args)
+        elif args.admin_command == "consolidate-tags":
+            cmd_admin_consolidate_tags(args)
         elif args.admin_command == "backfill-fact-authors":
             cmd_admin_backfill_fact_authors(args)
         elif args.admin_command == "rebuild-actor-cards":

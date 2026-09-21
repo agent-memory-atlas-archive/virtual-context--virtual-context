@@ -115,7 +115,7 @@ def test_admin_consolidate_tags_dry_run_then_apply(tmp_sqlite_db, monkeypatch, c
     monkeypatch.setattr(cli_main, "load_config", lambda path: SimpleNamespace(storage=SimpleNamespace(backend="sqlite"), retriever=SimpleNamespace()))
     monkeypatch.setattr(cli_main, "_apply_storage_overrides", lambda config, args: None)
     monkeypatch.setattr(engine_module, "VirtualContextEngine", StubEngine)
-    monkeypatch.setattr(cli_main, "_consolidation_judgment_runtime", lambda args: rt)
+    monkeypatch.setattr(cli_main, "_consolidation_judgment_runtime", lambda *a: rt)
 
     def run(apply):
         args = SimpleNamespace(conversation_id="conv-1", tenant_id="t1", config=None, apply=apply, max_pairs=500,
