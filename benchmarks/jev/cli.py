@@ -6,7 +6,8 @@ from pathlib import Path
 from . import report
 from .runtime import build_fake_runtime, build_live_runtime
 
-AREAS = ("rerank", "intent", "temporal", "safety", "admission")
+AREAS = ("rerank", "intent", "temporal", "safety", "admission",
+         "tag_reuse", "supersession", "consolidation", "curation", "tag_split", "grounding")
 
 
 def main(argv: list[str]) -> int:
@@ -15,7 +16,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--out", type=Path, default=report.RESULTS_DIR)
     p.add_argument("--fake", action="store_true", help="offline fake Jev client (smoke)")
-    p.add_argument("--no-legacy", action="store_true", help="admission: skip the legacy model side")
+    p.add_argument("--no-legacy", action="store_true", help="skip the legacy model arm where one exists")
     p.add_argument("--dataset", type=Path, default=None, help="LongMemEval 500q file for weak labels / rerank")
     p.add_argument("--budgets", default=None, help="rerank grid: comma-separated absolute summary budgets in tokens")
     p.add_argument("--min-probs", default=None, help="rerank grid: comma-separated rerank_min_probability values")
@@ -35,9 +36,12 @@ def main(argv: list[str]) -> int:
             else:
                 from .rerank import run_rerank
                 result = run_rerank(runtime, limit=args.limit, dataset_path=args.dataset)
-        else:
+        elif area == "admission":
             from .admission import run_admission
             result = run_admission(runtime, limit=args.limit, offline=args.fake or args.no_legacy)
+        else:
+            from .seams_v2 import run_area as run_seam_area
+            result = run_seam_area(area, runtime, limit=args.limit, offline=args.fake or args.no_legacy)
         path = report.write(result, args.out)
         print(report.table(result))
         print(f"\nwrote {path}")

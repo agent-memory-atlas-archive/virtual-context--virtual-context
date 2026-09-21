@@ -55,4 +55,6 @@ def table(result: dict) -> str:
         m = result[side]
         lines.append(f"| {side} | {_pct(m['accuracy_all'])} | {_pct(m['accuracy_strong'])} | {_pct(m['accuracy_weak'])} |")
     lines.append(f"\nJev mean latency {result['jev_latency_ms']:.0f} ms, mean input tokens {result['jev_tokens']:.0f}")
+    if result.get("legacy_arm") is not None:
+        lines.append(f"legacy arm: {result['legacy_arm']}, mean latency {result.get('legacy_latency_ms', 0.0):.0f} ms")
     return "\n".join(lines)
