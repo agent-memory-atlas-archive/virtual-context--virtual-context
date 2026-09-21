@@ -877,6 +877,7 @@ class VirtualContextEngine:
             load_cached_embeddings=shared_embedding_loader,
             save_cached_embeddings=shared_embedding_saver,
             code_mode=self.config.compactor.code_mode,
+            judgment_runtime=self.judgment_runtime,
         )
 
     def _build_raw_store(self):
@@ -1228,6 +1229,7 @@ class VirtualContextEngine:
             self._tag_splitter = TagSplitter(
                 llm=self._llm_provider,
                 config=cfg,
+                judgment_runtime=self.judgment_runtime,
             )
 
     def _init_telemetry(self) -> None:
@@ -2771,6 +2773,7 @@ class VirtualContextEngine:
                 telemetry_ledger=self._telemetry,
                 embed_fn=self._semantic.get_embed_fn(),
                 embedding_model=self.config.retriever.embedding_model,
+                judgment_runtime=self.judgment_runtime,
             )
             logger.info("Fact link checker initialized (provider=%s, model=%s, graph_links=True)", provider_name, model)
         else:
@@ -2783,6 +2786,7 @@ class VirtualContextEngine:
                 telemetry_ledger=self._telemetry,
                 embed_fn=self._semantic.get_embed_fn(),
                 embedding_model=self.config.retriever.embedding_model,
+                judgment_runtime=self.judgment_runtime,
             )
             logger.info("Supersession checker initialized (provider=%s, model=%s)", provider_name, model)
 
@@ -2803,6 +2807,7 @@ class VirtualContextEngine:
             model=model,
             config=cc,
             telemetry_ledger=self._telemetry,
+            judgment_runtime=self.judgment_runtime,
         )
         logger.info("Fact curator initialized (provider=%s, model=%s)", provider_name, model)
 

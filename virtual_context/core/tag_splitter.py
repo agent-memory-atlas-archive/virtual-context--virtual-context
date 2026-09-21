@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ..types import LLMProvider, SplitResult, TagSplittingConfig
+from .judgment import judge_tag_split
 from .llm_utils import normalize_tag, parse_llm_json
 
 logger = logging.getLogger(__name__)
@@ -43,9 +44,11 @@ class TagSplitter:
         self,
         llm: LLMProvider,
         config: TagSplittingConfig,
+        judgment_runtime=None,
     ) -> None:
         self.llm = llm
         self.config = config
+        self._judgment_runtime = judgment_runtime
 
     def split(
         self,
@@ -81,6 +84,27 @@ class TagSplitter:
             turn_list=turn_list,
         )
 
+        cache: dict[str, SplitResult] = {}
+
+        def llm_split() -> SplitResult:
+            if "result" not in cache:
+                cache["result"] = self._llm_split(tag, prompt, turn_contents, existing_tags)
+            return cache["result"]
+
+        splittable = judge_tag_split(
+            tag, turn_lines, legacy=lambda: llm_split().splittable, runtime=self._judgment_runtime,
+        )
+        if not splittable and "result" not in cache:
+            return SplitResult(tag=tag, splittable=False, reason="single topic")
+        return llm_split()
+
+    def _llm_split(
+        self,
+        tag: str,
+        prompt: str,
+        turn_contents: list[tuple[int, str]],
+        existing_tags: set[str],
+    ) -> SplitResult:
         try:
             response, _ = self.llm.complete(
                 system=TAG_SPLIT_SYSTEM_PROMPT,

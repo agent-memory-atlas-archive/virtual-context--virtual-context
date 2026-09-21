@@ -16,6 +16,7 @@ from ..types import (
     TagResult,
 )
 from .llm_utils import normalize_code_refs, normalize_tag, parse_llm_json
+from .judgment import current as judgment_current, judge_tag_reuse, nearest_existing_tags
 from .telemetry import TelemetryLedger
 from .tag_canonicalizer import TagCanonicalizer
 
@@ -317,8 +318,10 @@ class LLMTagGenerator:
         save_cached_embeddings: "Callable[[str, dict[str, list[float]]], None] | None" = None,
         cost_tracker=None,  # deprecated, ignored — legacy parameter
         code_mode: bool = False,
+        judgment_runtime=None,
     ) -> None:
         self.llm = llm_provider
+        self._judgment_runtime = judgment_runtime
         self.config = config
         self._tag_vocabulary: dict[str, int] = {}
         self._canonicalizer = canonicalizer
@@ -401,6 +404,9 @@ class LLMTagGenerator:
                 source="fallback",
             )
 
+        if result.source != "fallback":
+            result = self._apply_tag_reuse(result, text, existing_tags, breakdown=_breakdown)
+
         # Deterministic override: catch temporal queries the LLM missed
         if self.config.temporal_heuristic_enabled and not result.temporal and detect_temporal_heuristic(text, self._temporal_patterns):
             logger.debug("Temporal heuristic override: LLM missed temporal, heuristic caught it")
@@ -422,6 +428,69 @@ class LLMTagGenerator:
                 " ".join(stage_bits) if stage_bits else "no-stages",
             )
 
+        return result
+
+    def _reuse_candidates(self, proposed: str, pool: list[str], limit: int) -> list[str]:
+        """Existing tags closest to a proposed one: name similarity plus cached embedding cosine."""
+        extra: dict[str, float] | None = None
+        if self._store_tag_embeddings and self._embed_fn_factory is not None:
+            try:
+                embed_fn = self._embed_fn_factory()
+                known = [t for t in pool if t in self._store_tag_embeddings]
+                if embed_fn is not None and known:
+                    import numpy as np
+                    query = np.array(embed_fn([proposed])[0], dtype=float)
+                    matrix = np.array([self._store_tag_embeddings[t] for t in known], dtype=float)
+                    norms = np.linalg.norm(matrix, axis=1)
+                    norms[norms == 0] = 1.0
+                    query_norm = float(np.linalg.norm(query)) or 1.0
+                    sims = matrix @ query / (norms * query_norm)
+                    extra = {t: float(s) for t, s in zip(known, sims)}
+            except Exception:
+                logger.debug("embedding reuse candidates unavailable", exc_info=True)
+                extra = None
+        return nearest_existing_tags(proposed, pool, limit=limit, extra_scores=extra)
+
+    def _apply_tag_reuse(
+        self, result: TagResult, text: str, existing_tags: list[str] | None,
+        *, breakdown: dict[str, float] | None = None,
+    ) -> TagResult:
+        """Replace freshly minted tags that duplicate an existing tag (tag_reuse seam)."""
+        rt = self._judgment_runtime if self._judgment_runtime is not None else judgment_current()
+        if not rt.enabled_for("tag_reuse"):
+            return result
+        # The parser already counted this turn's tags; a count of one on a tag in
+        # this result means it was minted just now, not carried from the session.
+        session = [t for t, n in self._tag_vocabulary.items() if n > 1 or t not in result.tags]
+        pool = self._dedupe_tags([*(existing_tags or []), *session])
+        pool_set = set(pool)
+        proposed = [t for t in result.tags if t not in pool_set and not t.startswith("_")]
+        if not proposed or not pool:
+            return result
+        started = time.monotonic()
+        try:
+            candidates = {
+                tag: self._reuse_candidates(tag, pool, rt.config.tag_reuse_candidates) for tag in proposed
+            }
+            mapping = judge_tag_reuse(text, proposed, candidates, runtime=rt)
+        except Exception:
+            logger.debug("tag reuse judgment failed", exc_info=True)
+            return result
+        finally:
+            if breakdown is not None:
+                self._note_breakdown(breakdown, "tag_reuse", started)
+        if not any(mapping.values()):
+            return result
+        for minted, kept in mapping.items():
+            if kept:
+                self._tag_vocabulary.pop(minted, None)
+                self._tag_vocabulary[kept] = self._tag_vocabulary.get(kept, 0) + 1
+        tags = self._dedupe_tags([mapping.get(t) or t for t in result.tags])
+        primary = mapping.get(result.primary) or result.primary
+        if primary not in tags:
+            tags.insert(0, primary)
+        result.tags = tags
+        result.primary = primary
         return result
 
     def _ensure_store_tag_embeddings(
@@ -786,6 +855,7 @@ def build_tag_generator(
     save_cached_embeddings: "Callable[[str, dict[str, list[float]]], None] | None" = None,
     cost_tracker=None,  # deprecated, ignored — re-exported for existing callers
     code_mode: bool = False,
+    judgment_runtime=None,
 ) -> TagGenerator:
     if config.type == "llm" and llm_provider is not None:
         return LLMTagGenerator(
@@ -796,6 +866,7 @@ def build_tag_generator(
             load_cached_embeddings=load_cached_embeddings,
             save_cached_embeddings=save_cached_embeddings,
             code_mode=code_mode,
+            judgment_runtime=judgment_runtime,
         )
 
     if config.type == "embedding":

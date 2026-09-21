@@ -6,6 +6,7 @@ import logging
 import re
 import time
 
+from ..core.judgment import judge_fact_curation
 from ..core.telemetry import TelemetryLedger
 from ..types import CurationConfig, Fact, LLMProvider
 
@@ -31,11 +32,13 @@ class FactCurator:
         model: str,
         config: CurationConfig,
         telemetry_ledger: TelemetryLedger | None = None,
+        judgment_runtime=None,
     ) -> None:
         self.llm = llm_provider
         self.model = model
         self.config = config
         self._telemetry = telemetry_ledger
+        self._judgment_runtime = judgment_runtime
 
     def curate(self, facts: list[Fact], question: str) -> list[Fact]:
         """Return the subset of facts relevant to the question.
@@ -45,6 +48,21 @@ class FactCurator:
         if not facts:
             return facts
 
+        selected = judge_fact_curation(
+            question,
+            [f.format_for_prompt() for f in facts],
+            legacy=lambda: self._llm_curate(facts, question),
+            runtime=self._judgment_runtime,
+        )
+        if not selected:
+            logger.debug("Fact curation returned no indices — returning all facts")
+            return facts
+
+        logger.info("Fact curation: %d → %d facts", len(facts), len(selected))
+        return [facts[i] for i in selected]
+
+    def _llm_curate(self, facts: list[Fact], question: str) -> list[int]:
+        """Indices the curation model keeps; empty on failure or an empty answer."""
         facts_text = self._format_facts(facts)
         user_prompt = (
             f'User question: "{question}"\n\n'
@@ -62,7 +80,7 @@ class FactCurator:
             )
         except Exception as e:
             logger.warning("Fact curation LLM call failed: %s — returning all facts", e)
-            return facts
+            return []
 
         duration_ms = (time.time() - t0) * 1000
 
@@ -77,13 +95,7 @@ class FactCurator:
                 detail="fact_curation",
             )
 
-        selected = self._parse_response(response, len(facts))
-        if not selected:
-            logger.debug("Fact curation returned no indices — returning all facts")
-            return facts
-
-        logger.info("Fact curation: %d → %d facts", len(facts), len(selected))
-        return [facts[i] for i in selected]
+        return self._parse_response(response, len(facts))
 
     def _format_facts(self, facts: list[Fact]) -> str:
         return "\n".join(f.format_for_prompt(include_index=i) for i, f in enumerate(facts))

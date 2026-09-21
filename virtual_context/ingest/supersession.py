@@ -11,6 +11,7 @@ from ..core.fact_lifecycle import decide_supersession, fact_version, parse_fact_
 from ..core.store import ContextStore
 from ..core.telemetry import TelemetryLedger
 from ..types import Fact, FactLink, LLMProvider, RelationType, SupersessionConfig
+from ..core.judgment import judge_fact_links, judge_supersession
 
 logger = logging.getLogger(__name__)
 
@@ -221,12 +222,14 @@ class FactSupersessionChecker:
         telemetry_ledger: TelemetryLedger | None = None,
         embed_fn=None,
         embedding_model: str = "all-MiniLM-L6-v2",
+        judgment_runtime=None,
     ):
         self.llm = llm_provider
         self.model = model
         self.store = store
         self.config = config
         self._telemetry = telemetry_ledger
+        self._judgment_runtime = judgment_runtime
         self._embed_fn = embed_fn
         self._embedding_model = embedding_model
         self._all_facts_cache: dict[str, list[Fact]] = {}
@@ -441,6 +444,15 @@ class FactSupersessionChecker:
             )
 
     def _check_batch(self, new_fact: Fact, candidates: list[Fact]) -> list[str]:
+        return judge_supersession(
+            new_fact.format_for_prompt(),
+            [(c.id, c.format_for_prompt(), c.session_date) for c in candidates],
+            legacy=lambda: self._llm_check_batch(new_fact, candidates),
+            runtime=self._judgment_runtime,
+            new_fact_date=new_fact.session_date,
+        )
+
+    def _llm_check_batch(self, new_fact: Fact, candidates: list[Fact]) -> list[str]:
         prompt = self._build_prompt(new_fact, candidates)
         logger.debug("  _check_batch: %d candidates, prompt %d chars", len(candidates), len(prompt))
         try:
@@ -596,6 +608,7 @@ class FactLinkChecker:
         telemetry_ledger: TelemetryLedger | None = None,
         embed_fn=None,
         embedding_model: str = "all-MiniLM-L6-v2",
+        judgment_runtime=None,
     ):
         self._supersession = FactSupersessionChecker(
             llm_provider=llm_provider,
@@ -605,7 +618,9 @@ class FactLinkChecker:
             telemetry_ledger=telemetry_ledger,
             embed_fn=embed_fn,
             embedding_model=embedding_model,
+            judgment_runtime=judgment_runtime,
         )
+        self._judgment_runtime = judgment_runtime
         self.store = store
         self.llm = llm_provider
         self.model = model
@@ -724,10 +739,19 @@ class FactLinkChecker:
     def _check_links(
         self, new_fact: Fact, candidates: list[Fact],
     ) -> tuple[list[FactLink], list[str]]:
-        """Ask LLM to identify relationships between new fact and candidates.
+        """Relationships between the new fact and candidates: ``(fact_links, superseded_fact_ids)``."""
+        return judge_fact_links(
+            new_fact.id,
+            new_fact.format_for_prompt(),
+            [(c.id, c.format_for_prompt(), c.session_date) for c in candidates],
+            legacy=lambda: self._llm_check_links(new_fact, candidates),
+            runtime=self._judgment_runtime,
+            new_fact_date=new_fact.session_date,
+        )
 
-        Returns ``(fact_links, superseded_fact_ids)``.
-        """
+    def _llm_check_links(
+        self, new_fact: Fact, candidates: list[Fact],
+    ) -> tuple[list[FactLink], list[str]]:
         prompt = self._build_link_prompt(new_fact, candidates)
         t0 = time.time()
         response, _usage = self.llm.complete(

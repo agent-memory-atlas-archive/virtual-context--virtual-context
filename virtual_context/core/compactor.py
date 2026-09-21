@@ -1822,14 +1822,14 @@ class DomainCompactor:
                 _reject_reason = (
                     "malformed_structured_response"
                     if parsed is None
-                    else self._segment_summary_reject_reason(
+                    else self._judged_summary_reject_reason(
                         parsed.get("summary", ""), conversation_text, roster,
                     )
                 )
                 parsed = parsed or {}
             else:
                 parsed = self._parse_response(response_text)
-                _reject_reason = self._segment_summary_reject_reason(
+                _reject_reason = self._judged_summary_reject_reason(
                     parsed.get("summary", ""), conversation_text, roster,
                 )
             if _reject_reason is not None:
@@ -1900,7 +1900,7 @@ class DomainCompactor:
                             )
                     else:
                         parsed = self._parse_response(response_text)
-                    _retry_reason = self._segment_summary_reject_reason(
+                    _retry_reason = self._judged_summary_reject_reason(
                         parsed.get("summary", ""), conversation_text, roster,
                     )
                     if _retry_reason is not None:
@@ -2515,6 +2515,22 @@ class DomainCompactor:
     def _is_unusable_summary(cls, summary: object, source_text: str) -> bool:
         """Reject malformed summaries and obvious context-import overshoot."""
         return cls._unusable_reason(summary, source_text) is not None
+
+    def _judged_summary_reject_reason(
+        self,
+        summary: object,
+        source_text: str,
+        roster: "ActorRoster | None",
+    ) -> str | None:
+        """Heuristic gate first; the summary_grounding seam can add ``jev_ungrounded``."""
+        reason = self._segment_summary_reject_reason(summary, source_text, roster)
+        if reason is not None or not isinstance(summary, str):
+            return reason
+        from .judgment import judge_summary_grounding
+        grounded = judge_summary_grounding(
+            summary, source_text, legacy=lambda: True, runtime=self.judgment_runtime,
+        )
+        return None if grounded else "jev_ungrounded"
 
     @classmethod
     def _segment_summary_reject_reason(

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from .judgment import judge_tag_consolidation
 from .llm_utils import parse_llm_json
 from .store import ContextStore
 from ..types import LLMProvider
@@ -118,6 +119,8 @@ def consolidate_tags(
     *,
     dry_run: bool = False,
     batch_size: int = 500,
+    judgment_runtime=None,
+    embed_fn=None,
 ) -> ConsolidationResult:
     """Run tag consolidation on *store*.
 
@@ -133,6 +136,8 @@ def consolidate_tags(
         llm: LLM provider for semantic clustering.
         dry_run: If True, compute groups but don't write to store.
         batch_size: Max tags per LLM call (for very large stores).
+        judgment_runtime: Engine judgment runtime for the tag_consolidation seam.
+        embed_fn: Optional tag embedding function used to propose candidate pairs.
 
     Returns:
         ConsolidationResult with groups found and counts of writes.
@@ -148,19 +153,32 @@ def consolidate_tags(
 
     logger.info("Consolidating %d tags...", len(tag_names))
 
-    # Batch tag entries and call LLM for each batch
-    all_groups: list[ConsolidationGroup] = []
-    for batch_start in range(0, len(tag_names), batch_size):
-        batch = tag_names[batch_start:batch_start + batch_size]
-        tag_list = "\n".join(f"- {tag}" for tag in batch)
-        prompt = _CONSOLIDATION_PROMPT.format(tag_list=tag_list)
+    def llm_groups() -> list[dict]:
+        # Batch tag entries and call LLM for each batch
+        found: list[ConsolidationGroup] = []
+        for batch_start in range(0, len(tag_names), batch_size):
+            batch = tag_names[batch_start:batch_start + batch_size]
+            tag_list = "\n".join(f"- {tag}" for tag in batch)
+            prompt = _CONSOLIDATION_PROMPT.format(tag_list=tag_list)
 
-        try:
-            response, _ = llm.complete(system=_SYSTEM, user=prompt, max_tokens=4096)
-            groups = _parse_response(response)
-            all_groups.extend(groups)
-        except Exception as e:
-            logger.error("LLM consolidation call failed: %s", e)
+            try:
+                response, _ = llm.complete(system=_SYSTEM, user=prompt, max_tokens=4096)
+                found.extend(_parse_response(response))
+            except Exception as e:
+                logger.error("LLM consolidation call failed: %s", e)
+        return [{"canonical": g.canonical, "aliases": list(g.aliases), "reason": g.reason} for g in found]
+
+    judged = judge_tag_consolidation(
+        tag_names,
+        legacy=llm_groups,
+        runtime=judgment_runtime,
+        canonical_rank={ts.tag: int(getattr(ts, "usage_count", 0) or 0) for ts in all_tags},
+        embed_fn=embed_fn,
+    )
+    all_groups = [
+        ConsolidationGroup(canonical=g["canonical"], aliases=list(g["aliases"]), reason=g.get("reason", ""))
+        for g in judged
+    ]
 
     if not all_groups:
         logger.info("No consolidation groups identified.")
