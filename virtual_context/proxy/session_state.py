@@ -219,6 +219,37 @@ class SessionStateProvider:
     def _tag_summary_embedding_snapshot_key(self, conversation_id: str) -> str:
         return f"vc:tag_summary_embeddings:{conversation_id}"
 
+    _RETRIEVAL_MEMO_TTL_SECONDS = 300
+
+    def _retrieval_memo_key(self, conversation_id: str, memo_key: str) -> str:
+        return f"vc:retrieval_memo:{conversation_id}:{memo_key}"
+
+    def load_retrieval_memo(self, conversation_id: str, memo_key: str) -> dict | None:
+        """Tagging and scoring results for one retrieval input, shared across workers."""
+        try:
+            raw = self._redis.get(self._retrieval_memo_key(conversation_id, memo_key))
+            if raw is None:
+                return None
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8")
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else None
+        except Exception:
+            logger.warning("Redis retrieval memo load failed for %s", conversation_id[:12], exc_info=True)
+            return None
+
+    def save_retrieval_memo(
+        self, conversation_id: str, memo_key: str, payload: dict, *, ttl_seconds: int | None = None,
+    ) -> None:
+        try:
+            self._redis.set(
+                self._retrieval_memo_key(conversation_id, memo_key),
+                json.dumps(payload, default=str).encode("utf-8"),
+                ex=ttl_seconds or self._RETRIEVAL_MEMO_TTL_SECONDS,
+            )
+        except Exception:
+            logger.warning("Redis retrieval memo save failed for %s", conversation_id[:12], exc_info=True)
+
     def _context_hint_cache_key(self, conversation_id: str, cache_key: str) -> str:
         return f"vc:context_hint:{conversation_id}:{cache_key}"
 

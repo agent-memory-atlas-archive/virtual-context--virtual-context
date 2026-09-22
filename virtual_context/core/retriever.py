@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
+import hashlib
+import json
 import re
 import time
 
@@ -18,6 +20,7 @@ from ..types import (
     SegmentMetadata,
     StoredSegment,
     StoredSummary,
+    TagResult,
 )
 
 from .tag_canonicalizer import flatten_alias_map
@@ -57,6 +60,27 @@ class ContextRetriever:
         self._query_embed_fn = query_embed_fn
         # Pre-compile heuristic patterns for embedding-based inbound tagger
         self._temporal_patterns = [re.compile(p, re.IGNORECASE) for p in DEFAULT_TEMPORAL_PATTERNS]
+
+    def _retrieval_memo_key(
+        self, lookup_text: str, message: str, active_tags, context_turns, post_compaction: bool, all_tags,
+    ) -> str:
+        """Fingerprint of everything inbound tagging and candidate scoring read."""
+        vocab = hashlib.sha256()
+        for ts in all_tags:
+            vocab.update(f"{ts.tag}\x1f{getattr(ts, 'usage_count', 0)}\x1e".encode("utf-8"))
+        scoring = self.config.scoring
+        payload = json.dumps({
+            "q": lookup_text,
+            "m": message,
+            "active": sorted(str(t) for t in (active_tags or [])),
+            "ctx": [str(t) for t in (context_turns or [])],
+            "post": bool(post_compaction),
+            "vocab": vocab.hexdigest(),
+            "skip_active": bool(self.config.skip_active_tags),
+            "ctx_turns": getattr(scoring, "embedding_context_turns", 0),
+            "ctx_guard": bool(getattr(scoring, "embedding_context_guard", True)),
+        }, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
     def _load_all_tags_snapshot(self) -> list:
         if self._session_state_provider is not None and self._conversation_id:
@@ -367,8 +391,34 @@ class ContextRetriever:
         all_tags = self._load_all_tags_snapshot()
         _note("load_all_tags", _load_tags_stage)
         store_tags = [ts.tag for ts in all_tags]
+        # Continuation calls of one turn resend the same request; the tagging
+        # and scoring they need is identical, so it is kept for a few minutes
+        # in shared state keyed by everything those stages read.
+        _memo: dict | None = None
+        _memo_key = ""
+        _provider = self._session_state_provider
+        if (
+            _provider is not None and self._conversation_id
+            and hasattr(_provider, "load_retrieval_memo")
+        ):
+            _memo_key = self._retrieval_memo_key(
+                lookup_text, message, active_tags, context_turns, post_compaction, all_tags,
+            )
+            _memo = _provider.load_retrieval_memo(self._conversation_id, _memo_key)
+            if _memo is not None and not isinstance(_memo.get("scores"), dict):
+                _memo = None
         _tag_stage = time.monotonic()
-        if self._inbound_tagger is not None:
+        if _memo is not None:
+            _tr = _memo.get("tag_result") or {}
+            tag_result = TagResult(
+                tags=list(_tr.get("tags") or []),
+                primary=str(_tr.get("primary") or "_general"),
+                source=str(_tr.get("source") or "fallback"),
+                temporal=bool(_tr.get("temporal")),
+                related_tags=list(_tr.get("related_tags") or []),
+                query_embedding=_tr.get("query_embedding"),
+            )
+        elif self._inbound_tagger is not None:
             # Embedding-based: match against existing vocabulary (no hallucination)
             # Store tags are conversation-scoped via get_all_tags().
             # TurnTagIndex is inherently per-conversation (loaded from that
@@ -398,6 +448,8 @@ class ContextRetriever:
         query_embedding = getattr(tag_result, 'query_embedding', None)
 
         retrieval_metadata: dict = {}
+        if _memo_key:
+            retrieval_metadata["memo"] = "hit" if _memo is not None else "miss"
         if query_text is not None:
             retrieval_metadata["query_context"] = "explicit"
         retrieval_scores: dict[str, float] = {}
@@ -517,12 +569,18 @@ class ContextRetriever:
         tag_stats = {ts.tag: ts.usage_count for ts in all_tags}
         _note("idf_prepare", _idf_stage)
         _score_stage = time.monotonic()
-        stored_embeddings = (
-            self._load_tag_summary_embedding_snapshot()
-            if query_embedding is not None else None
-        )
+        if _memo is not None:
+            scores = {str(k): float(v) for k, v in _memo["scores"].items()}
+            breakdowns = dict(_memo.get("breakdowns") or {})
+            logger.info(
+                "RETRIEVAL_MEMO hit conv=%s key=%s tags=%d",
+                (self._conversation_id or "")[:12], _memo_key[:12], len(scores),
+            )
+        stored_embeddings = None
         query_embedding_context = None
-        if query_embedding is not None:
+        if _memo is None and query_embedding is not None:
+            stored_embeddings = self._load_tag_summary_embedding_snapshot()
+        if _memo is None and query_embedding is not None:
             query_embedding_context, embed_mode, ctx_embed_ms = (
                 self._build_context_query_embedding(lookup_text, context_turns)
             )
@@ -541,20 +599,34 @@ class ContextRetriever:
             from ..types import StrategyConfig
             strategy = StrategyConfig()
 
-        scores, breakdowns = score_candidates(
-            query_tags=query_tags,
-            related_tags=related_query_tags,
-            query_text=lookup_text,
-            query_embedding=query_embedding,
-            store=self.store,
-            idf_weights=idf_weights,
-            conversation_id=self._conversation_id,
-            config=self.config.scoring,
-            tag_stats=tag_stats,
-            stored_embeddings=stored_embeddings,
-            query_embedding_context=query_embedding_context,
-            top_k=strategy.max_results,
-        )
+        if _memo is None:
+            scores, breakdowns = score_candidates(
+                query_tags=query_tags,
+                related_tags=related_query_tags,
+                query_text=lookup_text,
+                query_embedding=query_embedding,
+                store=self.store,
+                idf_weights=idf_weights,
+                conversation_id=self._conversation_id,
+                config=self.config.scoring,
+                tag_stats=tag_stats,
+                stored_embeddings=stored_embeddings,
+                query_embedding_context=query_embedding_context,
+                top_k=strategy.max_results,
+            )
+            if _memo_key and _provider is not None:
+                _provider.save_retrieval_memo(self._conversation_id, _memo_key, {
+                    "tag_result": {
+                        "tags": list(tag_result.tags), "primary": tag_result.primary,
+                        "source": tag_result.source, "temporal": bool(tag_result.temporal),
+                        "related_tags": list(tag_result.related_tags or []),
+                        "query_embedding": (
+                            [float(v) for v in query_embedding] if query_embedding is not None else None
+                        ),
+                    },
+                    "scores": {str(k): float(v) for k, v in scores.items()},
+                    "breakdowns": breakdowns,
+                })
         _note("score_candidates", _score_stage)
         # Alias groups compete as one topic: fold every aliased tag's score into
         # its canonical so max_results counts distinct topics, then keep the
