@@ -3215,9 +3215,19 @@ class OpenAIResponsesFormat(PayloadFormat):
 
     @staticmethod
     def _is_bare_item(item: dict) -> bool:
-        """Return True if the item is a bare function_call or function_call_output."""
+        """Return True for any item that is not a chat message.
+
+        Tool calls and outputs (function or custom), reasoning, tool search
+        items and the Codex tool catalog all ride in ``input`` without being
+        turns of the conversation.
+        """
         item_type = item.get("type", "")
-        return item_type in ("function_call", "function_call_output")
+        return bool(item_type) and item_type != "message"
+
+    # Tool schemas are counted from their JSON; the provider tokenizes a
+    # rendered form that is smaller by this factor (calibrated on Codex
+    # catalogs of ~157 KB against the provider's reported input tokens).
+    _CATALOG_SCALE = 0.75
 
     _HOST_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
     _HOST_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
@@ -3699,20 +3709,43 @@ class OpenAIResponsesFormat(PayloadFormat):
         return results
 
     def estimate_message_tokens(self, msg: dict) -> int:
-        """Responses: count semantic content rather than JSON wrapper scaffolding."""
+        """Responses: count semantic content rather than JSON wrapper scaffolding.
+
+        Every item type the Codex harness sends is counted: function and
+        custom tool calls (name plus arguments or input), their outputs, the
+        ``additional_tools`` catalog, tool search items, and reasoning
+        summaries. Encrypted reasoning content is opaque and not billed as
+        visible input, so it counts nothing.
+        """
         item_type = msg.get("type", "")
-        if item_type == "function_call":
+        if item_type in ("function_call", "custom_tool_call"):
             total = 0
             if isinstance(msg.get("name"), str):
                 total += self._count(msg["name"])
-            if isinstance(msg.get("arguments"), str):
-                total += self._count(msg["arguments"])
+            payload = msg.get("arguments") if item_type == "function_call" else msg.get("input")
+            if isinstance(payload, str):
+                total += self._count(payload)
+            elif payload is not None:
+                total += self._count(json.dumps(payload, default=str))
             return max(1, total)
-        if item_type == "function_call_output":
+        if item_type in ("function_call_output", "custom_tool_call_output"):
             output = msg.get("output", "")
             if isinstance(output, str):
                 return max(1, self._count(output))
             return max(1, self._count(json.dumps(output, default=str)))
+        if item_type == "additional_tools":
+            tools = msg.get("tools")
+            if not tools:
+                return 1
+            return max(1, int(self._count(json.dumps(tools, default=str)) * self._CATALOG_SCALE))
+        if item_type == "reasoning":
+            total = 0
+            for part in msg.get("summary") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    total += self._count(part["text"])
+            return max(1, total)
+        if item_type in ("tool_search_call", "tool_search_output"):
+            return max(1, self._count(json.dumps(msg, default=str)))
 
         content = msg.get("content", "")
         text_tokens = 0
@@ -3730,10 +3763,18 @@ class OpenAIResponsesFormat(PayloadFormat):
                         text_tokens += _estimate_media_tokens(media)
         return max(1, text_tokens)
 
+    def estimate_tools_tokens(self, body: dict) -> int:
+        tools = body.get("tools", [])
+        if not tools:
+            return 0
+        return max(1, int(self._count(json.dumps(tools, default=str)) * self._CATALOG_SCALE))
+
     def estimate_payload_tokens(self, body: dict) -> int:
         items = self.get_messages(body)
-        return self._estimate_system_tokens(body) + sum(
-            self.estimate_message_tokens(item) for item in items
+        return (
+            self._estimate_system_tokens(body)
+            + self.estimate_tools_tokens(body)
+            + sum(self.estimate_message_tokens(item) for item in items)
         )
 
     def estimate_payload_tokens_from_serialized(

@@ -1172,6 +1172,41 @@ class TestOpenAIResponsesFormat:
         tokens = self.fmt._estimate_system_tokens(body)
         assert tokens == 100  # 400 chars // 4
 
+    def test_estimate_counts_every_codex_item_type(self):
+        catalog = [{"type": "namespace", "name": "functions", "tools": [
+            {"name": "exec", "description": "d" * 100, "parameters": {"type": "object"}},
+        ]}]
+        body = {"input": [
+            {"type": "additional_tools", "role": "developer", "tools": catalog},
+            {"role": "user", "content": "hello"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "x" * 40}],
+             "encrypted_content": "Z" * 4000},
+            {"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": "y" * 80},
+            {"type": "custom_tool_call_output", "call_id": "c1", "output": "z" * 400},
+            {"type": "tool_search_call", "queries": ["q" * 40]},
+            {"type": "tool_search_output", "tools": ["t" * 40]},
+        ]}
+        per_item = [self.fmt.estimate_message_tokens(it) for it in body["input"]]
+        catalog_json_tokens = len(json.dumps(catalog)) // 4
+        assert per_item[0] == int(catalog_json_tokens * 0.75)
+        assert per_item[2] == 10                       # summary only, encrypted content free
+        assert per_item[3] == 1 + 20                   # name + input
+        assert per_item[4] == 100                      # output text
+        assert per_item[5] >= 10 and per_item[6] >= 10
+        assert self.fmt.estimate_payload_tokens(body) == sum(per_item)
+
+    def test_top_level_tools_are_scaled_like_the_catalog(self):
+        tools = [{"type": "function", "name": "vc_find_quote", "description": "d" * 200, "parameters": {}}]
+        body = {"input": [{"role": "user", "content": "hi"}], "tools": tools}
+        assert self.fmt.estimate_tools_tokens(body) == int((len(json.dumps(tools)) // 4) * 0.75)
+        assert self.fmt.estimate_payload_tokens(body) == self.fmt.estimate_tools_tokens(body) + 1
+
+    def test_bare_items_cover_custom_and_catalog_items(self):
+        for item_type in ("custom_tool_call", "custom_tool_call_output", "additional_tools", "reasoning", "tool_search_call"):
+            assert self.fmt._is_bare_item({"type": item_type}) is True
+        assert self.fmt._is_bare_item({"type": "message", "role": "user", "content": "x"}) is False
+        assert self.fmt._is_bare_item({"role": "user", "content": "x"}) is False
+
     def test_estimate_payload_tokens_with_bare_items(self):
         body = {"input": [
             {"role": "user", "content": "hello"},  # 5 chars -> 1 token
