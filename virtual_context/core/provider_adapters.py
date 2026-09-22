@@ -737,14 +737,9 @@ class OpenAICodexAdapter(ProviderAdapter):
                                 block["text"] = "[Previous reasoning compressed]"
 
     def inject_context(self, body, prepend_text):
-        new_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        instructions = body.get("instructions", "")
-        if isinstance(instructions, str) and _VC_BLOCK_RE.search(instructions):
-            body["instructions"] = _VC_BLOCK_RE.sub(lambda m: new_block, instructions, count=1)
-        elif isinstance(instructions, str):
-            body["instructions"] = (
-                f"{new_block}\n\n{instructions}" if instructions else new_block
-            )
+        from .responses_context import place_context_block
+
+        place_context_block(body, prepend_text)
 
     def strip_tools(self, body):
         body.pop("tools", None)

@@ -1825,7 +1825,13 @@ class TestPayloadStructureInvariants:
             ),
             (
                 OpenAICodexAdapter("k"),
-                lambda b: b.get("instructions", ""),
+                # The Responses block lives in a developer input item, after the
+                # instructions, so the request prefix stays cacheable.
+                lambda b: b.get("instructions", "") + "".join(
+                    part.get("text", "")
+                    for item in b.get("input", []) if item.get("role") == "developer"
+                    for part in item.get("content", []) if isinstance(part, dict)
+                ),
             ),
         ]
 

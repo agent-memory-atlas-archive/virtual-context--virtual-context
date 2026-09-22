@@ -3536,16 +3536,10 @@ class OpenAIResponsesFormat(PayloadFormat):
     def inject_context(self, body: dict, prepend_text: str) -> dict:
         if not prepend_text:
             return body
+        from ..core.responses_context import place_context_block
+
         body = copy.deepcopy(body)
-        context_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        instructions = body.get("instructions", "")
-        if isinstance(instructions, str):
-            cleaned = _VC_BLOCK_RE.sub("", instructions, count=1).strip()
-            body["instructions"] = (
-                f"{context_block}\n\n{cleaned}" if cleaned else context_block
-            )
-        else:
-            body["instructions"] = context_block
+        place_context_block(body, prepend_text)
         return body
 
     # -- Conversation markers --

@@ -844,7 +844,8 @@ class TestServerWrappers:
         from virtual_context.proxy.server import _inject_context
         body = {"instructions": "Be helpful.", "input": []}
         result = _inject_context(body, "context text", "openai_responses")
-        assert "<system-reminder>" in result["instructions"]
+        assert result["instructions"] == "Be helpful."
+        assert "<system-reminder>" in result["input"][0]["content"][0]["text"]
 
     def test_extract_conversation_id_responses(self):
         from virtual_context.proxy.server import _extract_conversation_id
@@ -1023,18 +1024,19 @@ class TestOpenAIResponsesFormat:
 
     # -- Context injection --
 
-    def test_inject_context_into_instructions(self):
+    def test_inject_context_leaves_instructions_as_sent(self):
         body = {"instructions": "Be helpful.", "input": []}
         result = self.fmt.inject_context(body, "topic summary")
-        assert "<system-reminder>" in result["instructions"]
-        assert "topic summary" in result["instructions"]
-        assert "Be helpful." in result["instructions"]
+        assert result["instructions"] == "Be helpful."
+        block = result["input"][0]
+        assert block["role"] == "developer" and "topic summary" in block["content"][0]["text"]
 
     def test_inject_context_no_instructions(self):
         body = {"input": [{"role": "user", "content": "hi"}]}
         result = self.fmt.inject_context(body, "ctx")
-        assert "<system-reminder>" in result["instructions"]
-        assert "ctx" in result["instructions"]
+        assert "instructions" not in result
+        assert result["input"][0]["role"] == "developer" and "ctx" in result["input"][0]["content"][0]["text"]
+        assert result["input"][1] == {"role": "user", "content": "hi"}
 
     def test_inject_context_empty_prepend(self):
         body = {"instructions": "original", "input": []}
@@ -1044,8 +1046,8 @@ class TestOpenAIResponsesFormat:
     def test_inject_context_does_not_mutate(self):
         body = {"instructions": "original", "input": [{"role": "user", "content": "hi"}]}
         result = self.fmt.inject_context(body, "ctx")
-        assert body["instructions"] == "original"
-        assert result["instructions"] != "original"
+        assert body == {"instructions": "original", "input": [{"role": "user", "content": "hi"}]}
+        assert len(result["input"]) == 2
 
     # -- Session markers --
 

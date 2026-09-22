@@ -468,6 +468,19 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-027 — VC context at the start of Responses requests defeated prompt caching
+
+- **Symptom**: Routed Codex-harness calls reported `cached_tokens: 0` on every call although the
+  host's 67K of developer prompts and tool catalog were identical call to call.
+- **Root cause**: the Responses injection put VC's context block at the head of `instructions`,
+  the first thing the provider reads, and the block changes between calls (the context hint's topic
+  order shifted within one tool loop), so no two requests shared a prefix.
+- **Fix**: `core/responses_context.place_context_block` (used by the proxy format and the tool-loop
+  adapter) inserts the block as a developer input item after the leading instruction items and before
+  the conversation, replacing any earlier block and moving one found in `instructions`.
+- **Tests**:
+  - `test_responses_context_placement.py`
+
 ### PROXY-026 — Host-embedded history replay was never trimmed; compacted-turn drop removed instructions
 
 - **Symptom**: A Codex-harness host payload of ~171K tokens against a 90,000-token window left VC
@@ -723,6 +736,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_responses_context_placement.py` | PROXY-027 |
 | `test_host_replay_expansion.py` | PROXY-026 |
 | `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |
