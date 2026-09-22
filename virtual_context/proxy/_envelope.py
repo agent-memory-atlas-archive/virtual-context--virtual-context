@@ -18,6 +18,21 @@ _VC_PROMPT_MARKER = "[vc:prompt]\n"
 # A chat host may replay its own transcript into the user turn inside this
 # block; it is the host's rendering of history, never the user's words.
 _HOST_REPLAY_RE = re.compile(r"<conversation_context>[\s\S]*?</conversation_context>")
+
+# The Codex-harness prompt: host context sections tagged ``⟦openclaw:ctx⟧``
+# (metadata as fenced JSON, replayed chat lines, assembled context, workspace
+# files) followed by the requester's words after the last request label.
+_HOST_REQUEST_LABEL = "Current user request:"
+_HOST_ASSEMBLED_LABEL = "OpenClaw assembled context for this turn:"
+_HOST_RUNTIME_LABEL = "OpenClaw runtime context for this turn:"
+_HOST_CTX_TAG = "⟦openclaw:ctx⟧"
+_HOST_CTX_JSON_BLOCK_RE = re.compile(
+    r"(?:^|\n)[ \t]*([A-Z][^\n:⟦]{0,80}):\s*⟦openclaw:ctx⟧[ \t]*\n"
+    r"```(?:json)?\s*\n"
+    r"(\{[^`]*?\}|\[[^`]*?\])\s*\n"
+    r"```",
+    re.DOTALL,
+)
 # MemOS preamble: starts with "# Role", ends with this delimiter line (zero-width spaces)
 _MEMOS_QUERY_DELIM = "user\u200b原\u200b始\u200bquery\u200b：\u200b\u200b\u200b\u200b"
 
@@ -263,6 +278,8 @@ def _extract_envelope_metadata(text: str) -> tuple[str, dict]:
     if "<conversation_context>" in text:
         # Only the block goes; the whitespace around it is the text's own.
         text = _HOST_REPLAY_RE.sub("", text).lstrip()
+    if _HOST_REQUEST_LABEL in text and _is_host_carried_prompt(text):
+        text = _split_host_request(text, metadata)
 
     # Strip MemOS preamble
     if text.startswith("# Role"):
@@ -389,6 +406,43 @@ def extract_timestamp_from_metadata(metadata: dict | None) -> "datetime | None":
     if ts_str:
         return parse_envelope_timestamp(ts_str)
     return None
+
+
+def _is_host_carried_prompt(text: str) -> bool:
+    """Only a host-built prompt splits on the request label; prose keeps it."""
+    return (
+        _HOST_ASSEMBLED_LABEL in text
+        or _HOST_CTX_TAG in text
+        or text.lstrip().startswith(_HOST_RUNTIME_LABEL)
+    )
+
+
+def _split_host_request(text: str, metadata: dict) -> str:
+    """Keep only the requester's words of a Codex-harness prompt.
+
+    Everything before the last request label is host context: the
+    ``⟦openclaw:ctx⟧`` metadata blocks are parsed into ``metadata`` (they
+    carry the sender, chat and timestamp the same way the labeled fenced
+    blocks do), and the replayed chat lines, assembled context and workspace
+    files are dropped. Nested labels come from the host wrapping its own
+    assembled context in the request slot, so the last label wins.
+    """
+    head, _, request = text.rpartition(_HOST_REQUEST_LABEL)
+    for m in _HOST_CTX_JSON_BLOCK_RE.finditer(head):
+        label = m.group(1).strip().lower()
+        try:
+            parsed = json.loads(m.group(2))
+        except (json.JSONDecodeError, ValueError):
+            _claim_reply_subject(metadata, label, None, edge="leading")
+            continue
+        if isinstance(parsed, (dict, list)):
+            metadata[label] = parsed
+            _claim_actor_identity(metadata, label, parsed)
+            _claim_current_conversation(metadata, label, parsed)
+            _claim_reply_subject(metadata, label, parsed, edge="leading")
+        else:
+            _claim_reply_subject(metadata, label, None, edge="leading")
+    return request.strip()
 
 
 def _strip_envelope(text: str) -> str:
