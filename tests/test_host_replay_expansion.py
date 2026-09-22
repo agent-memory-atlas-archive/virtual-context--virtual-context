@@ -151,11 +151,14 @@ def test_turn_filter_keeps_the_leading_instruction_block():
         _dev("<openclaw_source_delivery>policy</openclaw_source_delivery>"),
         _dev("<openclaw_temporal_context>## Temporal Context</openclaw_temporal_context>"),
     ]
-    body, _ = expand_host_replay({"model": "m", "input": head + [_user(PROMPT)]})
+    many = "".join(f"[user]\nquestion {i}\n\n[assistant]\nanswer {i}\n\n" for i in range(12))
+    prompt = PROMPT.replace("<conversation_context>", "<conversation_context>\n" + many, 1)
+    body, _ = expand_host_replay({"model": "m", "input": head + [_user(prompt)]})
     index = TurnTagIndex()
     for t in range(50):
         index.append(TurnTagEntry(turn_number=t, message_hash=f"h{t}", tags=["x"], primary_tag="x",
                                   timestamp=datetime.datetime.now()))
-    out, _ = filter_body_messages(body, index, ["y"], recent_turns=1, compacted_turn=1000, fmt=fmt)
+    out, dropped = filter_body_messages(body, index, ["y"], recent_turns=1, compacted_turn=1000, fmt=fmt)
+    assert dropped >= 10
     assert out["input"][:7] == head
     assert _text(out["input"][-1]).endswith("What did you find about the camera?")

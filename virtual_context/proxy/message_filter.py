@@ -718,15 +718,19 @@ def filter_body_messages(
     # UNLESS the message contains a tool_use/tool_result that is part of a kept
     # referential pair — dropping it would orphan the partner.
     # Note: bare items (no role, e.g. function_call in Responses API) are always kept.
-    alternating: list[dict] = []
-    _alt_critical: list[bool] = []  # parallel list tracking criticality
+    # The leading instruction block is not conversation: it passes through
+    # as-is and alternation starts at the first chat message.
+    alternating: list[dict] = list(kept[:_prefix_len])
+    _alt_critical: list[bool] = [False] * len(alternating)
     for kept_i, msg in enumerate(kept):
+        if kept_i < _prefix_len:
+            continue
         role = msg.get("role")
         if role is None:
             alternating.append(msg)
             _alt_critical.append(kept_i in _critical_kept)
             continue
-        if alternating and role == alternating[-1].get("role"):
+        if len(alternating) > _prefix_len and role == alternating[-1].get("role"):
             if kept_i in _critical_kept:
                 # This message has a tool_use/tool_result partner that's also
                 # kept — dropping it would create an orphan.  Instead, drop
