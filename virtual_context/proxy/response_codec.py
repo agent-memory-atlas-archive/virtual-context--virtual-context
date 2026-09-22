@@ -24,11 +24,39 @@ def _describe(response, size, head):
     )
 
 
-async def _bounded_lines(response):
+_SSE_FIELD_PREFIXES = (b"event:", b"data:", b"id:", b"retry:", b":")
+
+
+async def _peek(chunks, minimum=8):
+    """Return the first bytes of an async byte stream and a stream that replays them."""
+    head = b""
+    async for chunk in chunks:
+        head += chunk
+        if len(head) >= minimum:
+            break
+
+    async def replay():
+        if head:
+            yield head
+        async for chunk in chunks:
+            yield chunk
+
+    return head, replay()
+
+
+def _looks_like_sse(content_type, head):
+    if "text/event-stream" in content_type:
+        return True
+    # Some upstreams stream SSE without declaring a content type at all; the
+    # body itself is unambiguous.
+    return not content_type and head.lstrip().startswith(_SSE_FIELD_PREFIXES)
+
+
+async def _bounded_lines(chunks):
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     buffer = ""
     size = 0
-    async for chunk in response.aiter_bytes():
+    async for chunk in chunks:
         size += len(chunk)
         if size > MAX_RESPONSE_BYTES:
             raise ContinuationError("The provider response exceeded the collection limit.")
@@ -43,9 +71,11 @@ async def _bounded_lines(response):
 
 async def collect_response(response, api_format):
     try:
-        if "text/event-stream" not in response.headers.get("content-type", ""):
+        content_type = response.headers.get("content-type", "") or ""
+        head, body = await _peek(response.aiter_bytes())
+        if not _looks_like_sse(content_type, head):
             chunks, size = [], 0
-            async for chunk in response.aiter_bytes():
+            async for chunk in body:
                 size += len(chunk)
                 if size > MAX_RESPONSE_BYTES:
                     raise ContinuationError("The provider response exceeded the collection limit.")
@@ -63,7 +93,7 @@ async def collect_response(response, api_format):
         size = 0
         terminal = False
         tail = deque(maxlen=3)
-        async for line in _bounded_lines(response):
+        async for line in _bounded_lines(body):
             size += len(line.encode("utf-8")) + 1
             tail.append(line[:200])
             if size > MAX_RESPONSE_BYTES:
@@ -103,7 +133,7 @@ async def collect_response(response, api_format):
                 elif kind == "message_stop":
                     terminal = True
             elif api_format == "openai_responses":
-                if kind == "response.completed":
+                if kind in ("response.completed", "response.done"):
                     result = event["response"]
                     terminal = True
                 elif kind in ("response.failed", "response.incomplete"):
