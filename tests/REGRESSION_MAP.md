@@ -468,6 +468,19 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-030 — Requests rebuilt the context hint inline after every compaction
+
+- **Symptom**: A routed request spent 2.6s rendering the context hint (`cache_layer=both_miss`,
+  `get_all_tag_summaries_ms=1830`) although the post-compaction prewarm had already rendered it for the
+  same compaction state an hour earlier.
+- **Root cause**: the hint cache key included `flushed_prefix_messages`, a per-session payload
+  watermark that lags while a warm prompt cache is held (the request had 3,188, the prewarm 6,951), so
+  the request key never matched the prewarmed key; and on a miss the request always rendered inline.
+- **Fix**: the key covers only what the hint depends on; on a miss the request serves the latest hint
+  for the same conversation generation and paging mode, and renders inline only when none exists.
+- **Tests**:
+  - `test_context_hint_no_inline_rebuild.py`
+
 ### PROXY-029 — Last-resort budget enforcement truncated the biggest items, not the oldest
 
 - **Symptom**: Over budget, `enforce_payload_budget` cut replies inside the protected recent turns
@@ -765,6 +778,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_context_hint_no_inline_rebuild.py` | PROXY-030 |
 | `test_budget_enforcement_order.py` | PROXY-029 |
 | `test_current_attachments_preserved.py` | PROXY-028 |
 | `test_context_cache_prefix.py` | PROXY-027 |

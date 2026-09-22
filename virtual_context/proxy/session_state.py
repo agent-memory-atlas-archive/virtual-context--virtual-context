@@ -1173,6 +1173,37 @@ class SessionStateProvider:
                 exc_info=True,
             )
 
+    def _latest_context_hint_key(self, conversation_id: str) -> str:
+        return f"vc:context_hint_latest:{conversation_id}"
+
+    def save_latest_context_hint(
+        self, conversation_id: str, generation: int, paging_mode: str, hint: str,
+    ) -> None:
+        """Remember the most recent rendered hint, whatever compaction state it was built for."""
+        try:
+            self._redis.set(
+                self._latest_context_hint_key(conversation_id),
+                json.dumps({"generation": int(generation), "mode": paging_mode, "hint": hint}).encode("utf-8"),
+                ex=self._CONTEXT_HINT_CACHE_TTL_SECONDS,
+            )
+        except Exception:
+            logger.warning("Redis latest context-hint save failed for %s", conversation_id[:12], exc_info=True)
+
+    def load_latest_context_hint(self, conversation_id: str, generation: int, paging_mode: str) -> str | None:
+        """The most recent hint, only if it belongs to this conversation generation and mode."""
+        try:
+            raw = self._redis.get(self._latest_context_hint_key(conversation_id))
+            if raw is None:
+                return None
+            data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            if int(data.get("generation", -1)) != int(generation) or data.get("mode") != paging_mode:
+                return None
+            hint = data.get("hint")
+            return hint if isinstance(hint, str) and hint else None
+        except Exception:
+            logger.warning("Redis latest context-hint load failed for %s", conversation_id[:12], exc_info=True)
+            return None
+
     def publish_tombstone(self, conversation_id: str) -> None:
         """Publish the Redis deletion fence without touching PostgreSQL.
 

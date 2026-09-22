@@ -910,8 +910,11 @@ class RetrievalAssembler:
         ]
         payload = {
             "mode": paging_mode or "default",
+            # Only what the rendered hint depends on. The flushed watermark is
+            # per-session payload state (it lags while a warm prompt cache is
+            # held), so including it made request-time keys never match the
+            # key the post-compaction prewarm wrote.
             "compacted_prefix_messages": self._engine_state.compacted_prefix_messages,
-            "flushed_prefix_messages": self._engine_state.flushed_prefix_messages,
             "last_compacted_turn": self._engine_state.last_compacted_turn,
             "generation": self._engine_state.conversation_generation,
             "context_hint_max_tokens": self.config.assembler.context_hint_max_tokens,
@@ -1011,6 +1014,28 @@ class RetrievalAssembler:
                     instrumentation["load_context_hint_cache_ms"] = _cache_load_ms
                 return cached
 
+        # No hint for the current compaction state yet: the request proceeds
+        # with the hint built from the earlier compaction, and the
+        # post-compaction prewarm replaces it. Only a conversation that has
+        # never had a hint for this generation renders one inline.
+        _load_latest = getattr(self._session_state_provider, "load_latest_context_hint", None)
+        if (
+            not force_rebuild
+            and callable(_load_latest)
+            and self.config.conversation_id
+            and not self._paging.working_set
+        ):
+            latest = _load_latest(
+                self.config.conversation_id,
+                int(getattr(self._engine_state, "conversation_generation", 0) or 0),
+                paging_mode or "default",
+            )
+            if latest is not None:
+                if instrumentation is not None:
+                    instrumentation["paging_mode"] = paging_mode or "default"
+                    instrumentation["cache_layer"] = "latest_fallback"
+                return latest
+
         if instrumentation is not None:
             instrumentation["paging_mode"] = paging_mode or "default"
             instrumentation["compacted_prefix"] = int(
@@ -1085,6 +1110,14 @@ class RetrievalAssembler:
                     cache_key,
                     hint,
                 )
+                _save_latest = getattr(self._session_state_provider, "save_latest_context_hint", None)
+                if callable(_save_latest) and not self._paging.working_set:
+                    _save_latest(
+                        self.config.conversation_id,
+                        int(getattr(self._engine_state, "conversation_generation", 0) or 0),
+                        paging_mode or "default",
+                        hint,
+                    )
                 if instrumentation is not None:
                     instrumentation["save_context_hint_cache_ms"] = round(
                         (time.monotonic() - _t_cache_save) * 1000, 1
