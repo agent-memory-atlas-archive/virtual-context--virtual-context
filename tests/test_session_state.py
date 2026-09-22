@@ -735,3 +735,18 @@ class TestSharedLastRequestTime:
         p.note_request_time("conv", 1790000000.25)
         assert p.load_request_time("conv") == 1790000000.25
         assert 0 < p._redis.ttl(p._last_request_key("conv")) <= 24 * 60 * 60
+
+    def test_marker_does_not_share_the_dashboard_request_record_key(self):
+        from virtual_context.proxy.session_state import SessionStateProvider
+        p = SessionStateProvider(fakeredis.FakeRedis(decode_responses=False))
+        p._redis.set(b"vc:last_request:conv", json.dumps({"type": "request", "turn": 1}).encode(), ex=600)
+        p.note_request_time("conv", 1790000000.5)
+        assert p._last_request_key("conv") != "vc:last_request:conv"
+        assert p.load_request_time("conv") == 1790000000.5
+        assert json.loads(p._redis.get(b"vc:last_request:conv"))["type"] == "request"
+
+    def test_non_numeric_marker_reads_as_unknown(self):
+        from virtual_context.proxy.session_state import SessionStateProvider
+        p = SessionStateProvider(fakeredis.FakeRedis(decode_responses=False))
+        p._redis.set(p._last_request_key("conv"), b'{"type": "request"}')
+        assert p.load_request_time("conv") == 0.0

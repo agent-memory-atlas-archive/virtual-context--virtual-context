@@ -223,7 +223,8 @@ class SessionStateProvider:
     _LAST_REQUEST_TTL_SECONDS = 24 * 60 * 60
 
     def _last_request_key(self, conversation_id: str) -> str:
-        return f"vc:last_request:{conversation_id}"
+        # Own namespace: ``vc:last_request:`` is taken by the dashboard's request event record.
+        return f"vc:upstream_request_at:{conversation_id}"
 
     def note_request_time(self, conversation_id: str, when: float) -> None:
         """Record when a conversation last went upstream, for every worker."""
@@ -244,7 +245,11 @@ class SessionStateProvider:
                 return 0.0
             if isinstance(raw, (bytes, bytearray)):
                 raw = raw.decode("utf-8")
-            return float(raw)
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                logger.warning("Redis last-request marker for %s is not a timestamp; treating as unknown", conversation_id[:12])
+                return 0.0
         except Exception:
             logger.warning("Redis last-request load failed for %s", conversation_id[:12], exc_info=True)
             return 0.0
