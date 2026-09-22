@@ -477,10 +477,12 @@ Use `pytest -m regression` to run all regression tests.
 - **Root cause**: the replay block lives inside the current user message, so every filter treated it
   as the protected current turn. Separately, `drop_compacted_turns` dropped any turn group outside
   the protected window, including groups holding only developer messages or the `additional_tools`
-  catalog item.
+  catalog item; and because the Codex harness groups its catalog, instructions and scaffolding
+  user items into the first turn, dropping that turn removed all of them (outbound 7,185 tokens,
+  the model ran without its instructions or tools).
 - **Fix**: `proxy/host_replay.expand_host_replay` splits the newest user message's replay block into
   ordinary user/assistant items before filtering (after ingestion and the completion snapshot, so
-  nothing is stored twice). `drop_compacted_turns` skips groups without a user or assistant message.
+  nothing is stored twice). `drop_compacted_turns` removes only conversation items from a dropped turn; developer and system items, non-message items and host scaffolding user items stay.
 - **Tests**:
   - `test_host_replay_expansion.py` (block parsing, expansion shape, no-op, input not mutated,
     expanded history shrunk by the drop, instructions and catalogs kept)

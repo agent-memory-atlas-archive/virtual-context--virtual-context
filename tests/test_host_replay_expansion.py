@@ -105,3 +105,32 @@ def test_compacted_turn_drop_never_removes_instructions_or_tool_catalogs():
     kinds = [i.get("role") or i.get("type") for i in out["input"]]
     assert dropped == 1
     assert kinds == ["developer", "additional_tools", "user", "assistant", "user"]
+
+
+def _dev(text):
+    return {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": text}]}
+
+
+@pytest.mark.regression("PROXY-026")
+def test_codex_harness_shape_keeps_instructions_catalog_and_scaffolding_after_shrink():
+    """The item order the Codex harness sends: catalog, instructions, scaffolding, then the prompt."""
+    fmt = get_format("openai_responses")
+    body = {"model": "m", "input": [
+        {"type": "additional_tools", "role": "developer", "tools": [{"name": "exec"}]},
+        _dev("You are Codex, an agent based on GPT-5."),
+        _dev("You are a personal agent running inside OpenClaw."),
+        _user("<environment_context>\n  <current_date>2026-09-22</current_date>\n</environment_context>"),
+        _user('<external_openclaw_current_sender>{"sender":{"id":"1"}}</external_openclaw_current_sender>'),
+        _dev("<openclaw_source_delivery>policy</openclaw_source_delivery>"),
+        _dev("<openclaw_temporal_context>## Temporal Context</openclaw_temporal_context>"),
+        _user(PROMPT),
+    ]}
+    expanded, n = expand_host_replay(body)
+    expanded_count = len(expanded["input"])
+    out, dropped = drop_compacted_turns(expanded, TurnTagIndex(), 1000, fmt=fmt, protected_recent_turns=1)
+    kept = out["input"]
+    kinds = [(i.get("type"), i.get("role")) for i in kept]
+    assert kinds[:7] == [(i.get("type"), i.get("role")) for i in body["input"][:7]]
+    assert [_text(i)[:20] for i in kept[3:5]] == ["<environment_context", "<external_openclaw_c"]
+    assert dropped >= 1 and len(kept) < expanded_count
+    assert _text(kept[-1]).endswith("What did you find about the camera?")

@@ -994,6 +994,18 @@ def stub_compacted_messages(
 _CONVERSATION_ROLES = frozenset({"user", "human", "assistant", "model"})
 
 
+def _is_droppable_history_item(messages: list, index: int, fmt: PayloadFormat) -> bool:
+    if not 0 <= index < len(messages):
+        return False
+    item = messages[index]
+    if not isinstance(item, dict) or item.get("role") not in _CONVERSATION_ROLES:
+        return False
+    if item.get("type", "message") != "message":
+        return False
+    is_host_context = getattr(fmt, "_is_host_context_item", None)
+    return not (callable(is_host_context) and is_host_context(item))
+
+
 def drop_compacted_turns(
     body: dict,
     turn_tag_index: TurnTagIndex,
@@ -1066,15 +1078,12 @@ def drop_compacted_turns(
         turn = history_turns[tidx]
         if turn.has_tool_activity:
             continue  # chain collapse handles these
-        if not any(
-            isinstance(messages[gi], dict)
-            and messages[gi].get("role") in _CONVERSATION_ROLES
-            for gi in turn.indices
-            if 0 <= gi < len(messages)
-        ):
-            continue  # instructions and tool catalogs are not history
-        for gi in turn.indices:
-            drop_indices.add(gi)
+        # Only conversation items are history. Instructions, tool catalogs and
+        # host scaffolding grouped into the same turn stay in the payload.
+        droppable = [gi for gi in turn.indices if _is_droppable_history_item(messages, gi, fmt)]
+        if not droppable:
+            continue
+        drop_indices.update(droppable)
         drop_count += 1
 
     if not drop_indices:
