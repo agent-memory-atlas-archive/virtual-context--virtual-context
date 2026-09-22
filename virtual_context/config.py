@@ -460,6 +460,7 @@ def _build_config(raw: dict[str, Any], *, validate: bool = True) -> VirtualConte
         ),
         request_log_max_files=proxy_raw.get("request_log_max_files", _prx_defaults.request_log_max_files),
         upstream_context_limit=proxy_raw.get("upstream_context_limit", _prx_defaults.upstream_context_limit),
+        outbound_context_budget=int(proxy_raw.get("outbound_context_budget", _prx_defaults.outbound_context_budget) or 0),
         passthrough_trim_ratio=proxy_raw.get("passthrough_trim_ratio", _prx_defaults.passthrough_trim_ratio),
         llm_calls_log=proxy_raw.get("llm_calls_log", _prx_defaults.llm_calls_log),
         history_widening_threshold=proxy_raw.get("history_widening_threshold", _prx_defaults.history_widening_threshold),

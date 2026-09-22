@@ -3115,6 +3115,11 @@ class ProxyConfig:
     request_log_max_files: int = 50
     llm_calls_log: str = ""  # path for JSONL log of all LLM calls (tagger, compactor, etc.)
     upstream_context_limit: int = 0  # 0 = auto-detect from model name
+    # The proxy's own ceiling on what leaves for the model, in tokens. The
+    # model window only says what the provider accepts; this says what the
+    # conversation is allowed to cost. Oldest turn groups are dropped until
+    # the payload fits (system prefix, tools and the newest groups are kept).
+    outbound_context_budget: int = 0  # 0 = no ceiling beyond the model window
     history_widening_threshold: float = 0.10  # 10% growth + prefix change triggers re-ingest
     passthrough_trim_ratio: float = 0.40  # trim passthrough payloads to upstream_limit * ratio (0=no trim)
     redis_url: str = ""           # empty = disabled, e.g. "redis://127.0.0.1:6379"
