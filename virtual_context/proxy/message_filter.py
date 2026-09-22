@@ -991,6 +991,9 @@ def stub_compacted_messages(
     return new_body, stub_count
 
 
+_CONVERSATION_ROLES = frozenset({"user", "human", "assistant", "model"})
+
+
 def drop_compacted_turns(
     body: dict,
     turn_tag_index: TurnTagIndex,
@@ -1063,6 +1066,13 @@ def drop_compacted_turns(
         turn = history_turns[tidx]
         if turn.has_tool_activity:
             continue  # chain collapse handles these
+        if not any(
+            isinstance(messages[gi], dict)
+            and messages[gi].get("role") in _CONVERSATION_ROLES
+            for gi in turn.indices
+            if 0 <= gi < len(messages)
+        ):
+            continue  # instructions and tool catalogs are not history
         for gi in turn.indices:
             drop_indices.add(gi)
         drop_count += 1
