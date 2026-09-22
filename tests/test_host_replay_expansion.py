@@ -134,3 +134,28 @@ def test_codex_harness_shape_keeps_instructions_catalog_and_scaffolding_after_sh
     assert [_text(i)[:20] for i in kept[3:5]] == ["<environment_context", "<external_openclaw_c"]
     assert dropped >= 1 and len(kept) < expanded_count
     assert _text(kept[-1]).endswith("What did you find about the camera?")
+
+
+@pytest.mark.regression("PROXY-026")
+def test_turn_filter_keeps_the_leading_instruction_block():
+    import datetime
+    from virtual_context.proxy.message_filter import filter_body_messages
+    from virtual_context.types import TurnTagEntry
+    fmt = get_format("openai_responses")
+    head = [
+        {"type": "additional_tools", "role": "developer", "tools": [{"name": "exec"}]},
+        _dev("You are Codex, an agent based on GPT-5."),
+        _dev("You are a personal agent running inside OpenClaw."),
+        _user("<environment_context>\n  <current_date>2026-09-22</current_date>\n</environment_context>"),
+        _user('<external_openclaw_current_sender>{"sender":{"id":"1"}}</external_openclaw_current_sender>'),
+        _dev("<openclaw_source_delivery>policy</openclaw_source_delivery>"),
+        _dev("<openclaw_temporal_context>## Temporal Context</openclaw_temporal_context>"),
+    ]
+    body, _ = expand_host_replay({"model": "m", "input": head + [_user(PROMPT)]})
+    index = TurnTagIndex()
+    for t in range(50):
+        index.append(TurnTagEntry(turn_number=t, message_hash=f"h{t}", tags=["x"], primary_tag="x",
+                                  timestamp=datetime.datetime.now()))
+    out, _ = filter_body_messages(body, index, ["y"], recent_turns=1, compacted_turn=1000, fmt=fmt)
+    assert out["input"][:7] == head
+    assert _text(out["input"][-1]).endswith("What did you find about the camera?")

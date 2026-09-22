@@ -482,7 +482,7 @@ Use `pytest -m regression` to run all regression tests.
   the model ran without its instructions or tools).
 - **Fix**: `proxy/host_replay.expand_host_replay` splits the newest user message's replay block into
   ordinary user/assistant items before filtering (after ingestion and the completion snapshot, so
-  nothing is stored twice). `drop_compacted_turns` removes only conversation items from a dropped turn; developer and system items, non-message items and host scaffolding user items stay.
+  nothing is stored twice). `drop_compacted_turns` removes only conversation items from a dropped turn; developer and system items, non-message items and host scaffolding user items stay. `filter_body_messages` treats the leading block of system/developer messages, non-message items and host scaffolding as instructions, so role-alternation enforcement can no longer collapse consecutive developer prompts.
 - **Tests**:
   - `test_host_replay_expansion.py` (block parsing, expansion shape, no-op, input not mutated,
     expanded history shrunk by the drop, instructions and catalogs kept)

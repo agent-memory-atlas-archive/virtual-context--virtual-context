@@ -339,6 +339,17 @@ def _chain_has_tool_activity(messages: list[dict], indices: tuple[int, ...] | ra
     return False
 
 
+def _is_leading_instruction_item(msg: dict, fmt: PayloadFormat | None) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("role") in ("system", "developer"):
+        return True
+    if msg.get("type", "message") != "message":
+        return not str(msg.get("type", "")).endswith(("_call", "_output"))
+    is_host_context = getattr(fmt, "_is_host_context_item", None)
+    return bool(callable(is_host_context) and is_host_context(msg))
+
+
 def filter_body_messages(
     body: dict,
     turn_tag_index: TurnTagIndex,
@@ -391,12 +402,14 @@ def filter_body_messages(
         elif pre_compaction_mode == "conservative":
             recent_turns = recent_turns * 2
 
-    # Separate system messages (OpenAI format) and chat messages
+    # Separate the leading instruction block from chat messages. Before the
+    # first conversation message, system and developer messages, non-message
+    # items (a Responses tool catalog) and host scaffolding are instructions,
+    # not turns, and must never be filtered or collapsed.
     prefix: list[dict] = []
     chat_msgs: list[dict] = []
     for msg in messages:
-        role = msg.get("role")
-        if role == "system" and not chat_msgs:
+        if not chat_msgs and _is_leading_instruction_item(msg, fmt):
             prefix.append(msg)
         else:
             chat_msgs.append(msg)
