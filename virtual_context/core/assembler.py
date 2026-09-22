@@ -1289,6 +1289,7 @@ class ContextAssembler:
                     seen_render_requests.add(key)
                     render_requests.append((item, render_depth))
 
+        _stage = time.monotonic()
         rendered_values = render_summary_items_for_model(
             render_requests,
             store=getattr(self, "_store", None),
@@ -1296,6 +1297,7 @@ class ContextAssembler:
             speaker_context=roster_context or speaker_context,
             judgment_runtime=self.judgment_runtime,
         )
+        _note("render_summaries", _stage)
         rendered_by_depth: dict[str, dict[int, str]] = {}
         for (item, render_depth), rendered in zip(
             render_requests, rendered_values, strict=True,
@@ -1343,6 +1345,7 @@ class ContextAssembler:
                             (fallback_item, "summary"),
                         )
         if late_render_requests:
+            _stage = time.monotonic()
             late_rendered = render_summary_items_for_model(
                 late_render_requests,
                 store=getattr(self, "_store", None),
@@ -1350,6 +1353,7 @@ class ContextAssembler:
                 speaker_context=roster_context or speaker_context,
                 judgment_runtime=self.judgment_runtime,
             )
+            _note("render_summaries_late", _stage)
             for (item, render_depth), rendered in zip(
                 late_render_requests, late_rendered, strict=True,
             ):
@@ -1943,6 +1947,9 @@ class ContextAssembler:
                 reverse=True,
             )[:_ASSEMBLE_BREAKDOWN_MAX_STAGES]
             stage_bits = [f"{stage}={ms:.1f}ms" for stage, ms in stages]
+            stage_bits.append(
+                f"unaccounted={total_ms - sum(_breakdown.values()):.1f}ms"
+            )
             logger.info(
                 "ASSEMBLE_BREAKDOWN tags=%d tag_tokens=%d tag_budget=%d over_budget=%d facts=%d history=%d total=%sms %s",
                 len(tag_sections),

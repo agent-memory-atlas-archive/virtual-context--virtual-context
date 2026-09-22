@@ -1077,12 +1077,16 @@ class IngestReconciler:
     ) -> CanonicalIngestResult:
         from ..proxy.formats import extract_ingestible_messages
 
+        _timings: dict[str, float] = {}
+        _t_stage = time.perf_counter()
         entries, _stats = extract_ingestible_messages(
             body,
             fmt,
             mode="ingest",
             current_user_metadata=current_user_metadata,
         )
+        _timings["extract_ms"] = (time.perf_counter() - _t_stage) * 1000.0
+        _t_stage = time.perf_counter()
         active_user = next(
             (message for message in reversed(entries) if message.role == "user"),
             None,
@@ -1186,6 +1190,7 @@ class IngestReconciler:
         # user message is a write candidate.  The rest of the OpenClaw window
         # remains available to payload preparation but cannot create or modify
         # canonical history without its own transport source claim.
+        _timings["prepare_rows_ms"] = (time.perf_counter() - _t_stage) * 1000.0
         profile_pairs = list(zip(entries, prepared, strict=True))
         if source_attestation_required:
             profile_pairs = [
@@ -1202,13 +1207,17 @@ class IngestReconciler:
         # Resolution runs after every write-eligible physical row in this batch is prepared,
         # so a reply to a message that arrived in the SAME payload can still
         # link by its source id.
+        _t_stage = time.perf_counter()
         self._resolve_reply_subjects(conversation_id, prepared)
+        _timings["reply_subjects_ms"] = (time.perf_counter() - _t_stage) * 1000.0
         result = self.ingest_prepared_turns(
             conversation_id,
             prepared_turns=prepared,
             raw_turn_count=len(prepared),
             expected_lifecycle_epoch=expected_lifecycle_epoch,
+            phase_timings=_timings,
         )
+        _t_stage = time.perf_counter()
         # A profile is an observation cache, not a side effect of filling an
         # empty canonical column. Repeat sightings must still advance
         # last_seen_at and may refresh the presentation name, including exact
@@ -1236,6 +1245,12 @@ class IngestReconciler:
                         "ACTOR_PROFILE_UPSERT_FAILED: conv=%s actor=%s",
                         conversation_id[:12], actor_id[:24], exc_info=True,
                     )
+        _profiles_ms = (time.perf_counter() - _t_stage) * 1000.0
+        if _profiles_ms >= _INGEST_BREAKDOWN_LOG_THRESHOLD_MS:
+            logger.info(
+                "INGEST_ACTOR_PROFILES conv=%s upserts_ms=%.1f",
+                conversation_id[:12] if conversation_id else "none", _profiles_ms,
+            )
         return result
 
     @staticmethod
@@ -1620,8 +1635,12 @@ class IngestReconciler:
         raw_turn_count: int,
         expected_lifecycle_epoch: int,
         allow_short_overlap: bool = True,
+        phase_timings: dict[str, float] | None = None,
     ) -> CanonicalIngestResult:
         from .lifecycle_epoch import verify_epoch
+        if phase_timings is None:
+            phase_timings = {}
+        _t_lock = time.perf_counter()
         # Entry check — fail fast before acquiring the per-conversation lock.
         verify_epoch(
             conversation_id=conversation_id,
@@ -1629,6 +1648,7 @@ class IngestReconciler:
             observed=self._store.get_lifecycle_epoch(conversation_id),
         )
         with self._conversation_merge_lock(conversation_id):
+            phase_timings["lock_wait_ms"] = (time.perf_counter() - _t_lock) * 1000.0
             # Re-check inside the lock: another thread may have resurrected
             # the conversation between our entry check and lock acquisition.
             verify_epoch(
@@ -1636,7 +1656,6 @@ class IngestReconciler:
                 expected=expected_lifecycle_epoch,
                 observed=self._store.get_lifecycle_epoch(conversation_id),
             )
-            phase_timings: dict[str, float] = {}
             _t_load = time.perf_counter()
             existing = self._load_reconcile_rows(conversation_id)
             phase_timings["load_ms"] = (time.perf_counter() - _t_load) * 1000.0
@@ -2918,9 +2937,15 @@ class IngestReconciler:
         )
         if total_ms < _INGEST_BREAKDOWN_LOG_THRESHOLD_MS:
             return
+        _fixed = {"load_ms", "align_ms", "anchors_ms"}
+        extra = " ".join(
+            f"{key}={value:.1f}"
+            for key, value in phase_timings.items()
+            if key.endswith("_ms") and key not in _fixed
+        )
         logger.info(
             "INGEST_BREAKDOWN conv=%s rows=%d total=%.1fms load_ms=%.1f "
-            "align_ms=%.1f anchors_ms=%.1f anchor_rows_written=%d",
+            "align_ms=%.1f anchors_ms=%.1f anchor_rows_written=%d%s",
             conversation_id[:12] if conversation_id else "none",
             existing_rows,
             total_ms,
@@ -2928,6 +2953,7 @@ class IngestReconciler:
             phase_timings.get("align_ms", -1.0),
             phase_timings.get("anchors_ms", -1.0),
             int(phase_timings.get("anchor_rows_written", -1)),
+            f" {extra}" if extra else "",
         )
 
     def _refresh_persisted_anchors(self, conversation_id: str) -> int:

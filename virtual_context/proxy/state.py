@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # Ingestion lease TTL (seconds). A claim older than this is considered stale
 # and may be reclaimed by another worker. Used by step 6 of
 # ``ProxyState.handle_prepare_payload`` via ``claim_ingestion_lease``.
+_HPP_BREAKDOWN_LOG_THRESHOLD_MS = 1_000.0
 INGESTION_LEASE_TTL_S: float = 30.0
 
 # Ordered phase plan used by ``_run_compact`` to drive the DB-backed
@@ -1306,12 +1307,35 @@ class ProxyState:
         # returns rows.
         canonical_ingest_rows: tuple = ()
 
+        _hpp_started = time.perf_counter()
+        _hpp_stage = _hpp_started
+        _hpp_timings: dict[str, float] = {}
+
+        def _mark(stage: str) -> None:
+            nonlocal _hpp_stage
+            now = time.perf_counter()
+            _hpp_timings[stage] = (now - _hpp_stage) * 1000.0
+            _hpp_stage = now
+
         def _decision(*, phase: str, started_tagger: bool) -> PhaseDecision:
             _decision_result = PhaseDecision(
                 phase=phase,
                 started_tagger=started_tagger,
                 canonical_ingest_rows=canonical_ingest_rows,
             )
+            total_ms = (time.perf_counter() - _hpp_started) * 1000.0
+            if total_ms >= _HPP_BREAKDOWN_LOG_THRESHOLD_MS:
+                accounted = sum(_hpp_timings.values())
+                bits = " ".join(
+                    f"{stage}={ms:.1f}ms"
+                    for stage, ms in sorted(
+                        _hpp_timings.items(), key=lambda item: item[1], reverse=True,
+                    )
+                )
+                logger.info(
+                    "HPP_BREAKDOWN conv=%s phase=%s total=%.1fms %s unaccounted=%.1fms",
+                    conversation_id[:12], phase, total_ms, bits, total_ms - accounted,
+                )
             return _decision_result
 
         # Step 2: entry-verify. Re-verified before each subsequent write as
@@ -1384,7 +1408,9 @@ class ProxyState:
         # never required to be complete — this is whatever the sender happened
         # to witness, and an identity that is absent means nothing was
         # observed, not that none exists.
+        _mark("ingest_batch")
         self._record_agent_outbound_ids(conversation_id, current_user_metadata)
+        _mark("outbound_ids")
 
         # Defense-in-depth: fresh epoch check before the next write.
         self.engine.verify_epoch()
@@ -1409,7 +1435,9 @@ class ProxyState:
             )
 
         # Step 4: phase gate.
+        _mark("request_metadata")
         phase = self.engine._store.get_conversation_phase(conversation_id)
+        _mark("phase_read")
 
         # Invariant repair: phase='compacting' with no active
         # compaction_operation row is an illegal state. Historically arose

@@ -593,6 +593,9 @@ class RetrievalAssembler:
                 f"{stage}={ms:.1f}ms"
                 for stage, ms in list(inbound_breakdown.items())[:_INBOUND_BREAKDOWN_MAX_STAGES]
             ]
+            stage_bits.append(
+                f"unaccounted={inbound_total_ms - sum(_breakdown.values()):.1f}ms"
+            )
             # Append context-hint diagnostic block only when the hint stage
             # itself was slow. Cheap in-process hits leave the instrumentation
             # dict empty so the log volume does not grow on warm cache
