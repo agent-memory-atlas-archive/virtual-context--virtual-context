@@ -41,6 +41,9 @@ STRIP_WHITESPACE = (
 _WS_RE = re.compile(r"\s+")
 _MEDIA_RE = re.compile(r"\[media attached:[^\]]+\]", re.IGNORECASE)
 _SESSION_RE = re.compile(r"\[Session from [^\]]+\]", re.IGNORECASE)
+# A chat host may stamp the model-facing copy of a user message with its send
+# time; the same message ingested from the host's own record carries no stamp.
+_HOST_TIMESTAMP_RE = re.compile(r"^\s*\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]\s*")
 
 
 def utcnow_iso() -> str:
@@ -49,6 +52,7 @@ def utcnow_iso() -> str:
 
 def normalize_turn_text(text: str | None) -> str:
     text = str(text or "")
+    text = _HOST_TIMESTAMP_RE.sub("", text, count=1)
     text = _SESSION_RE.sub("", text)
     text = _MEDIA_RE.sub("[media attached]", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
