@@ -725,3 +725,13 @@ class TestBinaryEmbeddingCaches:
         assert p._redis.get(p._tag_embedding_cache_key("m", "old")).startswith(b"VCF1")
         snap = p._redis.get(p._tag_summary_embedding_snapshot_key("conv"))
         assert snap.startswith(b"VCF1") and 0 < p._redis.ttl(p._tag_summary_embedding_snapshot_key("conv")) <= 500
+
+
+class TestSharedLastRequestTime:
+    def test_round_trip_and_unknown(self):
+        from virtual_context.proxy.session_state import SessionStateProvider
+        p = SessionStateProvider(fakeredis.FakeRedis(decode_responses=False))
+        assert p.load_request_time("conv") == 0.0
+        p.note_request_time("conv", 1790000000.25)
+        assert p.load_request_time("conv") == 1790000000.25
+        assert 0 < p._redis.ttl(p._last_request_key("conv")) <= 24 * 60 * 60

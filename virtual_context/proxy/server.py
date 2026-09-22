@@ -1712,6 +1712,16 @@ async def prepare_payload(
 
     # ── Flush gate: decide whether to apply payload mutations this request ──
     _warm_defer = False
+    # The prompt cache is per conversation, not per worker: the last time any
+    # worker sent this conversation upstream decides whether it is warm.
+    _shared_last_req = 0.0
+    if _cache_provider and _cache_conv_id and hasattr(_cache_provider, "load_request_time"):
+        try:
+            _shared_last_req = float(
+                await asyncio.to_thread(_cache_provider.load_request_time, _cache_conv_id) or 0.0
+            )
+        except Exception:
+            _shared_last_req = 0.0
     try:
         _has_engine = state and getattr(state, 'engine', None) is not None
         _es = state.engine._engine_state if _has_engine else None
@@ -1719,7 +1729,7 @@ async def prepare_payload(
         _ft = int(getattr(_es, 'flushed_prefix_messages', 0) or 0)
         _defer = bool(getattr(state.engine.config.monitor if _has_engine else None, "defer_payload_mutation", False))
         _flush_ttl = int(getattr(state.engine.config.monitor if _has_engine else None, "flush_ttl_seconds", 300) or 300)
-        _last_req = float(getattr(_es, 'last_request_time', 0.0) or 0.0)
+        _last_req = max(float(getattr(_es, 'last_request_time', 0.0) or 0.0), _shared_last_req)
 
         if not _defer:
             # 5a. Legacy auto-track: no deferral — flushed tracks compacted
@@ -1744,25 +1754,25 @@ async def prepare_payload(
                     state.engine._engine_state.flushed_prefix_messages = _ct
                     _ft = _ct
             else:
-                # 5d. Warm-cache — only defer mutations when there's
-                # pending compaction work (ct > ft). When ct == ft the
-                # payload already reflects all compaction; mutations must
-                # still run to keep the payload within budget.
-                _flush_pending = _ct > _ft
-                if _flush_pending:
-                    _warm_defer = True
-                    logger.info(
-                        "FLUSH_GATE: defer=True WARM cache_age=%.1fs ttl=%ds ct=%d ft=%d — mutations DEFERRED",
-                        _cache_age, _flush_ttl, _ct, _ft,
-                    )
-                else:
-                    logger.info(
-                        "FLUSH_GATE: defer=True WARM cache_age=%.1fs ttl=%ds ct=%d ft=%d — no pending work, mutations RUN",
-                        _cache_age, _flush_ttl, _ct, _ft,
-                    )
+                # Warm means the provider still holds this prefix: any reshaping now
+                # (dropping compacted turns, collapsing chains, stubbing outputs) moves
+                # the cached boundary and costs more than the tokens it removes.
+                # Everything holds until the cache goes cold or the over-window valve
+                # fires.
+                _warm_defer = True
+                logger.info(
+                    "FLUSH_GATE: defer=True WARM cache_age=%.1fs ttl=%ds ct=%d ft=%d — mutations HELD%s",
+                    _cache_age, _flush_ttl, _ct, _ft,
+                    " (flush pending)" if _ct > _ft else "",
+                )
     except (TypeError, ValueError, AttributeError) as _gate_exc:
         logger.warning("FLUSH_GATE: exception — %s", _gate_exc)
         pass  # Mocked or missing engine state — fall through with _warm_defer=False
+    if _cache_provider and _cache_conv_id and hasattr(_cache_provider, "note_request_time"):
+        try:
+            await asyncio.to_thread(_cache_provider.note_request_time, _cache_conv_id, time.time())
+        except Exception:
+            pass
 
     # Drop compacted non-tool turns — their content is already in VC segments
     turns_stubbed = 0  # kept for downstream metrics compatibility

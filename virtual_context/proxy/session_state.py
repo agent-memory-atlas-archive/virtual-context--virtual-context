@@ -220,6 +220,34 @@ class SessionStateProvider:
         return f"vc:tag_summary_embeddings:{conversation_id}"
 
     _RETRIEVAL_MEMO_TTL_SECONDS = 300
+    _LAST_REQUEST_TTL_SECONDS = 24 * 60 * 60
+
+    def _last_request_key(self, conversation_id: str) -> str:
+        return f"vc:last_request:{conversation_id}"
+
+    def note_request_time(self, conversation_id: str, when: float) -> None:
+        """Record when a conversation last went upstream, for every worker."""
+        try:
+            self._redis.set(
+                self._last_request_key(conversation_id),
+                repr(float(when)).encode("utf-8"),
+                ex=self._LAST_REQUEST_TTL_SECONDS,
+            )
+        except Exception:
+            logger.warning("Redis last-request save failed for %s", conversation_id[:12], exc_info=True)
+
+    def load_request_time(self, conversation_id: str) -> float:
+        """The shared last upstream request time, 0.0 when unknown."""
+        try:
+            raw = self._redis.get(self._last_request_key(conversation_id))
+            if raw is None:
+                return 0.0
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8")
+            return float(raw)
+        except Exception:
+            logger.warning("Redis last-request load failed for %s", conversation_id[:12], exc_info=True)
+            return 0.0
 
     def _retrieval_memo_key(self, conversation_id: str, memo_key: str) -> str:
         return f"vc:retrieval_memo:{conversation_id}:{memo_key}"
