@@ -1135,60 +1135,62 @@ class TaggingPipeline:
         signal = self._monitor.check(snapshot)
         self._record_timing(breakdown, "monitor_check", t_stage)
 
+        # Persist the finished pair for post-restart recall whether or not
+        # compaction is about to run: the compactor reads canonical rows, so a
+        # pair left only in memory would be lost when a signal fires.
+        if latest_pair:
+            turn_num = turn_number
+            entry = self._turn_tag_index.get_tags_for_logical_turn(turn_num)
+            t_stage = time.monotonic()
+            # Persistence failures in the live-tagging path must not stop
+            # progressive tagging (the next turn will re-attempt), but
+            # they MUST be visible. Never silently ``pass`` — log with
+            # full context so coherence bugs don't hide behind an
+            # empty except clause.
+            try:
+                if entry is not None:
+                    # Extract by role, not positional index. The pair can
+                    # legitimately include tool-call messages between the
+                    # user and assistant halves, so ``latest_pair[1]`` is
+                    # NOT guaranteed to be the assistant. ``_get_latest_turn_pair``
+                    # now guarantees both roles are present, but we still
+                    # extract defensively so a future shape drift can't
+                    # silently persist wrong content.
+                    user_msg = next(
+                        (m for m in latest_pair if m.role == "user"), None,
+                    )
+                    asst_msg = next(
+                        (m for m in latest_pair if m.role == "assistant"), None,
+                    )
+                    if user_msg is None or asst_msg is None:
+                        logger.warning(
+                            "TAGGER turn=%d canonical-persist skipped — "
+                            "incomplete pair roles=%s",
+                            turn_num,
+                            [m.role for m in latest_pair],
+                        )
+                    else:
+                        self._persist_canonical_turn(entry, user_msg, asst_msg)
+            except StaleConversationWriteError as exc:
+                logger.info(
+                    "TAGGER turn=%d canonical-persist deferred (stale): %s",
+                    turn_num, exc,
+                )
+            except (ValueError, TypeError, AttributeError, IndexError) as exc:
+                # ``IndexError`` added after production incident: a
+                # malformed pair (lone half) reached ``latest_pair[1]``
+                # and the exception bubbled up, marking the session
+                # store stale and forcing cancel/resume. Surface loudly
+                # but do not stop tagging.
+                logger.error(
+                    "TAGGER turn=%d canonical-persist failed (structural): %s",
+                    turn_num, exc,
+                    exc_info=True,
+                )
+            self._link_turn_tool_outputs(turn_num)
+            self._record_timing(breakdown, "persist_turn_message", t_stage)
         if signal is None:
             self._engine_state.last_compact_ms = 0.0
-            # Persist turn message text for post-restart recall
-            if latest_pair:
-                turn_num = turn_number
-                entry = self._turn_tag_index.get_tags_for_logical_turn(turn_num)
-                t_stage = time.monotonic()
-                # Persistence failures in the live-tagging path must not stop
-                # progressive tagging (the next turn will re-attempt), but
-                # they MUST be visible. Never silently ``pass`` — log with
-                # full context so coherence bugs don't hide behind an
-                # empty except clause.
-                try:
-                    if entry is not None:
-                        # Extract by role, not positional index. The pair can
-                        # legitimately include tool-call messages between the
-                        # user and assistant halves, so ``latest_pair[1]`` is
-                        # NOT guaranteed to be the assistant. ``_get_latest_turn_pair``
-                        # now guarantees both roles are present, but we still
-                        # extract defensively so a future shape drift can't
-                        # silently persist wrong content.
-                        user_msg = next(
-                            (m for m in latest_pair if m.role == "user"), None,
-                        )
-                        asst_msg = next(
-                            (m for m in latest_pair if m.role == "assistant"), None,
-                        )
-                        if user_msg is None or asst_msg is None:
-                            logger.warning(
-                                "TAGGER turn=%d canonical-persist skipped — "
-                                "incomplete pair roles=%s",
-                                turn_num,
-                                [m.role for m in latest_pair],
-                            )
-                        else:
-                            self._persist_canonical_turn(entry, user_msg, asst_msg)
-                except StaleConversationWriteError as exc:
-                    logger.info(
-                        "TAGGER turn=%d canonical-persist deferred (stale): %s",
-                        turn_num, exc,
-                    )
-                except (ValueError, TypeError, AttributeError, IndexError) as exc:
-                    # ``IndexError`` added after production incident: a
-                    # malformed pair (lone half) reached ``latest_pair[1]``
-                    # and the exception bubbled up, marking the session
-                    # store stale and forcing cancel/resume. Surface loudly
-                    # but do not stop tagging.
-                    logger.error(
-                        "TAGGER turn=%d canonical-persist failed (structural): %s",
-                        turn_num, exc,
-                        exc_info=True,
-                    )
-                self._link_turn_tool_outputs(turn_num)
-                self._record_timing(breakdown, "persist_turn_message", t_stage)
             t_stage = time.monotonic()
             self._save_state_callback(
                 conversation_history,
