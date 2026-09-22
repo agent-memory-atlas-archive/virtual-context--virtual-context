@@ -66,7 +66,7 @@ from .formats import (
     summarize_payload_accounting,
     summarize_raw_payload_entries,
 )
-from .helpers import UnsupportedContentEncoding, decode_request_body
+from .helpers import DecodedBodyTooLarge, UnsupportedContentEncoding, decode_request_body
 from .helpers import (  # noqa: F401 — re-exported for tests
     _VC_PROMPT_MARKER,
     _VC_CONVERSATION_RE,
@@ -3147,6 +3147,11 @@ def create_app(
             return JSONResponse(
                 status_code=415,
                 content={"error": {"type": "unsupported_content_encoding", "encoding": exc.encoding}},
+            )
+        except DecodedBodyTooLarge:
+            return JSONResponse(
+                status_code=413,
+                content={"error": {"type": "request_too_large", "detail": "decoded request body exceeds the proxy limit"}},
             )
         except Exception as exc:
             return JSONResponse(

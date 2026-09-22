@@ -10,7 +10,7 @@ import httpx
 import pytest
 from starlette.responses import JSONResponse
 
-from virtual_context.proxy.helpers import UnsupportedContentEncoding, decode_request_body
+from virtual_context.proxy.helpers import DecodedBodyTooLarge, UnsupportedContentEncoding, decode_request_body
 from virtual_context.proxy.server import create_app
 
 try:
@@ -98,3 +98,22 @@ def test_unsupported_and_corrupt_encodings_are_client_errors_not_500s():
     assert resp.status_code == 415 and resp.json()["error"]["encoding"] == "lzma"
     resp, _ = _run_app_post({"content-type": "application/json", "content-encoding": "gzip"}, b"\x28\xb5\x2f\xfd garbage")
     assert resp.status_code == 400 and resp.json()["error"]["type"] == "invalid_content_encoding"
+
+
+def test_decoded_size_is_capped_for_every_codec():
+    big = b"x" * 4096
+    with pytest.raises(DecodedBodyTooLarge):
+        decode_request_body(gzip.compress(big), "gzip", limit=1024)
+    with pytest.raises(DecodedBodyTooLarge):
+        decode_request_body(zlib.compress(big), "deflate", limit=1024)
+    assert decode_request_body(gzip.compress(big), "gzip", limit=4096) == big
+    if zstandard is not None:
+        with pytest.raises(DecodedBodyTooLarge):
+            decode_request_body(zstandard.ZstdCompressor().compress(big), "zstd", limit=1024)
+        assert decode_request_body(zstandard.ZstdCompressor().compress(big), "zstd", limit=4096) == big
+
+
+def test_oversized_decoded_body_is_a_413():
+    with patch("virtual_context.proxy.server.decode_request_body", side_effect=DecodedBodyTooLarge(1)):
+        resp, _ = _run_app_post({"content-type": "application/json", "content-encoding": "gzip"}, gzip.compress(PAYLOAD))
+    assert resp.status_code == 413 and resp.json()["error"]["type"] == "request_too_large"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json as _json
 import gzip
+import io
 import logging
 import zlib
 from typing import TYPE_CHECKING
@@ -69,37 +70,67 @@ class UnsupportedContentEncoding(ValueError):
         self.encoding = encoding
 
 
-def decode_request_body(body: bytes, content_encoding: str | None) -> bytes:
+class DecodedBodyTooLarge(ValueError):
+    """A compressed request body expanded past the proxy's inbound ceiling."""
+
+
+# Compressed bodies are decoded in memory before parsing; this bounds what a
+# small frame may expand to, well above any real chat payload.
+MAX_DECODED_REQUEST_BYTES = 64 * 1024 * 1024
+
+
+def _zlib_decode(body: bytes, wbits: int, limit: int) -> bytes:
+    d = zlib.decompressobj(wbits)
+    out = d.decompress(body, limit + 1)
+    if len(out) > limit or d.unconsumed_tail:
+        raise DecodedBodyTooLarge(limit)
+    return out
+
+
+def decode_request_body(
+    body: bytes,
+    content_encoding: str | None,
+    *,
+    limit: int = MAX_DECODED_REQUEST_BYTES,
+) -> bytes:
     """Return the request body as the client produced it before transport encoding.
 
     Clients may compress request bodies (OpenAI-format clients send zstd for
     large payloads); the proxy must read the JSON inside, and it re-serializes
     the payload upstream with its own Content-Length and no Content-Encoding,
     so the decoded bytes are the only form it ever needs. gzip/deflate come
-    from the standard library; zstd and br need their optional codecs.
+    from the standard library; zstd and br need their optional codecs. Output
+    is capped at ``limit`` bytes so a small frame cannot expand without bound.
     """
     enc = (content_encoding or "").strip().lower()
     if not enc or enc == "identity":
         return body
     if enc in ("gzip", "x-gzip"):
-        return gzip.decompress(body)
+        return _zlib_decode(body, zlib.MAX_WBITS | 16, limit)
     if enc == "deflate":
         try:
-            return zlib.decompress(body)
+            return _zlib_decode(body, zlib.MAX_WBITS, limit)
         except zlib.error:
-            return zlib.decompress(body, -zlib.MAX_WBITS)
+            return _zlib_decode(body, -zlib.MAX_WBITS, limit)
     if enc == "zstd":
         try:
             import zstandard
         except ImportError as exc:
             raise UnsupportedContentEncoding(enc) from exc
-        return zstandard.ZstdDecompressor().decompressobj().decompress(body)
+        with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(body)) as reader:
+            out = reader.read(limit + 1)
+        if len(out) > limit:
+            raise DecodedBodyTooLarge(limit)
+        return out
     if enc == "br":
         try:
             import brotli
         except ImportError as exc:
             raise UnsupportedContentEncoding(enc) from exc
-        return brotli.decompress(body)
+        out = brotli.decompress(body)
+        if len(out) > limit:
+            raise DecodedBodyTooLarge(limit)
+        return out
     raise UnsupportedContentEncoding(enc)
 
 
