@@ -47,6 +47,9 @@ _HOP_BY_HOP = frozenset({
     # If the client sees "content-encoding: gzip" but receives uncompressed data,
     # its decompressor (e.g. Node.js Gunzip) will crash with "terminated".
     "content-encoding",
+    # The proxy reads upstream bodies itself, so the client's accept-encoding
+    # must not travel upstream: the HTTP client advertises what it can decode.
+    "accept-encoding",
 })
 
 

@@ -9,8 +9,19 @@ from __future__ import annotations
 import copy
 import codecs
 import json
+import logging
+from collections import deque
 
 from .continuation import MAX_RESPONSE_BYTES, ContinuationError
+
+logger = logging.getLogger(__name__)
+
+
+def _describe(response, size, head):
+    return "status=%s content-type=%r content-encoding=%r bytes=%d head=%r" % (
+        getattr(response, "status_code", "?"), response.headers.get("content-type"),
+        response.headers.get("content-encoding"), size, head,
+    )
 
 
 async def _bounded_lines(response):
@@ -39,9 +50,11 @@ async def collect_response(response, api_format):
                 if size > MAX_RESPONSE_BYTES:
                     raise ContinuationError("The provider response exceeded the collection limit.")
                 chunks.append(chunk)
+            raw = b"".join(chunks)
             try:
-                value = json.loads(b"".join(chunks))
+                value = json.loads(raw)
             except ValueError as exc:
+                logger.warning("COLLECT_NOT_JSON %s", _describe(response, size, raw[:200]))
                 raise ContinuationError("The provider returned an invalid JSON response.") from exc
             if not isinstance(value, dict):
                 raise ContinuationError("The provider returned an invalid response object.")
@@ -49,8 +62,10 @@ async def collect_response(response, api_format):
         result, blocks, calls = {}, {}, {}
         size = 0
         terminal = False
+        tail = deque(maxlen=3)
         async for line in _bounded_lines(response):
             size += len(line.encode("utf-8")) + 1
+            tail.append(line[:200])
             if size > MAX_RESPONSE_BYTES:
                 raise ContinuationError("The provider response exceeded the collection limit.")
             if not line.startswith("data:"):
@@ -126,6 +141,7 @@ async def collect_response(response, api_format):
                         terminal = True
                 result.update({key: value for key, value in event.items() if key != "candidates"})
         if not terminal:
+            logger.warning("COLLECT_NO_TERMINAL %s", _describe(response, size, list(tail)))
             raise ContinuationError("The provider stream ended before its completion event.")
         if api_format == "anthropic":
             for block in blocks.values():

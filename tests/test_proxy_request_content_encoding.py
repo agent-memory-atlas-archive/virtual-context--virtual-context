@@ -124,3 +124,9 @@ def test_concatenated_gzip_members_decode_whole_and_still_respect_the_cap():
     assert decode_request_body(body, "gzip") == b'{"messages":[]}'
     with pytest.raises(DecodedBodyTooLarge):
         decode_request_body(gzip.compress(b"a" * 700) + gzip.compress(b"b" * 700), "gzip", limit=1024)
+
+
+def test_client_accept_encoding_never_travels_upstream():
+    from virtual_context.proxy.helpers import _forward_headers
+    fwd = _forward_headers({"accept-encoding": "br, gzip, deflate, zstd", "accept": "text/event-stream", "authorization": "Bearer t"})
+    assert "accept-encoding" not in fwd and fwd["accept"] == "text/event-stream" and fwd["authorization"] == "Bearer t"
