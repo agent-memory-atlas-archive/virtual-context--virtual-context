@@ -17,3 +17,8 @@ def test_only_a_leading_stamp_is_removed():
     text = "see [Tue 2026-09-22 04:53 UTC] in the log"
     assert normalize_turn_text(text) == text
     assert normalize_turn_text("[Tue 2026-09-22 04:53] no zone") == "[Tue 2026-09-22 04:53] no zone"
+
+
+def test_a_message_that_itself_begins_with_a_stamp_normalizes_the_same_from_either_copy():
+    typed = "[Mon 2026-09-21 04:53 UTC] hello"
+    assert normalize_turn_text(typed) == normalize_turn_text("[Tue 2026-09-22 04:53 UTC] " + typed) == "hello"

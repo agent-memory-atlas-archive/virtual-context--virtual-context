@@ -52,7 +52,13 @@ def utcnow_iso() -> str:
 
 def normalize_turn_text(text: str | None) -> str:
     text = str(text or "")
-    text = _HOST_TIMESTAMP_RE.sub("", text, count=1)
+    # Strip every leading stamp: the host adds one, and a message that itself
+    # begins with one must normalize the same way whichever copy arrives first.
+    while True:
+        stripped = _HOST_TIMESTAMP_RE.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
     text = _SESSION_RE.sub("", text)
     text = _MEDIA_RE.sub("[media attached]", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
