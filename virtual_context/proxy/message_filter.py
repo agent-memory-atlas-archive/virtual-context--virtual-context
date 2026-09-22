@@ -1154,9 +1154,8 @@ def trim_to_upstream_limit(
     for g in all_groups:
         if not turn_groups:
             # Still scanning for system-only prefix groups
-            # Instructions arrive as system or developer items; both are prefix.
             all_system = all(
-                original_messages[idx].get("role") in ("system", "developer")
+                original_messages[idx].get("role") == "system"
                 for idx in g.indices
             )
             if all_system:

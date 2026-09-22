@@ -56,17 +56,11 @@ def _handler_upstream_limit(body: dict, state, upstream_limit: int) -> int:
     instance = getattr(state, "_instance_upstream_limit", 0)
     proxy_config = getattr(getattr(getattr(state, "engine", None), "config", None), "proxy", None)
     global_limit = getattr(proxy_config, "upstream_context_limit", 0)
-    limit = resolve_upstream_limit(
+    return resolve_upstream_limit(
         body.get("model", ""),
         instance if type(instance) is int else 0,
         global_limit if type(global_limit) is int else 0,
     )
-    # The proxy's own budget caps the model window: what leaves is bounded by
-    # what the conversation may cost, not only by what the provider accepts.
-    budget = getattr(proxy_config, "outbound_context_budget", 0)
-    if type(budget) is int and budget > 0:
-        limit = min(limit, budget)
-    return limit
 
 
 def _request_context(body, state, *, request_context=None, metrics=None, turn=0,
