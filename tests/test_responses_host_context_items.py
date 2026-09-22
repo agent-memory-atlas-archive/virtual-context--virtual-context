@@ -35,3 +35,11 @@ def test_a_lone_host_context_item_is_still_a_turn_of_its_own():
     groups = get_format("openai_responses").group_into_turns(
         {"model": "m", "input": [_item("user", CTX), _item("assistant", "x", "output_text")]})
     assert [g.indices for g in groups] == [[0, 1]]
+
+
+def test_host_context_items_are_never_ingested():
+    from virtual_context.proxy.formats import extract_ingestible_messages
+    fmt = get_format("openai_responses")
+    messages, stats = extract_ingestible_messages(_body(), fmt, mode="ingest")
+    assert [(m.role, m.content[-3:]) for m in messages] == [("user", "OK1"), ("assistant", "OK1"), ("user", "OK2")]
+    assert stats["skipped_non_chat_entry_count"] == 2

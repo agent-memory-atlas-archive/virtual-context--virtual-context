@@ -513,6 +513,10 @@ def extract_ingestible_messages(
             continue
 
         role = str(msg.get("role") or "")
+        if fmt.name == "openai_responses" and hasattr(fmt, "_is_host_context_item") and fmt._is_host_context_item(msg):
+            # Host runtime state appended after the prompt: forwarded, never ingested.
+            stats["skipped_non_chat_entry_count"] += 1
+            continue
         if fmt.name == "openai_responses" and hasattr(fmt, "_is_bare_item"):
             try:
                 if getattr(fmt, "_is_bare_item")(msg):
