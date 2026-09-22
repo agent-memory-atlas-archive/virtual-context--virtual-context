@@ -82,6 +82,20 @@ class ContextRetriever:
         }, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
+    @staticmethod
+    def _retrieval_memo_parts(lookup_text, message, active_tags, context_turns, post_compaction, all_tags) -> str:
+        """Short per-component fingerprints, so a memo miss shows which input changed."""
+        def short(value) -> str:
+            return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:6]
+        return ",".join([
+            f"q={short(lookup_text)}", f"m={short(message)}",
+            f"active={short(sorted(str(t) for t in (active_tags or [])))}",
+            f"ctx={short([str(t) for t in (context_turns or [])])}",
+            f"post={int(bool(post_compaction))}",
+            f"names={short(sorted(ts.tag for ts in all_tags))}",
+            f"counts={short([(ts.tag, getattr(ts, 'usage_count', 0)) for ts in all_tags])}",
+        ])
+
     def _load_all_tags_snapshot(self) -> list:
         if self._session_state_provider is not None and self._conversation_id:
             cached = self._session_state_provider.load_tag_stats_snapshot(
@@ -407,6 +421,14 @@ class ContextRetriever:
             _memo = _provider.load_retrieval_memo(self._conversation_id, _memo_key)
             if _memo is not None and not isinstance(_memo.get("scores"), dict):
                 _memo = None
+            if _memo is None:
+                logger.info(
+                    "RETRIEVAL_MEMO miss conv=%s key=%s parts=%s",
+                    self._conversation_id[:12], _memo_key[:12],
+                    self._retrieval_memo_parts(
+                        lookup_text, message, active_tags, context_turns, post_compaction, all_tags,
+                    ),
+                )
         _tag_stage = time.monotonic()
         if _memo is not None:
             _tr = _memo.get("tag_result") or {}

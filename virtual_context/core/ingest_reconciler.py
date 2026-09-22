@@ -245,6 +245,18 @@ def _build_anchor_rows(rows: list[CanonicalTurnRow]) -> list[tuple[int, str, str
     return anchors
 
 
+
+_PRE_LOCK_PHASES = frozenset({"extract_ms", "prepare_rows_ms", "reply_subjects_ms", "load_ms", "lock_wait_ms", "epoch_check_ms"})
+
+
+def _locked_untimed(phase_timings: dict) -> str:
+    """Wall time of the locked merge not covered by its own timed phases."""
+    locked_wall = phase_timings.get("locked_wall")
+    if not isinstance(locked_wall, (int, float)):
+        return ""
+    inside = sum(v for k, v in phase_timings.items() if k.endswith("_ms") and k not in _PRE_LOCK_PHASES)
+    return f" locked_wall_ms={locked_wall:.1f} locked_untimed_ms={max(locked_wall - inside, 0.0):.1f}"
+
 class IngestReconciler:
     """Merges inbound turns into canonical turn storage."""
 
@@ -1078,7 +1090,8 @@ class IngestReconciler:
         from ..proxy.formats import extract_ingestible_messages
 
         _timings: dict[str, float] = {}
-        _t_stage = time.perf_counter()
+        _t_wall = time.perf_counter()
+        _t_stage = _t_wall
         entries, _stats = extract_ingestible_messages(
             body,
             fmt,
@@ -1210,6 +1223,7 @@ class IngestReconciler:
         _t_stage = time.perf_counter()
         self._resolve_reply_subjects(conversation_id, prepared)
         _timings["reply_subjects_ms"] = (time.perf_counter() - _t_stage) * 1000.0
+        _t_merge = time.perf_counter()
         result = self.ingest_prepared_turns(
             conversation_id,
             prepared_turns=prepared,
@@ -1217,6 +1231,7 @@ class IngestReconciler:
             expected_lifecycle_epoch=expected_lifecycle_epoch,
             phase_timings=_timings,
         )
+        _merge_ms = (time.perf_counter() - _t_merge) * 1000.0
         _t_stage = time.perf_counter()
         # A profile is an observation cache, not a side effect of filling an
         # empty canonical column. Repeat sightings must still advance
@@ -1250,6 +1265,13 @@ class IngestReconciler:
             logger.info(
                 "INGEST_ACTOR_PROFILES conv=%s upserts_ms=%.1f",
                 conversation_id[:12] if conversation_id else "none", _profiles_ms,
+            )
+        _wall_ms = (time.perf_counter() - _t_wall) * 1000.0
+        if _wall_ms >= _INGEST_BREAKDOWN_LOG_THRESHOLD_MS:
+            logger.info(
+                "INGEST_WALL conv=%s wall_ms=%.1f merge_ms=%.1f profiles_ms=%.1f pre_merge_ms=%.1f",
+                conversation_id[:12] if conversation_id else "none", _wall_ms, _merge_ms,
+                _profiles_ms, _wall_ms - _merge_ms - _profiles_ms,
             )
         return result
 
@@ -1659,6 +1681,7 @@ class IngestReconciler:
             _t_load = time.perf_counter()
             existing = self._load_reconcile_rows(conversation_id)
             phase_timings["load_ms"] = (time.perf_counter() - _t_load) * 1000.0
+            _t_locked = time.perf_counter()
             result = self._ingest_prepared_turns_locked(
                 conversation_id,
                 prepared_turns=prepared_turns,
@@ -1668,6 +1691,9 @@ class IngestReconciler:
                 expected_lifecycle_epoch=expected_lifecycle_epoch,
                 phase_timings=phase_timings,
             )
+            # Wall time of the locked merge, reported without the ``_ms``
+            # suffix so it is not added into the phase total it contains.
+            phase_timings["locked_wall"] = (time.perf_counter() - _t_locked) * 1000.0
             self._log_ingest_breakdown(
                 conversation_id, len(existing), phase_timings,
             )
@@ -2945,7 +2971,7 @@ class IngestReconciler:
         )
         logger.info(
             "INGEST_BREAKDOWN conv=%s rows=%d total=%.1fms load_ms=%.1f "
-            "align_ms=%.1f anchors_ms=%.1f anchor_rows_written=%d%s",
+            "align_ms=%.1f anchors_ms=%.1f anchor_rows_written=%d%s%s",
             conversation_id[:12] if conversation_id else "none",
             existing_rows,
             total_ms,
@@ -2954,6 +2980,7 @@ class IngestReconciler:
             phase_timings.get("anchors_ms", -1.0),
             int(phase_timings.get("anchor_rows_written", -1)),
             f" {extra}" if extra else "",
+            _locked_untimed(phase_timings),
         )
 
     def _refresh_persisted_anchors(self, conversation_id: str) -> int:
