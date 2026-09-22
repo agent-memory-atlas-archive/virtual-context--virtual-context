@@ -2155,69 +2155,6 @@ class TestVCToolNames:
 # TestAnthropicAdapter.inject_context
 # ---------------------------------------------------------------------------
 
-class TestAnthropicAdapterInjectContext:
-    """Tests for AnthropicAdapter.inject_context()."""
-
-    def setup_method(self):
-        self.adapter = AnthropicAdapter("test-key")
-
-    def test_replaces_existing_block_string_system(self):
-        body = {
-            "system": "<virtual-context>\nold summaries\n</virtual-context>\n\nBe helpful.",
-            "messages": [],
-        }
-        self.adapter.inject_context(body, "NEW expanded text")
-        assert isinstance(body["system"], list)
-        assert body["system"][0]["text"] == "Be helpful."
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nNEW expanded text\n</system-reminder>"
-
-    def test_no_existing_block_prepends(self):
-        body = {"system": "Be helpful.", "messages": []}
-        self.adapter.inject_context(body, "injected text")
-        assert isinstance(body["system"], list)
-        assert body["system"][0]["text"] == "Be helpful."
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\ninjected text\n</system-reminder>"
-
-    def test_empty_system_sets_block(self):
-        body = {"system": "", "messages": []}
-        self.adapter.inject_context(body, "content")
-        assert body["system"] == "<system-reminder>\ncontent\n</system-reminder>"
-
-    def test_list_system_replaces_existing(self):
-        body = {
-            "system": [
-                {"type": "text", "text": "<virtual-context>\nold\n</virtual-context>"},
-                {"type": "text", "text": "Other instructions"},
-            ],
-            "messages": [],
-        }
-        self.adapter.inject_context(body, "new content")
-        assert body["system"][0]["text"] == "Other instructions"
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nnew content\n</system-reminder>"
-
-    def test_list_system_no_existing_inserts(self):
-        body = {
-            "system": [{"type": "text", "text": "Other instructions"}],
-            "messages": [],
-        }
-        self.adapter.inject_context(body, "new content")
-        assert body["system"][0]["text"] == "Other instructions"
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nnew content\n</system-reminder>"
-
-    def test_no_system_key(self):
-        body = {"messages": []}
-        self.adapter.inject_context(body, "content")
-        assert body["system"] == "<system-reminder>\ncontent\n</system-reminder>"
-
-
-# ---------------------------------------------------------------------------
-# TestOpenAIAdapter.inject_context
-# ---------------------------------------------------------------------------
-
 class TestOpenAIAdapterInjectContext:
     """Tests for OpenAIAdapter.inject_context()."""
 
@@ -2257,44 +2194,6 @@ class TestOpenAIAdapterInjectContext:
 # TestGeminiAdapter.inject_context
 # ---------------------------------------------------------------------------
 
-class TestGeminiAdapterInjectContext:
-    """Tests for GeminiAdapter.inject_context()."""
-
-    def setup_method(self):
-        self.adapter = GeminiAdapter("AIza-test")
-
-    def test_replaces_existing_block(self):
-        body = {
-            "system_instruction": {
-                "parts": [{"text": "<virtual-context>\nold\n</virtual-context>\n\nBe helpful."}],
-            },
-            "contents": [],
-        }
-        self.adapter.inject_context(body, "new text")
-        text = body["system_instruction"]["parts"][0]["text"]
-        assert "<system-reminder>\nnew text\n</system-reminder>" in text
-        assert "old" not in text
-        assert "Be helpful." in text
-
-    def test_no_existing_block_prepends(self):
-        body = {
-            "system_instruction": {"parts": [{"text": "Be helpful."}]},
-            "contents": [],
-        }
-        self.adapter.inject_context(body, "new text")
-        assert body["system_instruction"]["parts"][0]["text"] == "<system-reminder>\nnew text\n</system-reminder>"
-        assert body["system_instruction"]["parts"][1]["text"] == "Be helpful."
-
-    def test_no_system_instruction_creates(self):
-        body = {"contents": []}
-        self.adapter.inject_context(body, "new text")
-        assert body["system_instruction"]["parts"][0]["text"] == "<system-reminder>\nnew text\n</system-reminder>"
-
-
-# ---------------------------------------------------------------------------
-# TestToolLoopInjectsReassembledContext
-# ---------------------------------------------------------------------------
-
 class TestToolLoopInjectsReassembledContext:
     """Integration test: verify run_tool_loop injects reassembled context."""
 
@@ -2332,11 +2231,13 @@ class TestToolLoopInjectsReassembledContext:
 
         # Verify the captured continuation request has updated context
         assert len(result.raw_requests) == 1
-        sent_system = result.raw_requests[0]["system"]
-        assert isinstance(sent_system, list)
-        assert sent_system[0]["text"] == "Be helpful."
-        assert sent_system[0]["cache_control"] == {"type": "ephemeral"}
-        assert sent_system[1]["text"] == "<system-reminder>\nEXPANDED full DB conversation\n</system-reminder>"
+        sent = result.raw_requests[0]
+        # The stale block is gone from the system prompt; the reassembled
+        # context rides the latest user message, after the cacheable prefix.
+        assert sent["system"] == "Be helpful."
+        last_user = [m for m in sent["messages"] if m["role"] == "user"][-1]
+        assert last_user["content"][-1]["text"] == "<system-reminder>\nEXPANDED full DB conversation\n</system-reminder>"
+        assert json.dumps(sent).count("<system-reminder>") == 1
 
     def test_openai_continuation_has_updated_context(self):
         """OpenAI path: system message in messages[0] is updated."""

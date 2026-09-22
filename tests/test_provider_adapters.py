@@ -159,42 +159,6 @@ class TestAnthropicAdapter:
         cont = adapter.build_continuation(cont_body, {}, raw_response, [])
         assert len(cont["messages"]) == 3  # original + assistant + empty user
 
-    def test_inject_context_no_existing_block(self, adapter):
-        body = {"system": "<system-reminder>\nOriginal VC context.\n</system-reminder>"}
-        adapter.inject_context(body, "New VC context")
-        assert body["system"] == "<system-reminder>\nNew VC context\n</system-reminder>"
-
-    def test_inject_context_preserves_stable_prefix(self, adapter):
-        body = {
-            "system": "You are a helpful assistant.\n\n<system-reminder>\nOld VC context\n</system-reminder>"
-        }
-        adapter.inject_context(body, "Updated VC context")
-        assert isinstance(body["system"], list)
-        assert body["system"][0]["text"] == "You are a helpful assistant."
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nUpdated VC context\n</system-reminder>"
-
-    def test_inject_context_replaces_existing_block(self, adapter):
-        body = {"system": "<virtual-context>\nold context\n</virtual-context>\nRest of prompt."}
-        adapter.inject_context(body, "new context")
-        assert isinstance(body["system"], list)
-        assert body["system"][0]["text"] == "Rest of prompt."
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nnew context\n</system-reminder>"
-
-    def test_inject_context_empty_system(self, adapter):
-        body = {"system": ""}
-        adapter.inject_context(body, "context")
-        assert body["system"] == "<system-reminder>\ncontext\n</system-reminder>"
-
-    def test_inject_context_list_system(self, adapter):
-        body = {"system": [{"type": "text", "text": "Original text."}]}
-        adapter.inject_context(body, "VC context")
-        assert len(body["system"]) == 2
-        assert body["system"][0]["text"] == "Original text."
-        assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-        assert body["system"][1]["text"] == "<system-reminder>\nVC context\n</system-reminder>"
-
     def test_strip_tools(self, adapter):
         body = {"tools": [{"name": "t"}], "tool_choice": {"type": "any"}, "model": "m"}
         adapter.strip_tools(body)
@@ -550,26 +514,6 @@ class TestGeminiAdapter:
     def test_build_tool_result_plain_string(self, adapter):
         result = adapter.build_tool_result("id-1", "search", "plain text result")
         assert result["functionResponse"]["response"] == {"content": "plain text result"}
-
-    def test_inject_context_with_existing_system(self, adapter):
-        body = {"system_instruction": {"parts": [{"text": "Original."}]}}
-        adapter.inject_context(body, "VC context")
-        # Should prepend a new part
-        assert "<system-reminder>" in body["system_instruction"]["parts"][0]["text"]
-
-    def test_inject_context_no_system(self, adapter):
-        body = {}
-        adapter.inject_context(body, "VC context")
-        assert "system_instruction" in body
-        assert "<system-reminder>" in body["system_instruction"]["parts"][0]["text"]
-
-    def test_inject_context_replaces_existing(self, adapter):
-        body = {"system_instruction": {"parts": [
-            {"text": "<virtual-context>\nold\n</virtual-context>\nRest."},
-        ]}}
-        adapter.inject_context(body, "new context")
-        assert "old" not in body["system_instruction"]["parts"][0]["text"]
-        assert "new context" in body["system_instruction"]["parts"][0]["text"]
 
     def test_strip_tools(self, adapter):
         body = {"tools": [{}], "tool_config": {"mode": "any"}}

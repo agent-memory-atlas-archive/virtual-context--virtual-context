@@ -515,9 +515,11 @@ class TestIntegration:
             assert resp.status_code == 200
             call_kwargs = mock_req.call_args
             forwarded_body = json.loads(call_kwargs.args[0].content)
-            assert "<system-reminder>" in forwarded_body["system"]
-            assert "mock context here" in forwarded_body["system"]
-            assert "Be helpful" in forwarded_body["system"]
+            # The system prompt reaches the provider exactly as the client sent it;
+            # the context rides the latest user message.
+            assert forwarded_body["system"] == "Be helpful"
+            last_user = forwarded_body["messages"][-1]
+            assert "mock context here" in last_user["content"][-1]["text"]
 
 
     def test_no_messages_key_passthrough(self, test_client):

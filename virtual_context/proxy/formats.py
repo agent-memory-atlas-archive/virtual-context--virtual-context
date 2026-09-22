@@ -49,6 +49,26 @@ _VC_BLOCK_RE = re.compile(
 )
 
 
+def _strip_vc_blocks(value):
+    """Return ``value`` (text, content-block list, or parts list) without VC blocks."""
+    from ..core.responses_context import strip_vc_text
+
+    if isinstance(value, str):
+        return strip_vc_text(value)
+    if isinstance(value, list):
+        out = []
+        for part in value:
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and _VC_BLOCK_RE.search(part["text"]):
+                text = strip_vc_text(part["text"])
+                if text.strip():
+                    out.append({**part, "text": text})
+                continue
+            out.append(part)
+        return out
+    return value
+
+
+
 # ---------------------------------------------------------------------------
 # Normalized tool-call / tool-output info
 # ---------------------------------------------------------------------------
@@ -1892,6 +1912,17 @@ class AnthropicFormat(PayloadFormat):
             return body
         body = copy.deepcopy(body)
         context_text = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
+        # Remove any earlier block (a re-injection, or one left in the system
+        # prompt by an older request) so blocks never stack.
+        if "system" in body:
+            body["system"] = _strip_vc_blocks(body["system"])
+            if body["system"] == [] or (isinstance(body["system"], str) and not body["system"].strip()):
+                body.pop("system")
+        for i, msg in enumerate(body.get("messages", [])):
+            if isinstance(msg, dict) and "content" in msg:
+                cleaned = _strip_vc_blocks(msg["content"])
+                if cleaned is not msg["content"]:
+                    body["messages"][i] = {**msg, "content": cleaned}
         # Append to the last user message.  We append (not prepend) so that
         # tool_result blocks stay at the front of the content list — Anthropic
         # requires tool_result to immediately follow the preceding tool_use.
@@ -1937,7 +1968,30 @@ class AnthropicFormat(PayloadFormat):
                 "content": [{"type": "text", "text": context_text}],
             })
         body["messages"] = messages
+        self._limit_cache_breakpoints(body)
         return body
+
+    _MAX_CACHE_BREAKPOINTS = 4
+
+    def _limit_cache_breakpoints(self, body: dict) -> None:
+        """Keep the request within the provider's breakpoint limit.
+
+        Repeated injections (a tool loop, or a client that already marks its
+        own breakpoints) would otherwise accumulate them. The oldest markers in
+        the conversation go first; tool and system markers, and the newest one
+        just placed, are kept.
+        """
+        def marked(blocks):
+            return [b for b in blocks if isinstance(b, dict) and "cache_control" in b] if isinstance(blocks, list) else []
+
+        fixed = len(marked(body.get("tools"))) + len(marked(body.get("system")))
+        in_messages = []
+        for msg in body.get("messages", []):
+            if isinstance(msg, dict):
+                in_messages.extend(marked(msg.get("content")))
+        excess = fixed + len(in_messages) - self._MAX_CACHE_BREAKPOINTS
+        for block in in_messages[:max(0, min(excess, len(in_messages) - 1))]:
+            block.pop("cache_control", None)
 
     def extract_conversation_id(self, body: dict) -> str | None:
         # Search BACKWARD — the most recent assistant marker is authoritative.
@@ -2862,24 +2916,32 @@ class GeminiFormat(PayloadFormat):
             return body
         body = copy.deepcopy(body)
         context_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        instruction = copy.deepcopy(body.get("system_instruction") or {})
-        parts = instruction.get("parts", [])
-        new_parts: list[dict] = []
-        if isinstance(parts, list):
-            for part in parts:
-                if not isinstance(part, dict):
-                    continue
-                if "text" not in part:
-                    new_parts.append(copy.deepcopy(part))
-                    continue
-                cleaned = _VC_BLOCK_RE.sub("", part.get("text", ""), count=1).strip()
-                if not cleaned:
-                    continue
-                updated = dict(part)
-                updated["text"] = cleaned
-                new_parts.append(updated)
-        new_parts.append({"text": context_block})
-        body["system_instruction"] = {"parts": new_parts}
+        # The block changes between calls, so it rides the latest user turn:
+        # the system instruction and every earlier turn stay an unchanged,
+        # cacheable prefix. Earlier blocks are removed so they never stack.
+        instruction = body.get("system_instruction")
+        if isinstance(instruction, dict) and isinstance(instruction.get("parts"), list):
+            parts = _strip_vc_blocks(instruction["parts"])
+            if parts:
+                body["system_instruction"] = {**instruction, "parts": parts}
+            else:
+                body.pop("system_instruction")
+        contents = body.get("contents")
+        if not isinstance(contents, list):
+            contents = []
+        for i, item in enumerate(contents):
+            if isinstance(item, dict) and isinstance(item.get("parts"), list):
+                cleaned = _strip_vc_blocks(item["parts"])
+                if cleaned is not item["parts"]:
+                    contents[i] = {**item, "parts": cleaned}
+        for i in range(len(contents) - 1, -1, -1):
+            item = contents[i]
+            if isinstance(item, dict) and item.get("role") == "user":
+                contents[i] = {**item, "parts": list(item.get("parts") or []) + [{"text": context_block}]}
+                break
+        else:
+            contents.append({"role": "user", "parts": [{"text": context_block}]})
+        body["contents"] = contents
         return body
 
     # -- Conversation markers --

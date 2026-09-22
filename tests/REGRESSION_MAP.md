@@ -468,21 +468,25 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
-### PROXY-027 — VC context at the start of Responses requests defeated prompt caching
+### PROXY-027 — VC context ahead of the conversation defeated prompt caching in every format
 
 - **Symptom**: Routed Codex-harness calls reported `cached_tokens: 0` on every call although the
   host's 67K of developer prompts and tool catalog were identical call to call.
-- **Root cause**: the Responses injection put VC's context block at the head of `instructions`,
-  the first thing the provider reads, and the block changes between calls (the context hint's topic
-  order shifted within one tool loop), so no two requests shared a prefix.
-  The placement was a regression: until 2026-04-16 the block was appended to the latest user item
-  for exactly this reason, and a storage refactor moved it to the head of `instructions`.
-- **Fix**: `core/responses_context.place_context_block` (used by the proxy format and the tool-loop
-  adapter) appends the block as the last input item, after the turn's tool calls and outputs,
-  removing any earlier block from the items or `instructions`.
+- **Root cause**: a 2026-04-16 storage refactor moved VC's context block, which changes between
+  calls, ahead of the conversation in every format: the head of `instructions` (Responses), the
+  system message (Chat), `system_instruction` (Gemini), and, by routing Anthropic proxy injection
+  through the tool-loop adapter, the Anthropic system prompt, which it then flattened to a string,
+  dropping the client's own cache breakpoints. The per-format tests were rewritten to the new
+  locations, so nothing failed.
+- **Fix**: one rule per format, used by the proxy and by the tool-loop adapters: the block rides the
+  latest user message (the last input item for Responses), earlier blocks are removed with only
+  VC's own separator, the client's text is kept byte-for-byte, and Anthropic requests stay within
+  four cache breakpoints.
 - **Tests**:
-  - `test_responses_context_placement.py`
-  - `test_chat_context_placement.py` (OpenAI Chat had the same regression: the block went to the system message)
+  - `test_context_cache_prefix.py` states the property itself for all four formats and both
+    injection paths; a placement ahead of the conversation fails it whatever the per-format tests
+    say. Do not relax it to fit a new placement.
+  - `test_responses_context_placement.py`, `test_chat_context_placement.py`
 
 ### PROXY-026 — Host-embedded history replay was never trimmed; compacted-turn drop removed instructions
 
@@ -739,6 +743,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_context_cache_prefix.py` | PROXY-027 |
 | `test_responses_context_placement.py` | PROXY-027 |
 | `test_chat_context_placement.py` | PROXY-027 |
 | `test_host_replay_expansion.py` | PROXY-026 |

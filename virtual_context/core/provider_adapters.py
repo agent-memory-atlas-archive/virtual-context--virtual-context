@@ -283,57 +283,13 @@ class AnthropicAdapter(ProviderAdapter):
                             block["text"] = "[Previous reasoning compressed]"
 
     def inject_context(self, body, prepend_text):
-        new_text = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
+        # One placement rule per format: the proxy's, which keeps the
+        # request prefix cacheable.
+        from ..proxy.formats import get_format
 
-        def _mark_last_stable_block(blocks: list[dict]) -> None:
-            for idx in range(len(blocks) - 1, -1, -1):
-                block = blocks[idx]
-                if (isinstance(block, dict)
-                        and block.get("type") == "text"
-                        and block.get("text", "").strip()):
-                    updated = dict(block)
-                    updated["cache_control"] = dict(self._CACHE_BREAKPOINT)
-                    blocks[idx] = updated
-                    return
-
-        system = body.get("system", "")
-        if isinstance(system, str):
-            cleaned = _VC_BLOCK_RE.sub("", system, count=1).strip()
-            if cleaned:
-                should_materialize_blocks = bool(
-                    body.get("model")
-                    or body.get("max_tokens")
-                    or not body.get("messages")
-                )
-                if should_materialize_blocks:
-                    blocks = [{"type": "text", "text": cleaned}]
-                    _mark_last_stable_block(blocks)
-                    blocks.append({"type": "text", "text": new_text})
-                    body["system"] = blocks
-                else:
-                    body["system"] = f"{cleaned}\n\n{new_text}"
-            else:
-                body["system"] = new_text
-        elif isinstance(system, list):
-            blocks: list[dict] = []
-            for entry in system:
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get("type") != "text":
-                    blocks.append(copy.deepcopy(entry))
-                    continue
-                text = _VC_BLOCK_RE.sub("", entry.get("text", ""), count=1).strip()
-                if not text:
-                    continue
-                updated = dict(entry)
-                updated["text"] = text
-                updated.pop("cache_control", None)
-                blocks.append(updated)
-            _mark_last_stable_block(blocks)
-            blocks.append({"type": "text", "text": new_text})
-            body["system"] = blocks
-        else:
-            body["system"] = new_text
+        updated = get_format("anthropic").inject_context(body, prepend_text)
+        body.clear()
+        body.update(updated)
 
     def strip_tools(self, body):
         body.pop("tools", None)
@@ -963,23 +919,13 @@ class GeminiAdapter(ProviderAdapter):
                         part["text"] = "[Previous reasoning compressed]"
 
     def inject_context(self, body, prepend_text):
-        new_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        si = body.get("system_instruction")
-        if isinstance(si, dict):
-            parts = si.get("parts", [])
-            replaced = False
-            for part in parts:
-                if isinstance(part, dict) and "text" in part:
-                    if _VC_BLOCK_RE.search(part["text"]):
-                        part["text"] = _VC_BLOCK_RE.sub(
-                            lambda m: new_block, part["text"], count=1,
-                        )
-                        replaced = True
-                        break
-            if not replaced:
-                parts.insert(0, {"text": new_block})
-        else:
-            body["system_instruction"] = {"parts": [{"text": new_block}]}
+        # One placement rule per format: the proxy's, which keeps the
+        # request prefix cacheable.
+        from ..proxy.formats import get_format
+
+        updated = get_format("gemini").inject_context(body, prepend_text)
+        body.clear()
+        body.update(updated)
 
     def strip_tools(self, body):
         body.pop("tools", None)

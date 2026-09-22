@@ -20,6 +20,21 @@ VC_BLOCK_RE = re.compile(
 _VC_ITEM_MARK = "vc_context"
 
 
+def strip_vc_text(text: str) -> str:
+    """Remove VC blocks and the blank-line separator VC put beside them.
+
+    The rest of the text is returned byte-for-byte, including the client's
+    own leading or trailing whitespace, so a cleaned prompt matches what the
+    client originally sent.
+    """
+    if not VC_BLOCK_RE.search(text):
+        return text
+    pattern = VC_BLOCK_RE.pattern
+    text = re.sub(r"\n{1,2}" + pattern, "", text, flags=re.DOTALL)
+    text = re.sub(pattern + r"\n{1,2}", "", text, flags=re.DOTALL)
+    return VC_BLOCK_RE.sub("", text)
+
+
 def _item_text(item: dict) -> str:
     content = item.get("content")
     if isinstance(content, str):
@@ -54,8 +69,8 @@ def place_context_block(body: dict, prepend_text: str) -> None:
             body["instructions"] = block
         return
     if isinstance(instructions, str) and VC_BLOCK_RE.search(instructions):
-        cleaned = VC_BLOCK_RE.sub("", instructions, count=1).strip()
-        if cleaned:
+        cleaned = strip_vc_text(instructions)
+        if cleaned.strip():
             body["instructions"] = cleaned
         else:
             body.pop("instructions", None)

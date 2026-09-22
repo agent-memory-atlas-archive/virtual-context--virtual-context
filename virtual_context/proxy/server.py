@@ -1967,23 +1967,11 @@ async def prepare_payload(
         body,
         _replay_messages,
     )
-    if api_format == "anthropic" and prepend_text:
-        from ..core.provider_adapters import AnthropicAdapter
-
-        enriched_body = copy.deepcopy(_replayed_body)
-        AnthropicAdapter(api_key="").inject_context(enriched_body, prepend_text)
-        if isinstance(enriched_body.get("system"), list):
-            enriched_body["system"] = "\n\n".join(
-                block.get("text", "")
-                for block in enriched_body["system"]
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-    else:
-        enriched_body = _inject_context(
-            _replayed_body,
-            prepend_text,
-            api_format,
-        )
+    enriched_body = _inject_context(
+        _replayed_body,
+        prepend_text,
+        api_format,
+    )
     _note_prep("inject_context", _inject_stage)
 
     # Inject VC paging tools for autonomous mode (formats that support it)

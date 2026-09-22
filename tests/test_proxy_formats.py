@@ -615,25 +615,6 @@ class TestGeminiFormat:
         expected = self.fmt._count(json.dumps(blanked, default=str)) + 1
         assert estimate == expected
 
-    def test_inject_context(self):
-        body = {"contents": [
-            {"role": "user", "parts": [{"text": "hi"}]},
-        ]}
-        result = self.fmt.inject_context(body, "ctx text")
-        si = result["system_instruction"]
-        assert si["parts"][0]["text"].startswith("<system-reminder>")
-
-    def test_inject_context_with_existing_system_instruction(self):
-        body = {
-            "system_instruction": {"parts": [{"text": "Be helpful."}]},
-            "contents": [],
-        }
-        result = self.fmt.inject_context(body, "ctx")
-        parts = result["system_instruction"]["parts"]
-        assert len(parts) == 2
-        assert parts[0]["text"] == "Be helpful."
-        assert "<system-reminder>" in parts[1]["text"]
-
     def test_inject_context_empty(self):
         body = {"contents": []}
         result = self.fmt.inject_context(body, "")
@@ -782,13 +763,6 @@ class TestServerWrappers:
         assert len(pairs) == 2
         assert pairs[0].content == "q1"
         assert pairs[1].role == "assistant"
-
-    def test_inject_context_gemini(self):
-        from virtual_context.proxy.server import _inject_context
-        body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
-        result = _inject_context(body, "context text", "gemini")
-        assert "system_instruction" in result
-        assert "<system-reminder>" in result["system_instruction"]["parts"][-1]["text"]
 
     def test_extract_conversation_id_gemini(self):
         from virtual_context.proxy.server import _extract_conversation_id
