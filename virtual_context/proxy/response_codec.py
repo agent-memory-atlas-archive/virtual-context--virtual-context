@@ -80,7 +80,13 @@ async def _bounded_lines(chunks):
         yield buffer.rstrip("\r")
 
 
-async def collect_response(response, api_format):
+async def collect_response(response, api_format, on_event=None):
+    """Fold a provider reply into one response object.
+
+    ``on_event`` is called with every parsed SSE event before it is folded,
+    so a relay can forward the visible parts of the stream while the
+    collector still assembles the complete response for interception.
+    """
     try:
         content_type = response.headers.get("content-type", "") or ""
         head, body = await _peek(response.aiter_bytes())
@@ -122,6 +128,8 @@ async def collect_response(response, api_format):
             kind = event.get("type", "")
             if kind == "error" or event.get("error"):
                 raise ContinuationError("The provider interrupted the response with an error.", 422)
+            if on_event is not None:
+                on_event(event)
             if api_format == "anthropic":
                 if kind == "message_start":
                     result = event.get("message", {})
