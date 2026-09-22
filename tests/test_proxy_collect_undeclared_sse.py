@@ -89,3 +89,9 @@ def test_a_populated_terminal_output_is_kept_as_is():
         {"type": "response.completed", "response": RESPONSE},
     ]
     assert asyncio.run(collect_response(_Resp([_sse(events)]), "openai_responses")) == RESPONSE
+
+
+def test_leading_blank_lines_do_not_hide_an_undeclared_sse_body():
+    raw = _sse(_events())
+    chunks = [b"\n" * 8, b"\n\n", raw[:3], raw[3:]]
+    assert asyncio.run(collect_response(_Resp(chunks), "openai_responses")) == RESPONSE

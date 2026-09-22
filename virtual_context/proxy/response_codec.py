@@ -27,12 +27,16 @@ def _describe(response, size, head):
 _SSE_FIELD_PREFIXES = (b"event:", b"data:", b"id:", b"retry:", b":")
 
 
-async def _peek(chunks, minimum=8):
-    """Return the first bytes of an async byte stream and a stream that replays them."""
+async def _peek(chunks, minimum=8, limit=65536):
+    """Return the first bytes of an async byte stream and a stream that replays them.
+
+    SSE may open with blank lines, so the peek keeps reading until it holds
+    ``minimum`` bytes past any leading whitespace (or ``limit`` bytes in all).
+    """
     head = b""
     async for chunk in chunks:
         head += chunk
-        if len(head) >= minimum:
+        if len(head.lstrip()) >= minimum or len(head) >= limit:
             break
 
     async def replay():
