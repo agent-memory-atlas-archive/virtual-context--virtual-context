@@ -2475,39 +2475,13 @@ class OpenAIFormat(PayloadFormat):
     def inject_context(self, body: dict, prepend_text: str) -> dict:
         if not prepend_text:
             return body
+        from ..core.chat_context import place_context_block
+
         body = copy.deepcopy(body)
-        context_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        messages = body.get("messages", [])
-        for i, msg in enumerate(messages):
-            if msg.get("role") != "system":
-                continue
-            content = msg.get("content", "")
-            messages[i] = dict(msg)
-            if isinstance(content, str):
-                cleaned = _VC_BLOCK_RE.sub("", content, count=1).strip()
-                messages[i]["content"] = (
-                    f"{cleaned}\n\n{context_block}" if cleaned else context_block
-                )
-            elif isinstance(content, list):
-                new_content = []
-                for block in content:
-                    if not isinstance(block, dict):
-                        new_content.append(block)
-                        continue
-                    if "text" not in block:
-                        new_content.append(copy.deepcopy(block))
-                        continue
-                    cleaned = _VC_BLOCK_RE.sub("", block.get("text", ""), count=1).strip()
-                    if not cleaned:
-                        continue
-                    updated = dict(block)
-                    updated["text"] = cleaned
-                    new_content.append(updated)
-                new_content.append({"type": "text", "text": context_block})
-                messages[i]["content"] = new_content
-            break
-        else:
-            messages.insert(0, {"role": "system", "content": context_block})
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        place_context_block(messages, prepend_text)
         body["messages"] = messages
         return body
 

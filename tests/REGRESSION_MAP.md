@@ -475,11 +475,14 @@ Use `pytest -m regression` to run all regression tests.
 - **Root cause**: the Responses injection put VC's context block at the head of `instructions`,
   the first thing the provider reads, and the block changes between calls (the context hint's topic
   order shifted within one tool loop), so no two requests shared a prefix.
+  The placement was a regression: until 2026-04-16 the block was appended to the latest user item
+  for exactly this reason, and a storage refactor moved it to the head of `instructions`.
 - **Fix**: `core/responses_context.place_context_block` (used by the proxy format and the tool-loop
-  adapter) inserts the block as a developer input item after the leading instruction items and before
-  the conversation, replacing any earlier block and moving one found in `instructions`.
+  adapter) appends the block as the last input item, after the turn's tool calls and outputs,
+  removing any earlier block from the items or `instructions`.
 - **Tests**:
   - `test_responses_context_placement.py`
+  - `test_chat_context_placement.py` (OpenAI Chat had the same regression: the block went to the system message)
 
 ### PROXY-026 — Host-embedded history replay was never trimmed; compacted-turn drop removed instructions
 
@@ -737,6 +740,7 @@ Use `pytest -m regression` to run all regression tests.
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
 | `test_responses_context_placement.py` | PROXY-027 |
+| `test_chat_context_placement.py` | PROXY-027 |
 | `test_host_replay_expansion.py` | PROXY-026 |
 | `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |

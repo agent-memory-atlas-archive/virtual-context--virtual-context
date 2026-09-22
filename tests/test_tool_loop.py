@@ -2232,11 +2232,11 @@ class TestOpenAIAdapterInjectContext:
             ],
         }
         self.adapter.inject_context(body, "new text")
-        assert "<system-reminder>\nnew text\n</system-reminder>" in body["messages"][0]["content"]
-        assert "old" not in body["messages"][0]["content"]
-        assert "Be helpful." in body["messages"][0]["content"]
+        assert body["messages"][0] == {"role": "system", "content": "Be helpful."}
+        assert "<system-reminder>\nnew text\n</system-reminder>" in body["messages"][1]["content"]
+        assert "old" not in str(body)
 
-    def test_no_existing_block_prepends(self):
+    def test_no_existing_block_appends_to_latest_user_message(self):
         body = {
             "messages": [
                 {"role": "system", "content": "Be helpful."},
@@ -2244,15 +2244,13 @@ class TestOpenAIAdapterInjectContext:
             ],
         }
         self.adapter.inject_context(body, "new text")
-        assert body["messages"][0]["content"].startswith("<system-reminder>\nnew text\n</system-reminder>")
-        assert "Be helpful." in body["messages"][0]["content"]
+        assert body["messages"][0] == {"role": "system", "content": "Be helpful."}
+        assert body["messages"][1]["content"] == "hi\n\n<system-reminder>\nnew text\n</system-reminder>"
 
     def test_no_system_message_inserts(self):
         body = {"messages": [{"role": "user", "content": "hi"}]}
         self.adapter.inject_context(body, "new text")
-        assert body["messages"][0]["role"] == "system"
-        assert body["messages"][0]["content"] == "<system-reminder>\nnew text\n</system-reminder>"
-        assert body["messages"][1]["role"] == "user"
+        assert body["messages"] == [{"role": "user", "content": "hi\n\n<system-reminder>\nnew text\n</system-reminder>"}]
 
 
 # ---------------------------------------------------------------------------
@@ -2376,9 +2374,10 @@ class TestToolLoopInjectsReassembledContext:
             result = run_tool_loop(engine, initial, original, OpenAIAdapter("sk-test"))
 
         sent_body = result.raw_requests[0]
-        sys_content = sent_body["messages"][0]["content"]
-        assert "EXPANDED content" in sys_content
-        assert "old" not in sys_content
+        # The block moved off the system prompt onto the latest user message.
+        assert sent_body["messages"][0] == {"role": "system", "content": "Be helpful."}
+        assert "EXPANDED content" in sent_body["messages"][1]["content"]
+        assert "old" not in json.dumps(sent_body["messages"])
 
     def test_no_injection_when_reassemble_returns_empty(self):
         """When reassemble_context returns empty string, system is unchanged."""

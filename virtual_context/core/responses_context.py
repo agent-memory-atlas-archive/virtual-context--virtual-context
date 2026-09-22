@@ -1,12 +1,12 @@
 """Where VC's context block goes in a Responses-API request.
 
-Providers reuse a cached prompt only while its beginning is byte-identical,
-and a Responses request is read as instructions, tools, then input items. VC's
-context block changes from call to call, so putting it in ``instructions``
-(the very start) made every call a cache miss, including the host's large,
-unchanging developer prompts and tool catalog. The block is placed instead as
-a developer input item after the request's leading instruction items and
-before the conversation, so everything ahead of it stays cacheable.
+Providers reuse a cached prompt only while its beginning is byte-identical.
+VC's context block changes from call to call, so it goes last: a developer
+item appended after every other input item, including the current turn's
+tool calls and outputs. Everything the host sent then stays an unchanged
+prefix, and each tool round of a turn extends the cached prefix of the
+previous one. Any earlier VC block, in the items or in ``instructions``, is
+removed first so blocks never stack.
 """
 
 from __future__ import annotations
@@ -39,24 +39,6 @@ def _is_vc_item(item: object) -> bool:
     return bool(match) and text.startswith("<system-reminder>")
 
 
-def _is_host_scaffolding(item: dict) -> bool:
-    from ..proxy.formats import get_format
-
-    check = getattr(get_format("openai_responses"), "_is_host_context_item", None)
-    return bool(callable(check) and check(item))
-
-
-def _is_leading_instruction(item: object) -> bool:
-    if not isinstance(item, dict):
-        return False
-    if item.get("role") in ("system", "developer"):
-        return True
-    kind = str(item.get("type", "message"))
-    if kind != "message":
-        return not kind.endswith(("_call", "_output"))
-    return _is_host_scaffolding(item)
-
-
 def place_context_block(body: dict, prepend_text: str) -> None:
     """Put VC's context block into ``body`` in place, replacing any earlier one."""
     block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
@@ -78,13 +60,9 @@ def place_context_block(body: dict, prepend_text: str) -> None:
         else:
             body.pop("instructions", None)
     kept = [item for item in items if not _is_vc_item(item)]
-    at = 0
-    while at < len(kept) and _is_leading_instruction(kept[at]):
-        at += 1
-    vc_item = {
+    kept.append({
         "type": "message",
         "role": "developer",
         "content": [{"type": "input_text", "text": block}],
-    }
-    kept.insert(at, vc_item)
+    })
     items[:] = kept

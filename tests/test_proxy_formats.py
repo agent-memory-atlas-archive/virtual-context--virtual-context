@@ -493,13 +493,14 @@ class TestOpenAIFormat:
             {"role": "user", "content": "hi"},
         ]}
         result = self.fmt.inject_context(body, "ctx text")
-        assert "<system-reminder>" in result["messages"][0]["content"]
-        assert "Be helpful." in result["messages"][0]["content"]
+        # The system prompt stays byte-identical; the block rides the latest user message.
+        assert result["messages"][0] == {"role": "system", "content": "Be helpful."}
+        assert result["messages"][1]["content"].startswith("hi\n\n<system-reminder>")
 
     def test_inject_context_without_system(self):
         body = {"messages": [{"role": "user", "content": "hi"}]}
         result = self.fmt.inject_context(body, "ctx text")
-        assert result["messages"][0]["role"] == "system"
+        assert [m["role"] for m in result["messages"]] == ["user"]
         assert "<system-reminder>" in result["messages"][0]["content"]
 
     def test_extract_conversation_id(self):
@@ -845,7 +846,7 @@ class TestServerWrappers:
         body = {"instructions": "Be helpful.", "input": []}
         result = _inject_context(body, "context text", "openai_responses")
         assert result["instructions"] == "Be helpful."
-        assert "<system-reminder>" in result["input"][0]["content"][0]["text"]
+        assert "<system-reminder>" in result["input"][-1]["content"][0]["text"]
 
     def test_extract_conversation_id_responses(self):
         from virtual_context.proxy.server import _extract_conversation_id
@@ -1035,8 +1036,8 @@ class TestOpenAIResponsesFormat:
         body = {"input": [{"role": "user", "content": "hi"}]}
         result = self.fmt.inject_context(body, "ctx")
         assert "instructions" not in result
-        assert result["input"][0]["role"] == "developer" and "ctx" in result["input"][0]["content"][0]["text"]
-        assert result["input"][1] == {"role": "user", "content": "hi"}
+        assert result["input"][0] == {"role": "user", "content": "hi"}
+        assert result["input"][1]["role"] == "developer" and "ctx" in result["input"][1]["content"][0]["text"]
 
     def test_inject_context_empty_prepend(self):
         body = {"instructions": "original", "input": []}
@@ -2453,19 +2454,17 @@ class TestInjectContext:
             {"role": "user", "content": "Hi"},
         ]}
         result = _inject_context(body, "context here", "openai")
-        content = result["messages"][0]["content"]
-        assert "Be helpful" in content
-        assert "<system-reminder>" in content
-        assert "context here" in content
-        # VC block appended after existing system prompt for cache friendliness
-        assert content.index("Be helpful") < content.index("<system-reminder>")
+        # Cache friendliness: the system prompt and history stay an unchanged
+        # prefix; the block rides the latest user message.
+        assert result["messages"][0] == {"role": "system", "content": "Be helpful"}
+        content = result["messages"][1]["content"]
+        assert content.startswith("Hi\n\n<system-reminder>") and "context here" in content
 
     def test_openai_without_system_message(self):
         body = {"messages": [{"role": "user", "content": "Hi"}]}
         result = _inject_context(body, "context here", "openai")
-        assert result["messages"][0]["role"] == "system"
+        assert [m["role"] for m in result["messages"]] == ["user"]
         assert "context here" in result["messages"][0]["content"]
-        assert result["messages"][1]["role"] == "user"
 
     def test_anthropic_string_system(self):
         body = {"system": "Be helpful", "messages": [

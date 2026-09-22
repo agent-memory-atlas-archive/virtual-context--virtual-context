@@ -1813,9 +1813,10 @@ class TestPayloadStructureInvariants:
             ),
             (
                 OpenAIAdapter("k"),
-                lambda b: b["messages"][0]["content"]
-                if b["messages"] and b["messages"][0]["role"] == "system"
-                else "",
+                # The block rides the latest user message, after the system prompt.
+                lambda b: "".join(
+                    m["content"] for m in b["messages"] if isinstance(m.get("content"), str)
+                ),
             ),
             (
                 GeminiAdapter("k"),

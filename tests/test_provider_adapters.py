@@ -306,13 +306,14 @@ class TestOpenAIAdapter:
             {"role": "user", "content": "hi"},
         ]}
         adapter.inject_context(body, "VC context")
-        assert "<system-reminder>" in body["messages"][0]["content"]
-        assert "VC context" in body["messages"][0]["content"]
+        assert body["messages"][0] == {"role": "system", "content": "Be helpful."}
+        assert "<system-reminder>" in body["messages"][1]["content"]
+        assert "VC context" in body["messages"][1]["content"]
 
     def test_inject_context_no_system_message(self, adapter):
         body = {"messages": [{"role": "user", "content": "hi"}]}
         adapter.inject_context(body, "VC context")
-        assert body["messages"][0]["role"] == "system"
+        assert [m["role"] for m in body["messages"]] == ["user"]
         assert "VC context" in body["messages"][0]["content"]
 
     def test_inject_context_replaces_existing(self, adapter):
@@ -321,8 +322,9 @@ class TestOpenAIAdapter:
             {"role": "user", "content": "hi"},
         ]}
         adapter.inject_context(body, "new context")
-        assert "old" not in body["messages"][0]["content"]
-        assert "new context" in body["messages"][0]["content"]
+        assert body["messages"][0] == {"role": "system", "content": "rest"}
+        assert "old" not in str(body)
+        assert "new context" in body["messages"][1]["content"]
 
     def test_strip_tools(self, adapter):
         body = {"tools": [{}], "tool_choice": "auto"}

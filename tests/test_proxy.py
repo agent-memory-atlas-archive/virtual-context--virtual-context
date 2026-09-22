@@ -456,7 +456,8 @@ class TestIntegration:
             # Verify the forwarded body has context injected
             call_kwargs = mock_req.call_args
             forwarded_body = json.loads(call_kwargs.args[0].content)
-            assert forwarded_body["messages"][0]["role"] == "system"
+            # The context block rides the latest user message.
+            assert forwarded_body["messages"][0]["role"] == "user"
             assert "mock context here" in forwarded_body["messages"][0]["content"]
 
 

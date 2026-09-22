@@ -526,20 +526,10 @@ class OpenAIAdapter(ProviderAdapter):
                             fn["arguments"] = "{}"
 
     def inject_context(self, body, prepend_text):
-        new_block = f"<system-reminder>\n{prepend_text}\n</system-reminder>"
-        messages = body.get("messages", [])
-        if messages and messages[0].get("role") == "system":
-            content = messages[0].get("content", "")
-            if isinstance(content, str) and _VC_BLOCK_RE.search(content):
-                messages[0]["content"] = _VC_BLOCK_RE.sub(
-                    lambda m: new_block, content, count=1,
-                )
-            elif isinstance(content, str):
-                messages[0]["content"] = (
-                    f"{new_block}\n\n{content}" if content else new_block
-                )
-        else:
-            messages.insert(0, {"role": "system", "content": new_block})
+        from .chat_context import place_context_block
+
+        messages = body.setdefault("messages", [])
+        place_context_block(messages, prepend_text)
 
     def strip_tools(self, body):
         body.pop("tools", None)
