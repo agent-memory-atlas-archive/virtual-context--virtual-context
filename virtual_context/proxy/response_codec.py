@@ -36,7 +36,10 @@ async def _peek(chunks, minimum=8, limit=65536):
     head = b""
     async for chunk in chunks:
         head += chunk
-        if len(head.lstrip()) >= minimum or len(head) >= limit:
+        stripped = head.lstrip()
+        # Stop as soon as the answer is known: an SSE field has appeared, or
+        # enough non-blank bytes to know it never will.
+        if stripped.startswith(_SSE_FIELD_PREFIXES) or len(stripped) >= minimum or len(head) >= limit:
             break
 
     async def replay():

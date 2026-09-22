@@ -95,3 +95,15 @@ def test_leading_blank_lines_do_not_hide_an_undeclared_sse_body():
     raw = _sse(_events())
     chunks = [b"\n" * 8, b"\n\n", raw[:3], raw[3:]]
     assert asyncio.run(collect_response(_Resp(chunks), "openai_responses")) == RESPONSE
+
+
+def test_peek_decides_on_the_first_sse_field_without_waiting_for_more_bytes():
+    from virtual_context.proxy.response_codec import _peek
+
+    async def run():
+        async def gen():
+            yield b"data:"
+            raise AssertionError("peek must not read past the first SSE field")
+        head, _ = await _peek(gen())
+        return head
+    assert asyncio.run(run()) == b"data:"
