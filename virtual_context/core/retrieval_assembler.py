@@ -142,6 +142,35 @@ class RetrievalAssembler:
         """Inject semantic search manager reference (set by engine after init)."""
         self._semantic = semantic
 
+    def _stored_recent_history(self, n_pairs: int) -> list[Message] | None:
+        """The newest stored pairs as chronological messages, or None when unavailable."""
+        from ..types import Message
+
+        getter = getattr(self._store, "get_recent_context_turns", None)
+        if not callable(getter) or not self.config.conversation_id or n_pairs <= 0:
+            return None
+        try:
+            rows = list(getter(self.config.conversation_id, limit=n_pairs + 1) or [])
+            if not all(hasattr(row, "user_content") for row in rows):
+                return None
+        except Exception:
+            logger.warning(
+                "Recent stored turns unavailable for conv=%s; using request history",
+                self.config.conversation_id[:12], exc_info=True,
+            )
+            return None
+        rows.sort(key=lambda row: (float(getattr(row, "sort_key", 0.0) or 0.0),
+                                   str(getattr(row, "canonical_turn_id", "") or "")))
+        messages: list[Message] = []
+        for row in rows:
+            user = str(getattr(row, "user_content", "") or "")
+            assistant = str(getattr(row, "assistant_content", "") or "")
+            if user.strip():
+                messages.append(Message(role="user", content=user))
+            if assistant.strip():
+                messages.append(Message(role="assistant", content=assistant))
+        return messages or None
+
     def _get_recent_context(
         self, history: list[Message], n_pairs: int, exclude_last: int = 2,
         current_text: str | None = None,
@@ -419,9 +448,14 @@ class RetrievalAssembler:
         # use immediate conversational cues.
         _context_stage = time.monotonic()
         n_context = self.config.tag_generator.context_lookback_pairs
+        # The recent pairs come from the stored conversation, which every
+        # worker reads the same way. A worker's in-memory history depends on
+        # which requests that worker happened to serve, so tagging from it
+        # made retrieval (and the retrieval memo) differ by worker.
+        context_source = self._stored_recent_history(n_context) or conversation_history
         # For inbound, the current message is not yet in history -- no need to exclude
         context = self._get_recent_context(
-            conversation_history, n_context, exclude_last=0,
+            context_source, n_context, exclude_last=0,
         )
         _note("recent_context", _context_stage)
 

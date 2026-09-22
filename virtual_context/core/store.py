@@ -362,6 +362,20 @@ class ContextStore(ABC):
         """
         return []
 
+    def get_recent_context_turns(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+    ) -> list[CanonicalTurnRow]:
+        """Newest stored turns used as tagging context for the next request.
+
+        Same rows as ``get_recent_canonical_turns``; a separate entry point so
+        retrieval's context read stays distinguishable from the protected
+        window's gated database read.
+        """
+        return self.get_recent_canonical_turns(conversation_id, limit=limit)
+
     def conversation_reconcile(
         self,
         conversation_id: str,

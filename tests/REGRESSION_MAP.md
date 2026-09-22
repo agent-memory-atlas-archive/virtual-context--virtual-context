@@ -468,6 +468,18 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-031 — Retrieval context depended on which worker served the call
+
+- **Symptom**: Three calls of one routed message ran on workers 19, 15 and 20; each logged
+  `RETRIEVAL_MEMO miss` with identical message and vocabulary fingerprints but a different `ctx`
+  fingerprint, so every call re-ran the full 2.5s retrieval.
+- **Root cause**: inbound tagging took its recent pairs from the worker's in-memory conversation
+  history, which differs by worker depending on which requests each one served.
+- **Fix**: the recent pairs come from the stored conversation through a dedicated store entry point
+  (`get_recent_context_turns`), falling back to the passed-in history only when nothing is stored.
+- **Tests**:
+  - `test_retrieval_context_is_worker_independent.py`
+
 ### PROXY-030 — Requests rebuilt the context hint inline after every compaction
 
 - **Symptom**: A routed request spent 2.6s rendering the context hint (`cache_layer=both_miss`,
@@ -778,6 +790,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_retrieval_context_is_worker_independent.py` | PROXY-031 |
 | `test_context_hint_no_inline_rebuild.py` | PROXY-030 |
 | `test_budget_enforcement_order.py` | PROXY-029 |
 | `test_current_attachments_preserved.py` | PROXY-028 |
