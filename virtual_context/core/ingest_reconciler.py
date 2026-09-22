@@ -1776,6 +1776,7 @@ class IngestReconciler:
         if phase_timings is not None:
             phase_timings["align_ms"] = (time.perf_counter() - _t_align) * 1000.0
         merge_mode = alignment.merge_mode if alignment else "no_overlap_append"
+        _t_merge_rows = time.perf_counter()
         if alignment is None and existing and prepared_turns:
             logger.warning(
                 "CANONICAL_TURN_NO_ALIGNMENT: conv=%s existing=%d incoming=%d -> no_overlap_append",
@@ -2064,6 +2065,9 @@ class IngestReconciler:
                     else:
                         turns_inserted += 1
 
+        if phase_timings is not None:
+            phase_timings["merge_rows_ms"] = (time.perf_counter() - _t_merge_rows) * 1000.0
+        _t_save_batch = time.perf_counter()
         batch = self._save_batch(
             conversation_id,
             raw_turn_count=raw_turn_count,
@@ -2076,6 +2080,9 @@ class IngestReconciler:
             turns_inserted=turns_inserted,
             batch_id=batch_id,
         )
+        if phase_timings is not None:
+            phase_timings["save_batch_ms"] = (time.perf_counter() - _t_save_batch) * 1000.0
+        _t_regroup = time.perf_counter()
         recompute_groups = getattr(self._store, "recompute_canonical_turn_groups", None)
         if callable(recompute_groups):
             try:
@@ -2086,6 +2093,8 @@ class IngestReconciler:
                     conversation_id[:12],
                     exc_info=True,
                 )
+        if phase_timings is not None:
+            phase_timings["regroup_ms"] = (time.perf_counter() - _t_regroup) * 1000.0
         _t_anchor = time.perf_counter()
         _anchor_rows = -1
         try:
