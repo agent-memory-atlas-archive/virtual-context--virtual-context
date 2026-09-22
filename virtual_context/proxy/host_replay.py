@@ -84,7 +84,15 @@ def expand_host_replay(body: dict) -> tuple[dict, int]:
             break
     if target is None:
         return body, 0
-    text = _item_text(items[target])
+    # Only the text part holding the block is rewritten; every other part of
+    # the current message (images, files, audio, further text) is kept as-is.
+    content = items[target].get("content")
+    parts = content if isinstance(content, list) else [{"type": "input_text", "text": content}]
+    at = next((i for i, part in enumerate(parts)
+               if isinstance(part, dict) and "<conversation_context>" in str(part.get("text", ""))), None)
+    if at is None:
+        return body, 0
+    text = parts[at]["text"]
     match = _BLOCK_RE.search(text)
     if not match:
         return body, 0
@@ -95,7 +103,9 @@ def expand_host_replay(body: dict) -> tuple[dict, int]:
     after = text[match.end():].lstrip()
     remaining = (before + "\n\n" + after).strip() if before else after.strip()
     current = copy.deepcopy(items[target])
-    current["content"] = [{"type": "input_text", "text": remaining}]
+    new_parts = copy.deepcopy(parts)
+    new_parts[at] = {**new_parts[at], "text": remaining}
+    current["content"] = new_parts
     expanded = [_message(role, entry) for role, entry in entries]
     out = dict(body)
     out["input"] = list(items[:target]) + expanded + [current] + list(items[target + 1:])

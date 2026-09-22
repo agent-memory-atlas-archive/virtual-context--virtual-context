@@ -162,3 +162,19 @@ def test_turn_filter_keeps_the_leading_instruction_block():
     assert dropped >= 10
     assert out["input"][:7] == head
     assert _text(out["input"][-1]).endswith("What did you find about the camera?")
+
+
+@pytest.mark.regression("PROXY-028")
+def test_attachments_in_the_current_message_survive_the_split():
+    image = {"type": "input_image", "image_url": "data:image/jpeg;base64,/9j/AAAA"}
+    pdf = {"type": "input_file", "filename": "labs.pdf", "file_data": "data:application/pdf;base64,JVBERi0="}
+    note = {"type": "input_text", "text": "second text part"}
+    current = {"type": "message", "role": "user",
+               "content": [{"type": "input_text", "text": PROMPT}, image, note, pdf]}
+    out, n = expand_host_replay({"model": "m", "input": [current]})
+    assert n == 5
+    parts = out["input"][-1]["content"]
+    assert [p["type"] for p in parts] == ["input_text", "input_image", "input_text", "input_file"]
+    assert parts[1] == image and parts[2] == note and parts[3] == pdf
+    assert "<conversation_context>" not in parts[0]["text"]
+    assert parts[0]["text"].endswith("What did you find about the camera?")
