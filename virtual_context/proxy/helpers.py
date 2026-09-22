@@ -80,11 +80,18 @@ MAX_DECODED_REQUEST_BYTES = 64 * 1024 * 1024
 
 
 def _zlib_decode(body: bytes, wbits: int, limit: int) -> bytes:
-    d = zlib.decompressobj(wbits)
-    out = d.decompress(body, limit + 1)
-    if len(out) > limit or d.unconsumed_tail:
-        raise DecodedBodyTooLarge(limit)
-    return out
+    # A gzip body may be several concatenated members; each starts a new stream.
+    out = bytearray()
+    data = body
+    while data:
+        d = zlib.decompressobj(wbits)
+        out += d.decompress(data, limit + 1 - len(out))
+        if len(out) > limit or d.unconsumed_tail:
+            raise DecodedBodyTooLarge(limit)
+        if not d.eof:
+            break
+        data = d.unused_data
+    return bytes(out)
 
 
 def decode_request_body(

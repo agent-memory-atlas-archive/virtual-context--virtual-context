@@ -117,3 +117,10 @@ def test_oversized_decoded_body_is_a_413():
     with patch("virtual_context.proxy.server.decode_request_body", side_effect=DecodedBodyTooLarge(1)):
         resp, _ = _run_app_post({"content-type": "application/json", "content-encoding": "gzip"}, gzip.compress(PAYLOAD))
     assert resp.status_code == 413 and resp.json()["error"]["type"] == "request_too_large"
+
+
+def test_concatenated_gzip_members_decode_whole_and_still_respect_the_cap():
+    body = gzip.compress(b'{"messages":') + gzip.compress(b'[]}')
+    assert decode_request_body(body, "gzip") == b'{"messages":[]}'
+    with pytest.raises(DecodedBodyTooLarge):
+        decode_request_body(gzip.compress(b"a" * 700) + gzip.compress(b"b" * 700), "gzip", limit=1024)
