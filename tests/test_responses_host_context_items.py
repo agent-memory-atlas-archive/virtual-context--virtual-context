@@ -43,3 +43,18 @@ def test_host_context_items_are_never_ingested():
     messages, stats = extract_ingestible_messages(_body(), fmt, mode="ingest")
     assert [(m.role, m.content[-3:]) for m in messages] == [("user", "OK1"), ("assistant", "OK1"), ("user", "OK2")]
     assert stats["skipped_non_chat_entry_count"] == 2
+
+
+def test_other_host_scaffolding_user_items_are_not_the_users_message():
+    fmt = get_format("openai_responses")
+    body = {"model": "m", "input": [
+        _item("user", "<recommended_plugins>\nHere is a list of plugins that are available"),
+        _item("user", '<external_openclaw_current_sender>{"sender":{"id":"1"}}</external_openclaw_current_sender>'),
+        _item("user", "[Tue 2026-09-22 12:40 UTC] <conversation_context>\nold stuff\n</conversation_context>\n\nwhat did we decide?"),
+    ]}
+    current = fmt.extract_user_message(body)
+    assert current.endswith("what did we decide?") and "<conversation_context>" not in current
+    from virtual_context.proxy.formats import extract_ingestible_messages
+    messages, _ = extract_ingestible_messages(body, fmt, mode="ingest")
+    assert len(messages) == 1 and messages[0].content.endswith("what did we decide?")
+    assert "<conversation_context>" not in messages[0].content

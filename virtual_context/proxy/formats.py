@@ -3188,6 +3188,8 @@ class OpenAIResponsesFormat(PayloadFormat):
 
     _HOST_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
     _HOST_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+    # Further user-role items a host emits around the prompt that carry no user speech.
+    _HOST_SCAFFOLD_PREFIXES = ("<recommended_plugins>", "<external_openclaw_current_sender>")
 
     def _is_host_context_item(self, item: dict) -> bool:
         """A user-role item the host appends after the prompt with its own runtime state.
@@ -3199,6 +3201,8 @@ class OpenAIResponsesFormat(PayloadFormat):
         if not isinstance(item, dict) or item.get("role") != "user":
             return False
         text = self._extract_text_from_content(item.get("content", "")).strip()
+        if text.startswith(self._HOST_SCAFFOLD_PREFIXES):
+            return True
         return text.startswith(self._HOST_CONTEXT_BEGIN) and text.endswith(self._HOST_CONTEXT_END)
 
     # -- Message extraction --

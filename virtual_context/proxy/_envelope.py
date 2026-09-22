@@ -15,6 +15,9 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 
 _VC_PROMPT_MARKER = "[vc:prompt]\n"
+# A chat host may replay its own transcript into the user turn inside this
+# block; it is the host's rendering of history, never the user's words.
+_HOST_REPLAY_RE = re.compile(r"<conversation_context>[\s\S]*?</conversation_context>[ \t]*\n*")
 # MemOS preamble: starts with "# Role", ends with this delimiter line (zero-width spaces)
 _MEMOS_QUERY_DELIM = "user\u200b原\u200b始\u200bquery\u200b：\u200b\u200b\u200b\u200b"
 
@@ -256,6 +259,9 @@ def _extract_envelope_metadata(text: str) -> tuple[str, dict]:
     # Strip [vc:prompt] marker and any trailing whitespace
     if text.startswith(_VC_PROMPT_MARKER):
         text = text[len(_VC_PROMPT_MARKER):].lstrip()
+
+    if "<conversation_context>" in text:
+        text = _HOST_REPLAY_RE.sub("", text).lstrip()
 
     # Strip MemOS preamble
     if text.startswith("# Role"):
