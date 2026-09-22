@@ -133,8 +133,27 @@ async def collect_response(response, api_format):
                 elif kind == "message_stop":
                     terminal = True
             elif api_format == "openai_responses":
-                if kind in ("response.completed", "response.done"):
+                # Output items are gathered as they complete: some upstreams
+                # send a terminal response whose output list is empty and rely
+                # on the item events for the content.
+                if kind == "response.output_item.added":
+                    blocks.setdefault(event.get("output_index", len(blocks)), copy.deepcopy(event.get("item", {})))
+                elif kind == "response.output_item.done":
+                    blocks[event.get("output_index", len(blocks))] = copy.deepcopy(event.get("item", {}))
+                elif kind == "response.output_text.delta":
+                    item = blocks.setdefault(event.get("output_index", 0), {"type": "message", "role": "assistant", "content": []})
+                    parts = item.setdefault("content", [])
+                    index = event.get("content_index", 0)
+                    while len(parts) <= index:
+                        parts.append({"type": "output_text", "text": "", "annotations": []})
+                    parts[index]["text"] = parts[index].get("text", "") + event.get("delta", "")
+                elif kind == "response.function_call_arguments.delta":
+                    item = blocks.setdefault(event.get("output_index", 0), {"type": "function_call", "arguments": ""})
+                    item["arguments"] = item.get("arguments", "") + event.get("delta", "")
+                elif kind in ("response.completed", "response.done"):
                     result = event["response"]
+                    if not result.get("output") and blocks:
+                        result["output"] = [blocks[index] for index in sorted(blocks)]
                     terminal = True
                 elif kind in ("response.failed", "response.incomplete"):
                     raise ContinuationError("The provider did not complete the response.")
