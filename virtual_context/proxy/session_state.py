@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from array import array
 import logging
 import math
 import threading
@@ -279,6 +280,65 @@ class SessionStateProvider:
         embeddings: dict[str, list[float]],
     ) -> dict[str, list[float]]:
         return {tag: list(values) for tag, values in embeddings.items()}
+
+    # Vectors live in Redis as float64 bytes behind a short marker. JSON float
+    # lists are still read so values written before this encoding keep working.
+    _VECTOR_MARKER = b"VCF1"
+
+    @classmethod
+    def _encode_vector(cls, values: list[float]) -> bytes:
+        return cls._VECTOR_MARKER + array("d", [float(v) for v in values]).tobytes()
+
+    @classmethod
+    def _decode_vector(cls, raw: object) -> list[float] | None:
+        if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._VECTOR_MARKER:
+            vec = array("d")
+            vec.frombytes(bytes(raw[4:]))
+            return vec.tolist()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        if isinstance(raw, str):
+            value = json.loads(raw)
+            return value if isinstance(value, list) else None
+        return None
+
+    @classmethod
+    def _encode_vector_map(cls, embeddings: dict[str, list[float]]) -> bytes:
+        tags = list(embeddings)
+        dims = [len(embeddings[tag]) for tag in tags]
+        header = json.dumps({"tags": tags, "dims": dims}, default=str).encode("utf-8")
+        flat = array("d")
+        for tag in tags:
+            flat.extend(float(v) for v in embeddings[tag])
+        return cls._VECTOR_MARKER + header + b"\n" + flat.tobytes()
+
+    @classmethod
+    def _decode_vector_map(cls, raw: object) -> dict[str, list[float]] | None:
+        """Decode a whole-snapshot value; returns None when it is not a map."""
+        if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._VECTOR_MARKER:
+            blob = bytes(raw)
+            cut = blob.index(b"\n", 4)
+            header = json.loads(blob[4:cut].decode("utf-8"))
+            flat = array("d")
+            flat.frombytes(blob[cut + 1:])
+            out: dict[str, list[float]] = {}
+            pos = 0
+            for tag, dim in zip(header.get("tags", []), header.get("dims", [])):
+                out[str(tag)] = flat[pos:pos + int(dim)].tolist()
+                pos += int(dim)
+            return out
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                return None
+            return {
+                str(tag): cls._normalize_embedding(list(values))
+                for tag, values in parsed.items()
+                if isinstance(values, list)
+            }
+        return None
 
     @staticmethod
     def _parse_datetime(value):
@@ -871,9 +931,7 @@ class SessionStateProvider:
             for tag, raw in zip(missing, raw_values):
                 if raw is None:
                     continue
-                if isinstance(raw, bytes):
-                    raw = raw.decode("utf-8")
-                value = json.loads(raw)
+                value = self._decode_vector(raw)
                 if isinstance(value, list):
                     loaded[tag] = value
                     self._remember_runtime_tag_embedding(model_name, tag, value)
@@ -904,7 +962,7 @@ class SessionStateProvider:
                     self._remember_runtime_tag_embedding(model_name, tag, embedding)
                     pipe.set(
                         self._tag_embedding_cache_key(model_name, tag),
-                        json.dumps(embedding, default=str).encode("utf-8"),
+                        self._encode_vector(embedding),
                         ex=ttl,
                     )
                 pipe.execute()
@@ -929,16 +987,11 @@ class SessionStateProvider:
             raw = self._redis.get(self._tag_summary_embedding_snapshot_key(conversation_id))
             if raw is None:
                 return None
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-            parsed = json.loads(raw)
-            if not isinstance(parsed, dict):
+            # Binary snapshots were normalized when written; only legacy JSON
+            # values are normalized on the way in.
+            normalized = self._decode_vector_map(raw)
+            if normalized is None:
                 return None
-            normalized = {
-                str(tag): self._normalize_embedding(list(values))
-                for tag, values in parsed.items()
-                if isinstance(values, list)
-            }
             self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
                 self._clone_embedding_map(normalized)
             )
@@ -970,7 +1023,7 @@ class SessionStateProvider:
             )
             self._redis.set(
                 self._tag_summary_embedding_snapshot_key(conversation_id),
-                json.dumps(normalized, default=str).encode("utf-8"),
+                self._encode_vector_map(normalized),
                 ex=ttl_seconds or self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
             )
         except Exception:

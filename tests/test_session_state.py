@@ -676,3 +676,41 @@ def test_tag_summary_embedding_snapshot_roundtrip(provider):
     assert pytest.approx(loaded["api"][1], rel=1e-4) == 0.8
     assert pytest.approx(loaded["auth"][0], rel=1e-4) == 0.0
     assert pytest.approx(loaded["auth"][1], rel=1e-4) == 1.0
+
+
+
+class TestBinaryEmbeddingCaches:
+    def _provider(self):
+        from virtual_context.proxy.session_state import SessionStateProvider
+        return SessionStateProvider(fakeredis.FakeRedis(decode_responses=False))
+
+    def test_tag_embeddings_round_trip_as_float64(self):
+        p = self._provider()
+        p.save_tag_embeddings("m", {"alpha": [0.5, -0.25, 1.0], "beta": [0.0, 2.0, 0.0]})
+        raw = p._redis.get(p._tag_embedding_cache_key("m", "alpha"))
+        assert raw.startswith(b"VCF1") and len(raw) == 4 + 3 * 8
+        p._runtime_tag_cache("m").clear()
+        loaded = p.load_tag_embeddings("m", ["alpha", "beta", "gamma"])
+        assert loaded["alpha"] == [0.5, -0.25, 1.0] and loaded["beta"] == [0.0, 2.0, 0.0]
+        assert "gamma" not in loaded
+
+    def test_legacy_json_tag_embeddings_still_load(self):
+        p = self._provider()
+        p._redis.set(p._tag_embedding_cache_key("m", "old"), json.dumps([0.1, 0.2]).encode())
+        assert p.load_tag_embeddings("m", ["old"])["old"] == [0.1, 0.2]
+
+    def test_summary_snapshot_round_trip_is_binary_and_normalized_once(self):
+        p = self._provider()
+        p.save_tag_summary_embedding_snapshot("conv", {"a": [3.0, 4.0], "b": [0.0, 0.0, 5.0]})
+        raw = p._redis.get(p._tag_summary_embedding_snapshot_key("conv"))
+        assert raw.startswith(b"VCF1")
+        p._tag_summary_embedding_snapshot_runtime_cache.clear()
+        loaded = p.load_tag_summary_embedding_snapshot("conv")
+        assert [round(v, 6) for v in loaded["a"]] == [0.6, 0.8]
+        assert loaded["b"] == [0.0, 0.0, 1.0]
+
+    def test_legacy_json_summary_snapshot_still_loads_and_normalizes(self):
+        p = self._provider()
+        p._redis.set(p._tag_summary_embedding_snapshot_key("conv"), json.dumps({"a": [3.0, 4.0]}).encode())
+        loaded = p.load_tag_summary_embedding_snapshot("conv")
+        assert [round(v, 6) for v in loaded["a"]] == [0.6, 0.8]
