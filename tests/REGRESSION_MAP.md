@@ -468,6 +468,23 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-026 — Host-embedded history replay was never trimmed; compacted-turn drop removed instructions
+
+- **Symptom**: A Codex-harness host payload of ~171K tokens against a 90,000-token window left VC
+  at 155K-173K on every call (`BUDGET Payload 173118t exceeds budget 90000t`,
+  `PROTECTED_INTRUSION: protected zone 208780t is 232% of budget`). 81.5K of it was the host's
+  `<conversation_context>` replay inside the current user message.
+- **Root cause**: the replay block lives inside the current user message, so every filter treated it
+  as the protected current turn. Separately, `drop_compacted_turns` dropped any turn group outside
+  the protected window, including groups holding only developer messages or the `additional_tools`
+  catalog item.
+- **Fix**: `proxy/host_replay.expand_host_replay` splits the newest user message's replay block into
+  ordinary user/assistant items before filtering (after ingestion and the completion snapshot, so
+  nothing is stored twice). `drop_compacted_turns` skips groups without a user or assistant message.
+- **Tests**:
+  - `test_host_replay_expansion.py` (block parsing, expansion shape, no-op, input not mutated,
+    expanded history shrunk by the drop, instructions and catalogs kept)
+
 ### PROXY-025 — Budget-enforced message stubbing (context_window not enforced)
 
 - **Symptom**: With `context_window: 5000`, proxy sends 28k+ tokens upstream. Tool chain referential integrity keeps compacted messages.
@@ -704,6 +721,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_host_replay_expansion.py` | PROXY-026 |
 | `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |
 | `test_tui.py` | BUG-002 |

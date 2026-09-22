@@ -1686,6 +1686,21 @@ async def prepare_payload(
         _effective_budget = 0
     _note_prep("budget_auto_promotion", _budget_stage)
 
+    # A host that pastes recent history into the current message as a
+    # <conversation_context> block gets that history back as real turns, so
+    # the filters below manage it like any other history. Ingestion and the
+    # completion snapshot already read the client's own shape above.
+    if state:
+        _replay_stage = time.monotonic()
+        from .host_replay import expand_host_replay
+        body, _replay_items = expand_host_replay(body)
+        if _replay_items:
+            logger.info(
+                "HOST_REPLAY_EXPANDED conv=%s items=%d",
+                state.engine.config.conversation_id[:12], _replay_items,
+            )
+        _note_prep("host_replay_expand", _replay_stage)
+
     # Capture the raw client body BEFORE any VC modifications (stubbing/filtering)
     _copy_stage = time.monotonic()
     _pre_filter_body = copy.deepcopy(body)
