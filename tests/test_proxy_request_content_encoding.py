@@ -130,3 +130,41 @@ def test_client_accept_encoding_never_travels_upstream():
     from virtual_context.proxy.helpers import _forward_headers
     fwd = _forward_headers({"accept-encoding": "br, gzip, deflate, zstd", "accept": "text/event-stream", "authorization": "Bearer t"})
     assert "accept-encoding" not in fwd and fwd["accept"] == "text/event-stream" and fwd["authorization"] == "Bearer t"
+
+
+def test_out_of_band_conversation_identity_suppresses_the_reply_marker():
+    async def run():
+        seen = {}
+
+        async def prepare(body, state, fmt, request_metrics, **kwargs):
+            return SimpleNamespace(vc_command=False, is_passthrough=False, is_streaming=False, paging_enabled=False,
+                                   tool_output_find_quote=False, restore_tool_injected=False, enriched_body=body,
+                                   api_format="openai", turn=1, request_turn=1, turn_id="t", overhead_ms=0,
+                                   conversation_id="c", speaker_context=None, upstream_limit=200_000,
+                                   speaker_roster_snapshot=None)
+
+        async def handler(*args, **kwargs):
+            seen["skip"] = kwargs.get("skip_marker_injection")
+            return JSONResponse({"ok": True})
+
+        with patch("virtual_context.proxy.server.VirtualContextEngine", side_effect=RuntimeError("no storage")), \
+             patch("virtual_context.proxy.server.prepare_payload", side_effect=prepare), \
+             patch("virtual_context.proxy.server._handle_non_streaming", side_effect=handler):
+            app = create_app("http://upstream.invalid", shared_metrics=SimpleNamespace(owner="default"))
+            state = SimpleNamespace(metrics=SimpleNamespace(owner="c"), engine=SimpleNamespace(config=SimpleNamespace(conversation_id="c")))
+            app.state.state_resolver = lambda request, body, cid: (state, False)
+
+            @app.middleware("http")
+            async def _flag(request, call_next):
+                if request.headers.get("x-test-oob") == "1":
+                    request.state.conversation_out_of_band = True
+                return await call_next(request)
+
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+                await client.post("/v1/chat/completions", headers={"content-type": "application/json"}, content=PAYLOAD)
+                plain = seen["skip"]
+                await client.post("/v1/chat/completions", headers={"content-type": "application/json", "x-test-oob": "1"}, content=PAYLOAD)
+                flagged = seen["skip"]
+        return plain, flagged
+    plain, flagged = asyncio.run(run())
+    assert plain is False and flagged is True

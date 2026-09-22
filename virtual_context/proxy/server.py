@@ -3194,6 +3194,9 @@ def create_app(
 
         # Extract conversation ID from markers before stripping them
         inbound_conversation_id = _extract_conversation_id(body)
+        # A client that names its conversation out of band (a signed route, a
+        # query parameter set by the deployment) never needs the reply marker.
+        skip_marker = bool(inbound_conversation_id) or getattr(request.state, "conversation_out_of_band", False) is True
 
         # Organize logs by conversation_id when available
         if _base_log_dir and body_bytes:
@@ -3278,7 +3281,7 @@ def create_app(
                         request_context=continuation.context, continuation_session=continuation,
                         metrics=request_metrics, turn=continuation.context.turn,
                         request_turn=continuation.context.request_turn, turn_id=continuation.context.turn_id,
-                        conversation_id=conversation_id, skip_marker_injection=bool(inbound_conversation_id),
+                        conversation_id=conversation_id, skip_marker_injection=skip_marker,
                         **options,
                     )
                 except BaseException:
@@ -3360,7 +3363,7 @@ def create_app(
                     passthrough=True, response_log_path=_response_log_path,
                     session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
-                    skip_marker_injection=bool(inbound_conversation_id),
+                    skip_marker_injection=skip_marker,
                     speaker_context=result.speaker_context,
                     upstream_limit=result.upstream_limit,
                     roster_snapshot=result.speaker_roster_snapshot,
@@ -3373,7 +3376,7 @@ def create_app(
                     passthrough=True, response_log_path=_response_log_path,
                     session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
-                    skip_marker_injection=bool(inbound_conversation_id),
+                    skip_marker_injection=skip_marker,
                     speaker_context=result.speaker_context,
                     upstream_limit=result.upstream_limit,
                     roster_snapshot=result.speaker_roster_snapshot,
@@ -3392,7 +3395,7 @@ def create_app(
                     paging_enabled=_intercept_vc_tools,
                     request_log_dir=_effective_log_dir,
                     log_prefix=_log_prefix if _effective_log_dir else "",
-                    skip_marker_injection=bool(inbound_conversation_id),
+                    skip_marker_injection=skip_marker,
                     speaker_context=result.speaker_context,
                     upstream_limit=result.upstream_limit,
                     roster_snapshot=result.speaker_roster_snapshot,
@@ -3407,7 +3410,7 @@ def create_app(
                     response_log_path=_response_log_path,
                     session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
-                    skip_marker_injection=bool(inbound_conversation_id),
+                    skip_marker_injection=skip_marker,
                     speaker_context=result.speaker_context,
                     upstream_limit=result.upstream_limit,
                     roster_snapshot=result.speaker_roster_snapshot,
