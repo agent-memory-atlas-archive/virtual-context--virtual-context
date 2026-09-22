@@ -152,13 +152,12 @@ def test_out_of_band_conversation_identity_suppresses_the_reply_marker():
              patch("virtual_context.proxy.server._handle_non_streaming", side_effect=handler):
             app = create_app("http://upstream.invalid", shared_metrics=SimpleNamespace(owner="default"))
             state = SimpleNamespace(metrics=SimpleNamespace(owner="c"), engine=SimpleNamespace(config=SimpleNamespace(conversation_id="c")))
-            app.state.state_resolver = lambda request, body, cid: (state, False)
-
-            @app.middleware("http")
-            async def _flag(request, call_next):
+            def resolver(request, body, cid):
+                # the deployment's resolver is where the out-of-band identity is recognized
                 if request.headers.get("x-test-oob") == "1":
                     request.state.conversation_out_of_band = True
-                return await call_next(request)
+                return state, False
+            app.state.state_resolver = resolver
 
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
                 await client.post("/v1/chat/completions", headers={"content-type": "application/json"}, content=PAYLOAD)
