@@ -27,12 +27,17 @@ _HOST_ASSEMBLED_LABEL = "OpenClaw assembled context for this turn:"
 _HOST_RUNTIME_LABEL = "OpenClaw runtime context for this turn:"
 _HOST_CTX_TAG = "⟦openclaw:ctx⟧"
 _HOST_CTX_JSON_BLOCK_RE = re.compile(
-    r"(?:^|\n)[ \t]*([A-Z][^\n:⟦]{0,80}):\s*⟦openclaw:ctx⟧[ \t]*\n"
+    r"[ \t]*([A-Z][^\n:⟦]{0,80}):\s*⟦openclaw:ctx⟧[ \t]*\n"
     r"```(?:json)?\s*\n"
     r"(\{[^`]*?\}|\[[^`]*?\])\s*\n"
-    r"```",
+    r"```[ \t]*\n?",
     re.DOTALL,
 )
+# Host labels sit at the start of a line; the same words inside a sentence
+# are the requester's.
+_HOST_CTX_LABEL_LINE_RE = re.compile(r"(?m)^[ \t]*[A-Z][^\n:⟦]{0,80}:[ \t]*⟦openclaw:ctx⟧[ \t]*$")
+_HOST_ASSEMBLED_LINE_RE = re.compile(r"(?m)^[ \t]*OpenClaw assembled context for this turn:[ \t]*$")
+_HOST_REQUEST_LINE_RE = re.compile(r"(?m)^[ \t]*Current user request:[ \t]*\n?")
 # MemOS preamble: starts with "# Role", ends with this delimiter line (zero-width spaces)
 _MEMOS_QUERY_DELIM = "user\u200b原\u200b始\u200bquery\u200b：\u200b\u200b\u200b\u200b"
 
@@ -275,11 +280,16 @@ def _extract_envelope_metadata(text: str) -> tuple[str, dict]:
     if text.startswith(_VC_PROMPT_MARKER):
         text = text[len(_VC_PROMPT_MARKER):].lstrip()
 
+    had_replay = False
     if "<conversation_context>" in text:
         # Only the block goes; the whitespace around it is the text's own.
-        text = _HOST_REPLAY_RE.sub("", text).lstrip()
-    if _HOST_REQUEST_LABEL in text and _is_host_carried_prompt(text):
-        text = _split_host_request(text, metadata)
+        text, had_replay = _HOST_REPLAY_RE.subn("", text)
+        text = text.lstrip()
+        had_replay = bool(had_replay)
+    if _HOST_REQUEST_LABEL in text and _is_host_carried_prompt(text, had_replay):
+        # The requester's words need none of the recognizers below: the host
+        # wrote the envelope, not a channel adapter.
+        return _split_host_request(text, metadata), metadata
 
     # Strip MemOS preamble
     if text.startswith("# Role"):
@@ -408,11 +418,14 @@ def extract_timestamp_from_metadata(metadata: dict | None) -> "datetime | None":
     return None
 
 
-def _is_host_carried_prompt(text: str) -> bool:
+def _is_host_carried_prompt(text: str, had_replay: bool = False) -> bool:
     """Only a host-built prompt splits on the request label; prose keeps it."""
-    return (
-        _HOST_ASSEMBLED_LABEL in text
-        or _HOST_CTX_TAG in text
+    if not _HOST_REQUEST_LINE_RE.search(text):
+        return False
+    return bool(
+        had_replay
+        or _HOST_ASSEMBLED_LINE_RE.search(text)
+        or _HOST_CTX_LABEL_LINE_RE.search(text)
         or text.lstrip().startswith(_HOST_RUNTIME_LABEL)
     )
 
@@ -427,9 +440,18 @@ def _split_host_request(text: str, metadata: dict) -> str:
     files are dropped. Nested labels come from the host wrapping its own
     assembled context in the request slot, so the last label wins.
     """
-    head, _, request = text.rpartition(_HOST_REQUEST_LABEL)
-    for m in _HOST_CTX_JSON_BLOCK_RE.finditer(head):
-        label = m.group(1).strip().lower()
+    labels = list(_HOST_REQUEST_LINE_RE.finditer(text))
+    last = labels[-1]
+    head, request = text[:last.start()], text[last.end():]
+    # Only blocks at the leading edge are the adapter's; anything after the
+    # first other section (replayed chat, workspace files) is quoted text.
+    position = 0
+    while True:
+        m = _HOST_CTX_JSON_BLOCK_RE.match(head, position)
+        if m is None:
+            break
+        position = m.end()
+        label = re.sub(r"\s*\([^)]*\)\s*$", "", m.group(1).strip()).lower()
         try:
             parsed = json.loads(m.group(2))
         except (json.JSONDecodeError, ValueError):
@@ -442,6 +464,8 @@ def _split_host_request(text: str, metadata: dict) -> str:
             _claim_reply_subject(metadata, label, parsed, edge="leading")
         else:
             _claim_reply_subject(metadata, label, None, edge="leading")
+        while position < len(head) and head[position] == "\n":
+            position += 1
     return request.strip()
 
 
