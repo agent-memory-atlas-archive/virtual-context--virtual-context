@@ -246,7 +246,9 @@ def test_streaming_continuation_overflow_stops_before_second_provider_call():
         with patch("virtual_context.proxy.handlers.execute_vc_tool", return_value="evidence " * 2000):
             async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
                 response = await _handle_streaming(client, "http://upstream", {}, _body("anthropic"), "anthropic", _state(), paging_enabled=True, upstream_limit=500, skip_marker_injection=True)
-                outbound = b"".join([part async for part in response.body_iterator])
+                # a budget overflow is decided before any stream starts and answered with its own status
+                outbound = response.body if hasattr(response, "body") else b"".join([part async for part in response.body_iterator])
+                assert response.status_code == 413
         assert len(calls) == 1
         assert b"context_budget_exceeded" in outbound
         assert b'"name": "vc_find_quote"' not in outbound

@@ -107,3 +107,9 @@ def test_peek_decides_on_the_first_sse_field_without_waiting_for_more_bytes():
         head, _ = await _peek(gen())
         return head
     assert asyncio.run(run()) == b"data:"
+
+
+def test_unreadable_upstream_replies_are_client_errors_not_gateway_errors():
+    with pytest.raises(ContinuationError) as exc:
+        asyncio.run(collect_response(_Resp([b"<html>nope</html>"]), "openai_responses"))
+    assert exc.value.status_code == 422

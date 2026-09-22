@@ -16,6 +16,10 @@ from .continuation import MAX_RESPONSE_BYTES, ContinuationError
 
 logger = logging.getLogger(__name__)
 
+# An upstream reply this proxy cannot read is answered with a client error rather
+# than a gateway error: clients retry 5xx and stream errors, and each retry is a
+# full model call, so the failure has to be terminal for the caller.
+
 
 def _describe(response, size, head):
     return "status=%s content-type=%r content-encoding=%r bytes=%d head=%r" % (
@@ -92,9 +96,9 @@ async def collect_response(response, api_format):
                 value = json.loads(raw)
             except ValueError as exc:
                 logger.warning("COLLECT_NOT_JSON %s", _describe(response, size, raw[:200]))
-                raise ContinuationError("The provider returned an invalid JSON response.") from exc
+                raise ContinuationError("The provider returned an invalid JSON response.", 422) from exc
             if not isinstance(value, dict):
-                raise ContinuationError("The provider returned an invalid response object.")
+                raise ContinuationError("The provider returned an invalid response object.", 422)
             return value
         result, blocks, calls = {}, {}, {}
         size = 0
@@ -114,10 +118,10 @@ async def collect_response(response, api_format):
             try:
                 event = json.loads(raw)
             except ValueError as exc:
-                raise ContinuationError("The provider returned malformed SSE data.") from exc
+                raise ContinuationError("The provider returned malformed SSE data.", 422) from exc
             kind = event.get("type", "")
             if kind == "error" or event.get("error"):
-                raise ContinuationError("The provider interrupted the response with an error.")
+                raise ContinuationError("The provider interrupted the response with an error.", 422)
             if api_format == "anthropic":
                 if kind == "message_start":
                     result = event.get("message", {})
@@ -133,7 +137,7 @@ async def collect_response(response, api_format):
                     elif delta.get("type") == "citations_delta":
                         block.setdefault("citations", []).append(delta.get("citation", {}))
                     else:
-                        raise ContinuationError("The provider returned an unsupported content delta.")
+                        raise ContinuationError("The provider returned an unsupported content delta.", 422)
                 elif kind == "message_delta":
                     result.update(event.get("delta", {}))
                     result.setdefault("usage", {}).update(event.get("usage", {}))
@@ -163,7 +167,7 @@ async def collect_response(response, api_format):
                         result["output"] = [blocks[index] for index in sorted(blocks)]
                     terminal = True
                 elif kind in ("response.failed", "response.incomplete"):
-                    raise ContinuationError("The provider did not complete the response.")
+                    raise ContinuationError("The provider did not complete the response.", 422)
             elif api_format == "openai":
                 result.update({key: value for key, value in event.items() if key != "choices"})
                 for choice in event.get("choices", []):
@@ -198,14 +202,14 @@ async def collect_response(response, api_format):
                 result.update({key: value for key, value in event.items() if key != "candidates"})
         if not terminal:
             logger.warning("COLLECT_NO_TERMINAL %s", _describe(response, size, list(tail)))
-            raise ContinuationError("The provider stream ended before its completion event.")
+            raise ContinuationError("The provider stream ended before its completion event.", 422)
         if api_format == "anthropic":
             for block in blocks.values():
                 if "_partial_json" in block:
                     try:
                         block["input"] = json.loads(block.pop("_partial_json"))
                     except ValueError as exc:
-                        raise ContinuationError("The provider returned incomplete tool arguments.") from exc
+                        raise ContinuationError("The provider returned incomplete tool arguments.", 422) from exc
             result["content"] = [blocks[index] for index in sorted(blocks)]
         elif api_format == "openai" and calls:
             result["choices"][0]["message"]["tool_calls"] = [calls[index] for index in sorted(calls)]

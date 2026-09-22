@@ -707,9 +707,11 @@ async def _handle_streaming(
     resp_headers.setdefault("x-accel-buffering", "no")
 
     if paging_enabled and session:
-        async def managed_stream():
-            try:
-                result = await _handle_non_streaming(
+        # The whole reply is collected before anything is sent, so a failure is
+        # answered with its real status instead of an error event inside a 200
+        # stream, which clients treat as retriable.
+        try:
+            result = await _handle_non_streaming(
                     client, url, headers, body, api_format, state,
                     request_context=context, continuation_session=session,
                     initial_response=upstream, source_streaming=True,
@@ -719,19 +721,25 @@ async def _handle_streaming(
                     passthrough=passthrough, skip_marker_injection=skip_marker_injection,
                     response_log_path=response_log_path, session_log_path=session_log_path,
                     request_log_dir=request_log_dir, log_prefix=log_prefix,
-                )
-                value = json.loads(result.body)
-                if result.status_code >= 300:
-                    yield ("event: error\ndata: " + json.dumps({"type": "error", "error": value.get("error", value)}) + "\n\n").encode()
-                else:
-                    for event in response_events(value, api_format):
-                        yield event
-            except PayloadBudgetExceeded as exc:
-                yield ("event: error\ndata: " + json.dumps({"type": "error", "error": {"type": "context_budget_exceeded", "message": str(exc)}}) + "\n\n").encode()
+            )
+        except PayloadBudgetExceeded as exc:
+            await upstream.aclose()
+            await session.close()
+            return JSONResponse(status_code=413, content={"error": {"type": "context_budget_exceeded", "message": str(exc)}})
+        if result.status_code >= 300:
+            await upstream.aclose()
+            await session.close()
+            return result
+        value = json.loads(result.body)
+
+        async def managed_stream():
+            try:
+                for event in response_events(value, api_format):
+                    yield event
             finally:
                 await upstream.aclose()
                 await session.close()
-        return StreamingResponse(managed_stream(), status_code=upstream.status_code, headers=resp_headers)
+        return StreamingResponse(managed_stream(), status_code=200, headers=resp_headers)
 
     # ----- shared post-stream processing -----
     def _post_stream(text_chunks, raw_events, usage=None):
