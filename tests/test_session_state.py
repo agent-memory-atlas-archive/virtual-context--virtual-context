@@ -714,3 +714,14 @@ class TestBinaryEmbeddingCaches:
         p._redis.set(p._tag_summary_embedding_snapshot_key("conv"), json.dumps({"a": [3.0, 4.0]}).encode())
         loaded = p.load_tag_summary_embedding_snapshot("conv")
         assert [round(v, 6) for v in loaded["a"]] == [0.6, 0.8]
+
+
+    def test_legacy_values_are_rewritten_packed_after_a_load(self):
+        p = self._provider()
+        p._redis.set(p._tag_embedding_cache_key("m", "old"), json.dumps([0.1, 0.2]).encode())
+        p._redis.set(p._tag_summary_embedding_snapshot_key("conv"), json.dumps({"a": [3.0, 4.0]}).encode(), ex=500)
+        assert p.load_tag_embeddings("m", ["old"])["old"] == [0.1, 0.2]
+        assert p.load_tag_summary_embedding_snapshot("conv")["a"] == [0.6, 0.8]
+        assert p._redis.get(p._tag_embedding_cache_key("m", "old")).startswith(b"VCF1")
+        snap = p._redis.get(p._tag_summary_embedding_snapshot_key("conv"))
+        assert snap.startswith(b"VCF1") and 0 < p._redis.ttl(p._tag_summary_embedding_snapshot_key("conv")) <= 500

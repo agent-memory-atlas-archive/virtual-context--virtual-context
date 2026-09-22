@@ -290,6 +290,10 @@ class SessionStateProvider:
         return cls._VECTOR_MARKER + array("d", [float(v) for v in values]).tobytes()
 
     @classmethod
+    def _is_packed(cls, raw: object) -> bool:
+        return isinstance(raw, (bytes, bytearray)) and bytes(raw[:4]) == cls._VECTOR_MARKER
+
+    @classmethod
     def _decode_vector(cls, raw: object) -> list[float] | None:
         if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._VECTOR_MARKER:
             vec = array("d")
@@ -928,6 +932,7 @@ class SessionStateProvider:
             else:
                 raw_values = [self._redis.get(key) for key in keys]
 
+            legacy: dict[str, list[float]] = {}
             for tag, raw in zip(missing, raw_values):
                 if raw is None:
                     continue
@@ -935,6 +940,11 @@ class SessionStateProvider:
                 if isinstance(value, list):
                     loaded[tag] = value
                     self._remember_runtime_tag_embedding(model_name, tag, value)
+                    if not self._is_packed(raw):
+                        legacy[tag] = value
+            if legacy:
+                # Rewrite once so the next cold load reads packed floats.
+                self.save_tag_embeddings(model_name, legacy)
             return loaded
         except Exception:
             logger.warning(
@@ -995,6 +1005,13 @@ class SessionStateProvider:
             self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
                 self._clone_embedding_map(normalized)
             )
+            if not self._is_packed(raw):
+                ttl = self._redis.ttl(self._tag_summary_embedding_snapshot_key(conversation_id))
+                self._redis.set(
+                    self._tag_summary_embedding_snapshot_key(conversation_id),
+                    self._encode_vector_map(normalized),
+                    ex=ttl if isinstance(ttl, int) and ttl > 0 else self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
+                )
             return normalized
         except Exception:
             logger.warning(
