@@ -2308,6 +2308,27 @@ class ProxyState:
         self.wait_for_compact()
 
     @staticmethod
+    def _payload_aligns_with_index(history_snapshot: list[Message], index) -> bool:
+        """True when the payload's earlier pairs sit at their indexed positions.
+
+        A client that resends its history aligns; a payload holding only the
+        newest pair, or pairs that do not match the index at their positions,
+        comes from a thread that did not carry the conversation.
+        """
+        grouped = pair_messages_into_turns(list(history_snapshot))
+        earlier = grouped[:-1]
+        if not earlier:
+            return False
+        for position, turn in enumerate(earlier):
+            entry = index.get_tags_for_logical_turn(position)
+            if entry is None:
+                return False
+            combined = " ".join(msg.content for msg in turn.messages)
+            if entry.message_hash != hashlib.sha256(combined.encode()).hexdigest()[:16]:
+                return False
+        return True
+
+    @staticmethod
     def _completed_turn_signature(
         history_snapshot: list[Message],
     ) -> tuple[int, str] | None:
@@ -2480,7 +2501,26 @@ class ProxyState:
             logger.info("fire_turn_complete skipped (no completed pair)")
             return
         reserved_turn, message_hash = signature
-        existing = self.engine._turn_tag_index.get_tags_for_logical_turn(reserved_turn)
+        index = self.engine._turn_tag_index
+        next_turn = max((int(getattr(e, "turn_number", -1)) for e in index.entries), default=-1) + 1
+        if reserved_turn < next_turn and not self._payload_aligns_with_index(history_snapshot, index):
+            # The payload did not carry the earlier turns (a provider thread
+            # that starts fresh each turn), so its position understates the
+            # conversation. The finished pair is the newest turn unless it is
+            # the newest indexed one fired again.
+            newest = index.get_tags_for_logical_turn(next_turn - 1)
+            if newest is not None and newest.message_hash == message_hash:
+                logger.info(
+                    "fire_turn_complete deduped for %s turn=%d (newest already indexed)",
+                    self.engine.config.conversation_id[:12], next_turn - 1,
+                )
+                return
+            logger.info(
+                "fire_turn_complete reserving turn=%d for %s (payload carried %d turns, index has %d)",
+                next_turn, self.engine.config.conversation_id[:12], reserved_turn + 1, next_turn,
+            )
+            reserved_turn = next_turn
+        existing = index.get_tags_for_logical_turn(reserved_turn)
         if existing is not None:
             if existing.message_hash != message_hash:
                 logger.warning(
