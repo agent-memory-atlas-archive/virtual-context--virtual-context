@@ -66,7 +66,7 @@ from .formats import (
     summarize_payload_accounting,
     summarize_raw_payload_entries,
 )
-from .helpers import DecodedBodyTooLarge, UnsupportedContentEncoding, decode_request_body
+from .helpers import DecodedBodyTooLarge, UnsupportedContentEncoding, decode_request_body, make_upstream_client
 from .helpers import (  # noqa: F401 — re-exported for tests
     _VC_PROMPT_MARKER,
     _VC_CONVERSATION_RE,
@@ -3008,7 +3008,7 @@ def create_app(
         logger.info("Engine init failed: %s", e)
         metrics = shared_metrics or ProxyMetrics()
 
-    client = httpx.AsyncClient(
+    client = make_upstream_client(
         timeout=httpx.Timeout(120.0, connect=10.0),
         limits=httpx.Limits(
             max_connections=100,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json as _json
 import gzip
 import io
+import httpx
 import logging
 import zlib
 from typing import TYPE_CHECKING
@@ -56,6 +57,25 @@ _HOP_BY_HOP = frozenset({
 # ---------------------------------------------------------------------------
 # Message processing helpers
 # ---------------------------------------------------------------------------
+
+
+class _RelayCookies(httpx.Cookies):
+    """A cookie jar that never stores anything.
+
+    The upstream client is shared by every conversation the proxy serves, and
+    an upstream may answer with session cookies; a relay must not carry one
+    caller's cookies into another caller's requests. Cookies a caller sends
+    still travel with that request as an ordinary header.
+    """
+
+    def extract_cookies(self, response) -> None:
+        return None
+
+
+def make_upstream_client(**kwargs) -> httpx.AsyncClient:
+    """The proxy's shared upstream HTTP client: no cookie persistence."""
+    kwargs.setdefault("cookies", _RelayCookies())
+    return httpx.AsyncClient(**kwargs)
 
 
 def _forward_headers(headers: dict[str, str]) -> dict[str, str]:
