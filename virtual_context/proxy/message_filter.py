@@ -2586,16 +2586,24 @@ def _plan_budget_reductions(
     deficit_tokens: int,
     remaining_slots: int,
 ) -> list[ReducibleItem]:
-    """Pick enough high-yield candidates to likely cover the current deficit."""
+    """Pick candidates oldest first until they likely cover the current deficit.
+
+    Budget enforcement is the last resort and may reach into protected turns,
+    so it always trims the oldest material first: a newer turn is never cut
+    while an older one is still intact.
+    """
     if deficit_tokens <= 0 or remaining_slots <= 0:
         return []
 
     planned: list[ReducibleItem] = []
     estimated_tokens_saved = 0
     ordered = sorted(
-        items,
-        key=lambda item: (_estimated_reduction_bytes(item), item.size_bytes),
-        reverse=True,
+        (item for item in items if _estimated_reduction_bytes(item) > 0),
+        key=lambda item: (
+            item.location != "system",
+            item.msg_index,
+            item.block_index if item.block_index >= 0 else -1,
+        ),
     )
     for item in ordered:
         if len(planned) >= remaining_slots:

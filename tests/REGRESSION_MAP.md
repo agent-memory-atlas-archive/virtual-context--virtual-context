@@ -468,6 +468,28 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-029 — Last-resort budget enforcement truncated the biggest items, not the oldest
+
+- **Symptom**: Over budget, `enforce_payload_budget` cut replies inside the protected recent turns
+  while older turns stayed intact (10 long replies, 6 protected, 8,000-token window: turns 0-6 cut).
+- **Root cause**: `_plan_budget_reductions` ranked candidates by estimated bytes saved, so the
+  largest items went first wherever they sat.
+- **Fix**: candidates are planned in payload order, oldest first, until the deficit is covered; the
+  stage may still reach protected turns, but never cuts a newer turn before an older one.
+- **Tests**:
+  - `test_budget_enforcement_order.py`
+
+### PROXY-028 — Attachments on the current message were dropped by the host-replay split
+
+- **Symptom**: Routed Codex-harness calls carried an `input_image` on the current user message and
+  the request sent upstream had none.
+- **Root cause**: `expand_host_replay` rebuilt the current message from its text alone.
+- **Fix**: only the text part holding `<conversation_context>` is rewritten; every other part
+  (images, files, audio, other text) is kept in order.
+- **Tests**:
+  - `test_current_attachments_preserved.py`
+  - `test_host_replay_expansion.py::test_attachments_in_the_current_message_survive_the_split`
+
 ### PROXY-027 — VC context ahead of the conversation defeated prompt caching in every format
 
 - **Symptom**: Routed Codex-harness calls reported `cached_tokens: 0` on every call although the
@@ -743,6 +765,8 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_budget_enforcement_order.py` | PROXY-029 |
+| `test_current_attachments_preserved.py` | PROXY-028 |
 | `test_context_cache_prefix.py` | PROXY-027 |
 | `test_responses_context_placement.py` | PROXY-027 |
 | `test_chat_context_placement.py` | PROXY-027 |
