@@ -8,7 +8,9 @@ and format delegation all live here.
 from __future__ import annotations
 
 import json as _json
+import gzip
 import logging
+import zlib
 from typing import TYPE_CHECKING
 
 from ..types import Message
@@ -57,6 +59,48 @@ def _forward_headers(headers: dict[str, str]) -> dict[str, str]:
         k: v for k, v in headers.items()
         if k.lower() not in _HOP_BY_HOP
     }
+
+
+class UnsupportedContentEncoding(ValueError):
+    """The request body uses a Content-Encoding this proxy cannot decode."""
+
+    def __init__(self, encoding: str):
+        super().__init__(encoding)
+        self.encoding = encoding
+
+
+def decode_request_body(body: bytes, content_encoding: str | None) -> bytes:
+    """Return the request body as the client produced it before transport encoding.
+
+    Clients may compress request bodies (OpenAI-format clients send zstd for
+    large payloads); the proxy must read the JSON inside, and it re-serializes
+    the payload upstream with its own Content-Length and no Content-Encoding,
+    so the decoded bytes are the only form it ever needs. gzip/deflate come
+    from the standard library; zstd and br need their optional codecs.
+    """
+    enc = (content_encoding or "").strip().lower()
+    if not enc or enc == "identity":
+        return body
+    if enc in ("gzip", "x-gzip"):
+        return gzip.decompress(body)
+    if enc == "deflate":
+        try:
+            return zlib.decompress(body)
+        except zlib.error:
+            return zlib.decompress(body, -zlib.MAX_WBITS)
+    if enc == "zstd":
+        try:
+            import zstandard
+        except ImportError as exc:
+            raise UnsupportedContentEncoding(enc) from exc
+        return zstandard.ZstdDecompressor().decompressobj().decompress(body)
+    if enc == "br":
+        try:
+            import brotli
+        except ImportError as exc:
+            raise UnsupportedContentEncoding(enc) from exc
+        return brotli.decompress(body)
+    raise UnsupportedContentEncoding(enc)
 
 
 # ---------------------------------------------------------------------------

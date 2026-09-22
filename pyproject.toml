@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=3.0", "torch>=2.0"]
-proxy = ["uvicorn>=0.30", "fastapi>=0.115", "Pillow>=10.0"]
+proxy = ["uvicorn>=0.30", "fastapi>=0.115", "Pillow>=10.0", "zstandard>=0.22"]
 tui = ["textual>=3.0", "rich>=13.0"]
 mcp = ["mcp>=1.0"]
 # The runtime providers use HTTP directly. SDKs are for integrations and tests.

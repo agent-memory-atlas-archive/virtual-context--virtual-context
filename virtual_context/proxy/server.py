@@ -66,6 +66,7 @@ from .formats import (
     summarize_payload_accounting,
     summarize_raw_payload_entries,
 )
+from .helpers import UnsupportedContentEncoding, decode_request_body
 from .helpers import (  # noqa: F401 — re-exported for tests
     _VC_PROMPT_MARKER,
     _VC_CONVERSATION_RE,
@@ -3138,6 +3139,22 @@ def create_app(
         body_bytes = await request.body()
         if not body_bytes:
             return await _passthrough_bytes(client, request.method, url, fwd_headers, body_bytes)
+        # The body is parsed and re-serialized here, so transport compression is
+        # undone first; forwarded headers already omit content-encoding/length.
+        try:
+            body_bytes = decode_request_body(body_bytes, raw_headers.get("content-encoding"))
+        except UnsupportedContentEncoding as exc:
+            return JSONResponse(
+                status_code=415,
+                content={"error": {"type": "unsupported_content_encoding", "encoding": exc.encoding}},
+            )
+        except Exception as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"error": {"type": "invalid_content_encoding",
+                                   "encoding": raw_headers.get("content-encoding", ""),
+                                   "detail": str(exc)[:200]}},
+            )
 
         # --- Raw request log: dump entire payload before any processing ---
         # Check app.state for runtime-configurable log dir (cloud layer sets this)
@@ -3162,7 +3179,7 @@ def create_app(
 
         try:
             body = json.loads(body_bytes)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return await _passthrough_bytes(client, request.method, url, fwd_headers, body_bytes)
 
         # Only intercept if it has a messages/contents array (chat completion)
