@@ -3182,6 +3182,21 @@ class OpenAIResponsesFormat(PayloadFormat):
         item_type = item.get("type", "")
         return item_type in ("function_call", "function_call_output")
 
+    _HOST_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
+    _HOST_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+
+    def _is_host_context_item(self, item: dict) -> bool:
+        """A user-role item the host appends after the prompt with its own runtime state.
+
+        It travels upstream untouched but is not the user's message: it never
+        counts as the current message, never pairs with a reply as a user turn,
+        and stays inside the prompt's turn group.
+        """
+        if not isinstance(item, dict) or item.get("role") != "user":
+            return False
+        text = self._extract_text_from_content(item.get("content", "")).strip()
+        return text.startswith(self._HOST_CONTEXT_BEGIN) and text.endswith(self._HOST_CONTEXT_END)
+
     # -- Message extraction --
 
     def extract_user_message(self, body: dict) -> str:
@@ -3193,7 +3208,7 @@ class OpenAIResponsesFormat(PayloadFormat):
         for item in reversed(items):
             if not isinstance(item, dict):
                 continue
-            if item.get("role") != "user":
+            if item.get("role") != "user" or self._is_host_context_item(item):
                 continue
             content = item.get("content", "")
             text = self._extract_text_from_content(content)
@@ -3223,6 +3238,7 @@ class OpenAIResponsesFormat(PayloadFormat):
             if isinstance(m, dict)
             and m.get("role") in ("user", "assistant")
             and not self._is_bare_item(m)
+            and not self._is_host_context_item(m)
         ]
         if not chat_msgs:
             return []
@@ -3324,7 +3340,10 @@ class OpenAIResponsesFormat(PayloadFormat):
             role = item.get("role", "")
             item_type = item.get("type", "")
 
-            if role == "user":
+            if role == "user" and current_indices and self._is_host_context_item(item):
+                # Host runtime context rides with the prompt it follows
+                current_indices.append(i)
+            elif role == "user":
                 # Start of a new turn — flush the previous one
                 if current_indices:
                     turns.append(TurnGroup(
