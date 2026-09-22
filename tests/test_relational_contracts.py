@@ -59,6 +59,8 @@ def test_compaction_watermark_stops_at_first_incomplete_pair(store, legacy):
     assert store.get_compaction_watermark('c') == (2,0)
     assert store.get_compaction_watermark('empty') == (0,-1)
     conn.execute("UPDATE canonical_turns SET user_content=? WHERE canonical_turn_id='p0'",('\u00a0\u2003\t',))
+    assert store.get_compaction_watermark('c') == (1,0)  # only the assistant half is left to count
+    conn.execute("UPDATE canonical_turns SET assistant_content=? WHERE canonical_turn_id='p0'",('\u00a0\u2003\t',))
     assert store.get_compaction_watermark('c') == (0,-1)
 
 

@@ -5,6 +5,26 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-079 — Unreplied messages never compacted and capped the compacted prefix
+
+- **Symptom**: A conversation whose history contains a user message with no assistant reply
+  (routine in multi-member channels) reports a compacted prefix that stops at that message
+  forever: `get_compaction_watermark` returned `(52, 25)` for a conversation with 1,431 compacted
+  turns, so `drop_compacted_turns` removed only 26 turns and the proxy shipped 2,817 of 2,889
+  history items (223,984 tokens against a 200,000 window) after a full compaction.
+- **Root cause**: `load_uncompacted_groups` admitted only groups with both a user and an
+  assistant half, so a lone message was never compacted, and the watermark loop in
+  `get_compaction_watermark` (and the engine fallback `_canonical_prefix_watermark`) required
+  every leading group to be a compacted exact pair, so the first lone message ended the prefix.
+- **Fix**: the reader admits any uncompacted group with at least one non-blank half; the
+  watermark counts every leading fully-compacted group by its message halves and stops only at
+  the first group with an uncompacted row or no content.
+- **Tests**:
+  - `test_unreplied_turns_compaction.py::test_unreplied_message_outside_protected_tail_is_compactable`
+  - `test_unreplied_turns_compaction.py::test_store_watermark_counts_a_compacted_unreplied_turn_as_one_message`
+  - `test_unreplied_turns_compaction.py::test_engine_prefix_counts_a_compacted_unreplied_turn_as_one_message`
+  - `test_relational_contracts.py::test_compaction_watermark_stops_at_first_incomplete_pair`
+
 ### BUG-078 — Store pools pinned Postgres connections until the server ran out of slots
 
 - **Symptom**: After a container recreate, `PostgresStore.__init__` failed with
@@ -684,6 +704,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |
 | `test_tui.py` | BUG-002 |
 | `test_compactor.py` | BUG-003, BUG-004 |

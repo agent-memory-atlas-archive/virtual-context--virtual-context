@@ -95,11 +95,15 @@ def _legacy_groups(rows):
 
 
 def load_uncompacted_groups(store, conversation_id, *, merge_rows, protected_recent_turns=0, limit=None):
-    """Hydrate complete pending groups, optionally returning a bounded prefix.
+    """Hydrate pending groups, optionally returning a bounded prefix.
 
-    The protected tail counts only admitted, complete uncompacted logical
-    pairs. Full physical siblings are loaded together even when one sibling
-    was already compacted. No default truncation changes the public API.
+    A pending group is any uncompacted logical turn with at least one
+    non-blank half: an unreplied message is history once a later group
+    exists, while the newest group is left alone until it is complete. The
+    protected tail
+    counts only admitted uncompacted logical turns. Full physical siblings
+    are loaded together even when one sibling was already compacted. No
+    default truncation changes the public API.
     """
     if limit is not None and (type(limit) is not int or limit < 0):
         raise ValueError("Compaction row limit must be a nonnegative integer or None")
@@ -111,7 +115,7 @@ def load_uncompacted_groups(store, conversation_id, *, merge_rows, protected_rec
     decoder = store._canonical_decoder()
     result, tail = [], deque()
     with store._relational_connection() as conn:
-        smallest, _largest = _group_mode(conn, p, conversation_id)
+        smallest, largest = _group_mode(conn, p, conversation_id)
         legacy = smallest is not None and smallest < 0
         if legacy:
             query = f"""SELECT canonical_turn_id,
@@ -146,9 +150,20 @@ def load_uncompacted_groups(store, conversation_id, *, merge_rows, protected_rec
                     for row in physical:
                         row.turn_group_number = group_by_id[str(row.canonical_turn_id)]
                 for merged in merge_rows(physical).values():
-                    if (merged.compacted_at or not (merged.user_content or "").strip()
-                            or not (merged.assistant_content or "").strip()):
+                    if merged.compacted_at:
                         continue
+                    has_user = bool((merged.user_content or "").strip())
+                    has_assistant = bool((merged.assistant_content or "").strip())
+                    if not (has_user or has_assistant):
+                        continue
+                    if not (has_user and has_assistant):
+                        # An unreplied message is history once the conversation
+                        # has moved past it; the newest group may still be in
+                        # flight, and legacy ordinals cannot tell which is newest.
+                        group_id = getattr(merged, "turn_group_number", None)
+                        if (legacy or type(group_id) is not int or group_id < 0
+                                or largest is None or group_id >= largest):
+                            continue
                     tail.append(merged)
                     if len(tail) > protected:
                         result.append(tail.popleft())

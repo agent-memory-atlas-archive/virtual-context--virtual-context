@@ -1320,12 +1320,9 @@ class VirtualContextEngine:
                 1 for row in rows
                 if str(getattr(row, "assistant_content", "") or "").strip()
             )
-            exact_pair = user_halves == 1 and assistant_halves == 1
-            if (
-                exact_pair
-                and all(getattr(row, "compacted_at", None) for row in rows)
-            ):
-                compacted_messages += 2
+            halves = user_halves + assistant_halves
+            if halves and all(getattr(row, "compacted_at", None) for row in rows):
+                compacted_messages += halves
                 last_prefix_turn = turn_number
                 continue
             break

@@ -70,6 +70,8 @@ def test_scalar_watermark_named_cursor_and_unicode_trim(store, monkeypatch, lega
     assert store.get_compaction_watermark('owner') == (2, 0)
     assert store.get_compaction_watermark('foreign') == (0, -1)
     _execute(store, 'UPDATE canonical_turns SET user_content=? WHERE sort_key=0', ('\u00a0\u2003\t',))
+    assert store.get_compaction_watermark('owner') == (1, 0)  # the assistant half still counts
+    _execute(store, 'UPDATE canonical_turns SET assistant_content=? WHERE turn_group_number=0 OR sort_key IN (0, 1)', ('\u00a0\u2003\t',))
     assert store.get_compaction_watermark('owner') == (0, -1)
     if store._relational_dialect == 'postgres':
         assert events and all(name.startswith('vc_watermark_') for name, _, _ in events)

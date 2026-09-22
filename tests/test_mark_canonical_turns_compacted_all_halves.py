@@ -222,6 +222,7 @@ def test_terminal_singleton_is_not_compactable_or_a_two_message_watermark(
     assert store.get_uncompacted_canonical_turns(conv) == []
     assert store.mark_canonical_turns_compacted(conv, ["ct-orphan-user"]) == 1
     rows = store.get_all_canonical_turns(conv)
+    # A compacted lone message counts as the one message it is, never two.
     assert VirtualContextEngine._canonical_prefix_watermark(
         [(0, rows)]
-    ) == (0, -1)
+    ) == (1, 0)

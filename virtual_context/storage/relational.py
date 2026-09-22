@@ -248,8 +248,11 @@ class RelationalStoreMixin(FactMutationMixin):
     def get_compaction_watermark(self, conversation_id):
         """Return the exact compacted prefix using only streamed scalar rows.
 
-        A single snapshot includes the explicit/legacy grouping decision and
-        the prefix. Python whitespace semantics are supplied to both SQL
+        The prefix counts the message halves of every leading group whose
+        rows are all compacted and stops at the first group with an
+        uncompacted row or no content, so an unreplied message counts as one
+        message instead of ending the prefix. A single snapshot includes the
+        explicit/legacy grouping decision and the prefix. Python whitespace semantics are supplied to both SQL
         dialects rather than approximated with SQL's space-only TRIM.
         """
         p = self._placeholder
@@ -309,9 +312,10 @@ class RelationalStoreMixin(FactMutationMixin):
 
                 count, last = 0, -1
                 for group, users, assistants, incomplete in groups():
-                    if users != 1 or assistants != 1 or incomplete:
+                    halves = int(users or 0) + int(assistants or 0)
+                    if incomplete or not halves:
                         break
-                    count, last = count+2, int(group)
+                    count, last = count + halves, int(group)
                 return count, last
             finally:
                 cursor.close()
