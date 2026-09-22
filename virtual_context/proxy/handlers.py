@@ -27,7 +27,6 @@ from ..types import SpeakerRetrievalContext
 from .formats import get_format
 from .continuation import ContinuationError, ContinuationSession
 from .request_context import RequestContext, provider_identity
-from ..core.tool_loop import is_vc_tool
 from .response_codec import collect_response, response_events
 from .message_filter import (
     PayloadBudgetExceeded,
@@ -92,183 +91,10 @@ async def _admit_initial(body, context, session):
         raise
 
 
-class _ResponsesStreamRelay:
-    """Forward a Responses stream live while the collector intercepts VC tools.
-
-    Every event of the provider stream reaches the client as it arrives,
-    except the items that are VC's own tool calls (held back, executed by
-    the proxy, and never shown) and the terminal events (the relay emits one
-    final ``response.completed`` for the whole exchange). Continuation rounds
-    join the same stream: ``response.created``/``in_progress`` are sent once,
-    ``output_index`` continues where the previous round stopped, and
-    ``sequence_number`` is renumbered so the client sees one response.
-    """
-
-    _TERMINAL = ("response.completed", "response.done", "response.failed", "response.incomplete")
-    _OPENING = ("response.created", "response.in_progress")
-
-    def __init__(self, queue: "asyncio.Queue[bytes | None]"):
-        self._queue = queue
-        self._seq = 0
-        self._round = 0
-        self._index_offset = 0
-        self._forwarded_in_round = 0
-        self._held: set[int] = set()
-        self._index_map: dict[int, int] = {}
-        self.first_response_id: str = ""
-        self.forwarded_events = 0
-
-    def on_round_start(self, round_index: int) -> None:
-        self._round = round_index
-        self._index_offset += self._forwarded_in_round
-        self._forwarded_in_round = 0
-        self._held = set()
-        self._index_map = {}
-
-    def _forward(self, event: dict) -> None:
-        ev = dict(event)
-        ev["sequence_number"] = self._seq
-        self._seq += 1
-        self.forwarded_events += 1
-        self._queue.put_nowait(_sse_event(ev))
-
-    def on_event(self, event: dict) -> None:
-        kind = event.get("type", "")
-        if kind in self._OPENING:
-            if self._round == 0:
-                if not self.first_response_id:
-                    self.first_response_id = str((event.get("response") or {}).get("id") or "")
-                self._forward(event)
-            return
-        if kind in self._TERMINAL:
-            return
-        if "output_index" in event:
-            index = event.get("output_index")
-            if kind == "response.output_item.added":
-                item = event.get("item") or {}
-                if item.get("type") == "function_call" and is_vc_tool(str(item.get("name", ""))):
-                    self._held.add(index)
-                    return
-            if index in self._held:
-                return
-            if index not in self._index_map:
-                self._index_map[index] = self._index_offset + self._forwarded_in_round
-                self._forwarded_in_round += 1
-            ev = dict(event)
-            ev["output_index"] = self._index_map[index]
-            self._forward(ev)
-            return
-        self._forward(event)
-
-    def final(self, visible: dict, usage: tuple[int, int] | None = None) -> None:
-        response = dict(visible)
-        if self.first_response_id:
-            response["id"] = self.first_response_id
-        if usage is not None:
-            merged = dict(response.get("usage") or {})
-            merged["input_tokens"] = usage[0] or merged.get("input_tokens", 0)
-            merged["output_tokens"] = usage[1] or merged.get("output_tokens", 0)
-            merged["total_tokens"] = int(merged.get("input_tokens", 0) or 0) + int(merged.get("output_tokens", 0) or 0)
-            response["usage"] = merged
-        self._forward({"type": "response.completed", "response": response})
-        self._queue.put_nowait(None)
-
-
-def _sse_event(value: dict) -> bytes:
-    prefix = f"event: {value['type']}\n" if "type" in value else ""
-    return (prefix + "data: " + json.dumps(value, ensure_ascii=False) + "\n\n").encode()
-
-
-async def _stream_responses_with_interception(
-    client, url, headers, body, api_format, state, *, upstream, session, resp_headers, handler_kwargs,
-):
-    """Relay a Responses stream live; VC tool rounds continue inside the same stream.
-
-    An upstream failure before anything was forwarded is answered with its
-    real status, exactly as the collecting path does.
-    """
-    queue: "asyncio.Queue[bytes | None]" = asyncio.Queue()
-    relay = _ResponsesStreamRelay(queue)
-
-    async def run():
-        try:
-            return await _handle_non_streaming(
-                client, url, headers, body, api_format, state,
-                continuation_session=session, initial_response=upstream,
-                source_streaming=True, intercept_vc_tools=True,
-                on_event=relay.on_event, on_round_start=relay.on_round_start,
-                **handler_kwargs,
-            )
-        except PayloadBudgetExceeded as exc:
-            return JSONResponse(status_code=413, content={"error": {"type": "context_budget_exceeded", "message": str(exc)}})
-
-    task = asyncio.create_task(run())
-    first = asyncio.create_task(queue.get())
-    done, _pending = await asyncio.wait({task, first}, return_when=asyncio.FIRST_COMPLETED)
-    if task in done and first not in done:
-        first.cancel()
-        result = task.result()
-        if result.status_code >= 300:
-            await upstream.aclose()
-            await session.close()
-            return result
-        # Nothing streamed before completion: replay the whole exchange as events.
-        value = json.loads(result.body)
-
-        async def replay():
-            try:
-                for event in response_events(value, api_format):
-                    yield event
-            finally:
-                await upstream.aclose()
-                await session.close()
-        return StreamingResponse(replay(), status_code=200, headers=resp_headers)
-
-    async def managed_stream():
-        try:
-            if first.done() and not first.cancelled():
-                head = first.result()
-                if head is not None:
-                    yield head
-            while True:
-                if task.done() and queue.empty():
-                    break
-                try:
-                    chunk = await asyncio.wait_for(queue.get(), timeout=0.25)
-                except asyncio.TimeoutError:
-                    continue
-                if chunk is None:
-                    break
-                yield chunk
-            result = await task
-            if result.status_code >= 300:
-                error = json.loads(result.body)
-                yield _sse_event({"type": "error", "error": error.get("error", error)})
-                return
-            visible = json.loads(result.body)
-            relay.final(visible, usage=tuple(session.usage) if getattr(session, "usage", None) else None)
-            while True:
-                chunk = queue.get_nowait() if not queue.empty() else None
-                if chunk is None:
-                    break
-                yield chunk
-        finally:
-            if not task.done():
-                task.cancel()
-            await upstream.aclose()
-            await session.close()
-
-    return StreamingResponse(managed_stream(), status_code=200, headers=resp_headers)
-
-
-async def _collect_and_continue(client, url, headers, body, response, session, *, on_event=None, on_round_start=None):
+async def _collect_and_continue(client, url, headers, body, response, session):
     """The only internal tool loop, used by JSON and SSE transports."""
-    round_index = 0
     while True:
-        if on_round_start is not None:
-            on_round_start(round_index)
-        round_index += 1
-        data = await collect_response(response, session.context.api_format, on_event=on_event)
+        data = await collect_response(response, session.context.api_format)
         if response.status_code >= 300:
             return data, response
         next_body, visible = await session.advance(body, data)
@@ -880,19 +706,6 @@ async def _handle_streaming(
     resp_headers.setdefault("cache-control", "no-cache")
     resp_headers.setdefault("x-accel-buffering", "no")
 
-    if paging_enabled and session and api_format == "openai_responses":
-        return await _stream_responses_with_interception(
-            client, url, headers, body, api_format, state,
-            upstream=upstream, session=session, resp_headers=resp_headers,
-            handler_kwargs=dict(
-                request_context=context, metrics=metrics, turn=turn,
-                request_turn=request_turn, turn_id=turn_id,
-                conversation_id=conversation_id, overhead_ms=overhead_ms,
-                passthrough=passthrough, skip_marker_injection=skip_marker_injection,
-                response_log_path=response_log_path, session_log_path=session_log_path,
-                request_log_dir=request_log_dir, log_prefix=log_prefix,
-            ),
-        )
     if paging_enabled and session:
         # The whole reply is collected before anything is sent, so a failure is
         # answered with its real status instead of an error event inside a 200
@@ -1191,8 +1004,6 @@ async def _handle_non_streaming(
     continuation_session: ContinuationSession | None = None,
     initial_response=None,
     source_streaming: bool = False,
-    on_event=None,
-    on_round_start=None,
 ) -> JSONResponse:
     """Forward JSON response, parse assistant text, fire on_turn_complete.
 
@@ -1213,10 +1024,7 @@ async def _handle_non_streaming(
         if resp is None:
             resp = await client.send(client.build_request("POST", url, headers=headers, json=body), stream=True)
         if intercept_vc_tools and session:
-            response_body, resp = await _collect_and_continue(
-                client, url, headers, body, resp, session,
-                on_event=on_event, on_round_start=on_round_start,
-            )
+            response_body, resp = await _collect_and_continue(client, url, headers, body, resp, session)
         else:
             response_body = await collect_response(resp, api_format)
         if session:
