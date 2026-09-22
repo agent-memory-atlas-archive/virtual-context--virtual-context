@@ -776,6 +776,14 @@ class PayloadFormat(ABC):
                     arguments=msg.get("arguments"),
                     msg_index=i,
                 )
+            elif msg.get("type") == "custom_tool_call":
+                # Codex custom tools carry a free-form string input.
+                yield ToolCallInfo(
+                    call_id=msg.get("call_id", ""),
+                    name=msg.get("name", ""),
+                    arguments=msg.get("input"),
+                    msg_index=i,
+                )
 
     def iter_tool_outputs(self, body: dict) -> Iterator[ToolOutputInfo]:
         """Yield normalized tool-output descriptors from all messages/items.
@@ -823,6 +831,31 @@ class PayloadFormat(ABC):
                     carrier_type="openai_responses",
                     msg_index=i,
                 )
+            elif msg.get("type") == "custom_tool_call_output":
+                yield ToolOutputInfo(
+                    call_id=msg.get("call_id", ""),
+                    content=self._responses_output_text(msg.get("output")),
+                    carrier=msg,
+                    carrier_type="openai_responses",
+                    msg_index=i,
+                )
+
+    @staticmethod
+    def _responses_output_text(output: object) -> str:
+        """Plain text of a Responses tool output: a string, or text parts."""
+        if isinstance(output, str):
+            return output
+        if isinstance(output, list):
+            parts = []
+            for item in output:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts)
+        return ""
 
     @staticmethod
     def _extract_tool_result_text(block: dict) -> str:
@@ -3361,8 +3394,9 @@ class OpenAIResponsesFormat(PayloadFormat):
                     ))
                 current_indices = [i]
                 has_tool = False
-            elif item_type in ("function_call", "function_call_output"):
-                # Bare tool items belong to the current turn
+            elif item_type.endswith(("_call", "_output")):
+                # Bare tool items (function, custom, search, shell, ...) belong
+                # to the current turn
                 if not current_indices:
                     current_indices = [i]
                 else:

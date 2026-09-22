@@ -1436,6 +1436,15 @@ def stub_tool_outputs_by_position(
     outputs are stored with a unique ref and replaced in-place with a stub
     containing the ref, tool name, argument summary, and restore call.
 
+    When the protected zone itself exceeds ``protected_intrusion_threshold``
+    of ``context_budget``, stubbing reaches into the protected window: first
+    the protected turns before the newest two, then, if the zone is still
+    over the threshold, the newest turns themselves from oldest output to
+    newest.  The last ``keep_recent_outputs`` tool outputs of the payload
+    are always sent verbatim, so a tool loop that lives inside one turn
+    keeps the results the model is about to act on while its consumed
+    outputs shrink to restorable stubs.
+
     Uses ``fmt.group_into_turns(body)`` for turn detection and protection
     window calculation, ``fmt.iter_tool_outputs(body)`` for finding outputs,
     and ``fmt.replace_tool_output_content()`` for replacement.
@@ -1466,14 +1475,15 @@ def stub_tool_outputs_by_position(
     protected_start = max(0, total_turns - protected_recent_turns)
     hard_protected_start = max(0, total_turns - 2)
 
-    # Conditional intrusion: if protected zone exceeds a percentage of the
-    # context budget, allow stubbing into the protected zone except for
-    # the last 2 turns (the current exchange).
+    # Conditional intrusion: if the protected zone exceeds a percentage of
+    # the context budget, allow stubbing into the protected zone.
     _intrusion_threshold = kwargs.get("protected_intrusion_threshold", 0.0)
     _context_budget = kwargs.get("context_budget", 0)
+    _keep_recent = max(0, int(kwargs.get("keep_recent_outputs", 2)))
     intrusion_active = False
+    _prot_tokens = 0
 
-    if _intrusion_threshold > 0 and _context_budget > 0 and (total_turns - protected_start) > 2:
+    if _intrusion_threshold > 0 and _context_budget > 0:
         # Estimate protected zone token size
         _prot_bytes = 0
         for ti in range(protected_start, total_turns):
@@ -1498,7 +1508,7 @@ def stub_tool_outputs_by_position(
             idx_to_turn[idx] = ti
 
     # ------------------------------------------------------------------
-    # 3. Build tool call map: call_id → {name, arguments}
+    # 3. Build tool call map (call_id → name/args) for stub metadata
     # ------------------------------------------------------------------
     tool_call_map: dict[str, dict] = {}
     for tc in fmt.iter_tool_calls(body):
@@ -1509,7 +1519,7 @@ def stub_tool_outputs_by_position(
             }
 
     # ------------------------------------------------------------------
-    # 4. Resolve canonical turn numbers per turn via hash lookup
+    # 4. Resolve canonical turn numbers for linking stored outputs
     # ------------------------------------------------------------------
     turn_canonical: dict[int, int] = {}
     for ti, turn in enumerate(turns):
@@ -1531,49 +1541,27 @@ def stub_tool_outputs_by_position(
         turn_canonical[ti] = -1
 
     # ------------------------------------------------------------------
-    # 5. Stub tool outputs outside protected window
+    # 5. Stub outputs outside the protected window (and inside it under
+    #    intrusion, newest turns last)
     # ------------------------------------------------------------------
     from ..core.tool_loop import VC_TOOL_NAMES
 
     stub_count = 0
     stub_refs: list[str] = []
 
-    for output in fmt.iter_tool_outputs(body):
-        turn_idx = idx_to_turn.get(output.msg_index)
-
-        # Messages not in any turn group are structural — skip
-        if turn_idx is None:
-            continue
-
-        # Last 2 turns — never stub (hard-protected)
-        if turn_idx >= hard_protected_start:
-            continue
-
-        # Turns in protected window — only stub if intrusion is active
-        if turn_idx >= protected_start and not intrusion_active:
-            continue
-
-        # Skip VC tool outputs to prevent feedback loops
+    def _stub(output, turn_idx: int) -> int:
+        """Store one output and replace it in place; returns tokens freed."""
+        nonlocal stub_count
         call_info = tool_call_map.get(output.call_id, {})
         tool_name = call_info.get("name", "")
         if tool_name in VC_TOOL_NAMES:
-            continue
-
+            return 0
         content_text = output.content
         if not content_text:
-            continue
-
-        # Content-addressed ref: same content always produces the same ref.
-        # Prevents duplicate storage when the client resends the full history.
+            return 0
         ref = f"tool_{hashlib.sha256(content_text.encode()).hexdigest()[:12]}"
-
-        # Resolve canonical turn
         canonical_turn = turn_canonical.get(turn_idx, -1)
-
-        # Summarise arguments for the stub
         args_summary = _summarise_arguments(call_info.get("arguments"))
-
-        # Store the full content (skip if store is None — e.g. in tests)
         if store is not None:
             try:
                 store.store_tool_output(
@@ -1587,35 +1575,57 @@ def stub_tool_outputs_by_position(
                 )
             except Exception:
                 logger.warning("TOOL-STUB: failed to store ref=%s", ref, exc_info=True)
-                continue
-
-            # Write turn link (only if canonical turn was resolved)
+                return 0
             if canonical_turn >= 0:
                 try:
                     store.link_turn_tool_output(conversation_id, canonical_turn, ref)
                 except Exception:
                     pass  # non-critical
-
-        # Build stub text
         stub_text = (
             f"[tool output ref={ref}"
             f" | tool={tool_name or 'unknown'}"
             f' args="{args_summary}"'
             f' | call vc_restore_tool(ref="{ref}")]'
         )
-
-        # Replace content in-place using format method
         fmt.replace_tool_output_content(body, output, stub_text)
-
         stub_count += 1
         stub_refs.append(ref)
+        return max(0, (len(content_text) - len(stub_text)) // 4)
+
+    outputs = [
+        (output, idx_to_turn.get(output.msg_index))
+        for output in fmt.iter_tool_outputs(body)
+    ]
+    outputs = [(output, ti) for output, ti in outputs if ti is not None]
+
+    newest_zone: list = []
+    for output, turn_idx in outputs:
+        if turn_idx >= hard_protected_start:
+            # The current exchange: only the intrusion pass below may reach it
+            newest_zone.append((output, turn_idx))
+            continue
+        if turn_idx >= protected_start and not intrusion_active:
+            continue
+        _prot_tokens -= _stub(output, turn_idx)
+
+    if intrusion_active and _context_budget > 0:
+        _deep_count = 0
+        eligible = newest_zone[:-_keep_recent] if _keep_recent else newest_zone
+        for output, turn_idx in eligible:
+            if _prot_tokens / _context_budget <= _intrusion_threshold:
+                break
+            freed = _stub(output, turn_idx)
+            if freed:
+                _deep_count += 1
+                _prot_tokens -= freed
+        if _deep_count:
+            logger.info(
+                "PROTECTED_INTRUSION_DEEP: stubbed %d consumed tool outputs inside "
+                "the newest turns, protected zone now %dt of %dt (kept %d newest)",
+                _deep_count, _prot_tokens, _context_budget, _keep_recent,
+            )
 
     return body, stub_count, stub_refs
-
-
-# ---------------------------------------------------------------------------
-# Stage 2: Full turn chain collapse (post-compaction)
-# ---------------------------------------------------------------------------
 
 
 def _extract_tool_metadata_from_chain(
