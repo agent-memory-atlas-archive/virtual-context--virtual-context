@@ -58,3 +58,10 @@ def test_other_host_scaffolding_user_items_are_not_the_users_message():
     messages, _ = extract_ingestible_messages(body, fmt, mode="ingest")
     assert len(messages) == 1 and messages[0].content.endswith("what did we decide?")
     assert "<conversation_context>" not in messages[0].content
+
+
+def test_removing_the_replayed_block_keeps_the_surrounding_text_intact():
+    from virtual_context.proxy._envelope import _strip_envelope
+    assert _strip_envelope("A<conversation_context>host replay</conversation_context> B") == "A B"
+    assert _strip_envelope("<conversation_context>x</conversation_context>\n\nhello") == "hello"
+    assert _strip_envelope("no block here") == "no block here"
