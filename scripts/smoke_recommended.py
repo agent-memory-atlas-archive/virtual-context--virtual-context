@@ -1,9 +1,9 @@
-"""End-to-end smoke test of the recommended preset through the proxy.
+"""End-to-end smoke test of a recommended preset through the proxy.
 
 A local stub stands in for the model provider: it records every request the
 proxy forwards and answers with a canned reply, so no provider is billed.
-The tagging and summarization calls are real and go to OpenRouter, which is
-what the preset configures. Run it from scripts/smoke_recommended.sh, which
+The tagging and summarization calls are real and go to whichever model the
+preset in the working directory names. Run it from scripts/smoke_recommended.sh, which
 builds a clean environment first.
 
 Checks: the proxy starts; stored turns get model tags (not the fallback);
