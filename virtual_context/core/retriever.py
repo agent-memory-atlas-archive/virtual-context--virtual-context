@@ -251,27 +251,39 @@ class ContextRetriever:
                     ctx_vec = None
         guard = getattr(scoring, "embedding_context_guard", True)
 
-        # 3. Load current-model fact vectors and cosine-rank.
+        # 3. Rank current-model fact vectors against the query. A store that
+        # can search does it in place and returns only the winners.
         model = getattr(self.config, "embedding_model", "")
-        try:
-            loaded = self.store.load_fact_embeddings(
-                self._conversation_id, model, expected_dim=len(bare_vec),
-            )
-        except Exception:
-            loaded = {}
-        scored: list[tuple[float, str, object]] = []
-        for fid, (fact, vec) in loaded.items():
-            bare_cos = cosine_similarity(bare_vec, vec)
-            if ctx_vec is not None:
-                ctx_cos = cosine_similarity(ctx_vec, vec)
-                score = max(bare_cos, ctx_cos) if guard else ctx_cos
-            else:
-                score = bare_cos
-            scored.append((score, fid, fact))
-        # Cosine DESC, tie-break fact.id ASC (deterministic union order).
-        scored.sort(key=lambda x: (-x[0], x[1]))
         top_n = getattr(self.config, "fact_dense_top_n", 20)
-        top = scored[:top_n]
+        if ctx_vec is None:
+            queries = [bare_vec]
+        else:
+            queries = [bare_vec, ctx_vec] if guard else [ctx_vec]
+        top: list[tuple[float, str, object]] | None = None
+        search = getattr(self.store, "search_fact_embeddings", None)
+        if callable(search):
+            try:
+                hits = search(self._conversation_id, model, queries, limit=top_n)
+            except Exception:
+                # A store that can search must not fall back to loading every vector.
+                logger.error("FACT_DENSE_BREAKDOWN store search failed; legacy floor only", exc_info=True)
+                hits = []
+            if hits is not None:
+                top = [(score, fact.id, fact) for fact, score in hits]
+        if top is None:
+            try:
+                loaded = self.store.load_fact_embeddings(
+                    self._conversation_id, model, expected_dim=len(bare_vec),
+                )
+            except Exception:
+                loaded = {}
+            scored: list[tuple[float, str, object]] = []
+            for fid, (fact, vec) in loaded.items():
+                score = max(cosine_similarity(q, vec) for q in queries)
+                scored.append((score, fid, fact))
+            # Cosine DESC, tie-break fact.id ASC (deterministic union order).
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            top = scored[:top_n]
 
         # 4. Deterministic union by fact.id: dense first, floor-only after.
         dense_rank_by_id: dict[str, int] = {}

@@ -18,12 +18,27 @@ VECTOR_DIM = 384
 _TABLE_KEYS = {
     "segment_chunks": ("segment_ref", "chunk_index"),
     "canonical_turn_chunks": ("conversation_id", "canonical_turn_id", "side", "chunk_index"),
+    "fact_embeddings": ("fact_id", "conversation_id"),
+}
+# Chunk rows learn their model from the writer's transaction setting; fact
+# rows record it in their own ``model`` column.
+_SYNC_TRIGGERS = {
+    "segment_chunks": "vc_sync_semantic_vector_v1",
+    "canonical_turn_chunks": "vc_sync_semantic_vector_v1",
+    "fact_embeddings": "vc_sync_fact_vector_v1",
 }
 _MIGRATION_LOCK = 0x7663566563746F72
 
 
-def _residue_sql(prefix: str = "") -> str:
+def _residue_sql(table: str, prefix: str = "") -> str:
     col = f"{prefix}." if prefix else ""
+    if table == "fact_embeddings":
+        # Vectors of other models are not cached and never block readiness.
+        return f"({col}model = '{VECTOR_MODEL}' AND {_chunk_residue_sql(col)})"
+    return _chunk_residue_sql(col)
+
+
+def _chunk_residue_sql(col: str) -> str:
     return (
         f"({col}embedding_model IS DISTINCT FROM '{VECTOR_MODEL}'"
         f" OR {col}embedding_zero IS NULL"
@@ -44,8 +59,12 @@ def _query_vector(values: Sequence[float]) -> str | None:
     return json.dumps(vector, separators=(",", ":"))
 
 
-_SYNC_FUNCTION_SQL = f"""
-CREATE OR REPLACE FUNCTION public.vc_sync_semantic_vector_v1()
+def _sync_function_sql(name: str, model_expression: str) -> str:
+    return _SYNC_FUNCTION_TEMPLATE.replace("{name}", name).replace("{model}", model_expression)
+
+
+_SYNC_FUNCTION_TEMPLATE = f"""
+CREATE OR REPLACE FUNCTION public.{{name}}()
 RETURNS trigger LANGUAGE plpgsql AS $function$
 DECLARE
     source jsonb;
@@ -56,9 +75,7 @@ BEGIN
     NEW.embedding := NULL;
     NEW.embedding_zero := FALSE;
     NEW.embedding_source_hash := md5(NEW.embedding_json);
-    NEW.embedding_model := COALESCE(
-        current_setting('virtual_context.embedding_model', TRUE), ''
-    );
+    NEW.embedding_model := {{model}};
     IF NEW.embedding_model <> '{VECTOR_MODEL}' THEN
         RETURN NEW;
     END IF;
@@ -92,6 +109,13 @@ BEGIN
 END;
 $function$
 """
+_SYNC_FUNCTIONS = {
+    "vc_sync_semantic_vector_v1": _sync_function_sql(
+        "vc_sync_semantic_vector_v1",
+        "COALESCE(current_setting('virtual_context.embedding_model', TRUE), '')",
+    ),
+    "vc_sync_fact_vector_v1": _sync_function_sql("vc_sync_fact_vector_v1", "COALESCE(NEW.model, '')"),
+}
 
 
 class PostgresVectorSearchMixin:
@@ -120,7 +144,7 @@ class PostgresVectorSearchMixin:
                  FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
                  JOIN pg_namespace n ON n.oid=c.relnamespace
                 WHERE n.nspname='public'
-                  AND c.relname IN ('segment_chunks','canonical_turn_chunks')
+                  AND c.relname IN ('segment_chunks','canonical_turn_chunks','fact_embeddings')
                   AND a.attname IN ('embedding','embedding_zero','embedding_source_hash','embedding_model')
                   AND a.attnum > 0 AND NOT a.attisdropped"""
         ).fetchall()
@@ -131,24 +155,25 @@ class PostgresVectorSearchMixin:
                for table in _TABLE_KEYS for column, kind in expected.items()):
             return False
         triggers = conn.execute(
-            """SELECT c.relname AS table_name FROM pg_trigger t
+            """SELECT c.relname AS table_name, t.tgname AS trigger_name, p.proname AS function_name
+                 FROM pg_trigger t
                  JOIN pg_class c ON c.oid=t.tgrelid
                  JOIN pg_namespace n ON n.oid=c.relnamespace
                  JOIN pg_proc p ON p.oid=t.tgfoid
                 WHERE n.nspname='public' AND NOT t.tgisinternal
                   AND t.tgenabled IN ('O','A')
-                  AND t.tgname='vc_sync_semantic_vector_v1'
-                  AND p.proname='vc_sync_semantic_vector_v1'
-                  AND c.relname IN ('segment_chunks','canonical_turn_chunks')"""
+                  AND c.relname IN ('segment_chunks','canonical_turn_chunks','fact_embeddings')"""
         ).fetchall()
-        return {row["table_name"] for row in triggers} == set(_TABLE_KEYS)
+        synced = {row["table_name"] for row in triggers
+                  if row["trigger_name"] == row["function_name"] == _SYNC_TRIGGERS[row["table_name"]]}
+        return synced == set(_TABLE_KEYS)
 
     def _vector_ready_on_connection(self, conn, model: str) -> bool:
         if model != VECTOR_MODEL or not self._vector_schema_installed(conn):
             return False
         for table in _TABLE_KEYS:
             if conn.execute(
-                f"SELECT 1 FROM public.{table} WHERE {_residue_sql()} LIMIT 1"
+                f"SELECT 1 FROM public.{table} WHERE {_residue_sql(table)} LIMIT 1"
             ).fetchone():
                 return False
         return True
@@ -164,7 +189,7 @@ class PostgresVectorSearchMixin:
     def _semantic_vector_residue_report(conn, table):
         rows = conn.execute(
             f"SELECT embedding_model AS model, count(*) AS count FROM public.{table} "
-            f"WHERE {_residue_sql()} GROUP BY embedding_model ORDER BY embedding_model NULLS FIRST"
+            f"WHERE {_residue_sql(table)} GROUP BY embedding_model ORDER BY embedding_model NULLS FIRST"
         ).fetchall()
         return {"residue": sum(int(row["count"]) for row in rows),
                 "residue_by_model": [{"model": row["model"], "rows": int(row["count"])} for row in rows]}
@@ -220,14 +245,16 @@ class PostgresVectorSearchMixin:
                                 ADD COLUMN IF NOT EXISTS embedding_source_hash text,
                                 ADD COLUMN IF NOT EXISTS embedding_model text NOT NULL DEFAULT ''"""
                         )
-                    conn.execute(_SYNC_FUNCTION_SQL)
-                    for table in _TABLE_KEYS:
-                        conn.execute(f"DROP TRIGGER IF EXISTS vc_sync_semantic_vector_v1 ON public.{table}")
+                    for function_sql in _SYNC_FUNCTIONS.values():
+                        conn.execute(function_sql)
+                    for table, trigger in _SYNC_TRIGGERS.items():
+                        model_column = ", model" if table == "fact_embeddings" else ""
+                        conn.execute(f"DROP TRIGGER IF EXISTS {trigger} ON public.{table}")
                         conn.execute(
-                            f"""CREATE TRIGGER vc_sync_semantic_vector_v1
+                            f"""CREATE TRIGGER {trigger}
                                 BEFORE INSERT OR UPDATE OF embedding_json, embedding, embedding_zero,
-                                    embedding_source_hash, embedding_model ON public.{table}
-                                FOR EACH ROW EXECUTE FUNCTION public.vc_sync_semantic_vector_v1()"""
+                                    embedding_source_hash, embedding_model{model_column} ON public.{table}
+                                FOR EACH ROW EXECUTE FUNCTION public.{trigger}()"""
                         )
                 if not self._vector_schema_installed(conn):
                     raise RuntimeError("Semantic vector schema has incompatible columns or extension schema")
@@ -247,7 +274,7 @@ class PostgresVectorSearchMixin:
                             rows = conn.execute(
                                 f"""WITH batch AS MATERIALIZED (
                                     SELECT {key_sql} FROM public.{table}
-                                     WHERE {_residue_sql()}
+                                     WHERE {_residue_sql(table)}
                                        AND (embedding_model IS NULL OR embedding_model IN ('', '{VECTOR_MODEL}')){clause}
                                      ORDER BY {key_sql} LIMIT %s FOR UPDATE
                                 ), updated AS (UPDATE public.{table} target
@@ -272,7 +299,7 @@ class PostgresVectorSearchMixin:
                     if validity and not validity["indisvalid"]:
                         conn.execute(f"DROP INDEX CONCURRENTLY public.{index}")
                     conn.execute(
-                        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {index} ON public.{table} ((1)) WHERE {_residue_sql()}"
+                        f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {index} ON public.{table} ((1)) WHERE {_residue_sql(table)}"
                     )
                     report["tables"][table].update(self._semantic_vector_residue_report(conn, table))
                 report["schema_installed"] = True
@@ -404,3 +431,50 @@ class PostgresVectorSearchMixin:
             key_names=("conversation_id", "sort_key", "side", "chunk_index", "canonical_turn_id"),
             limit=limit, after=after, min_similarity=min_similarity,
         )
+
+    def search_fact_embeddings(
+        self, conversation_id: str, model: str, queries, *, limit: int,
+    ):
+        """The ``limit`` live facts most similar to any query, ranked in the database.
+
+        ``None`` until the semantic vector migration has been applied, so the
+        caller keeps its own ranking. After it, an incomplete cache raises
+        rather than silently restoring the full vector load.
+        """
+        if model != VECTOR_MODEL:
+            return None
+        vectors = [vector for vector in map(_query_vector, queries) if vector is not None]
+        if not vectors or limit <= 0:
+            return []
+        score = "GREATEST(" + ", ".join("1 - (fe.embedding OPERATOR(public.<=>) %s::public.vector)" for _ in vectors) + ")"
+
+        def ranked(conn, pool: int | None) -> list:
+            # Ranking reads vector rows only. Superseded facts are rare, so
+            # liveness is checked for a padded candidate pool, not per row.
+            pool_limit = "LIMIT %s" if pool is not None else ""
+            return conn.execute(
+                f"""SELECT f.*, top.score AS _dense_score
+                      FROM (SELECT fe.fact_id, {score} AS score
+                              FROM public.fact_embeddings fe
+                             WHERE fe.conversation_id = %s AND fe.model = %s
+                               AND fe.embedding IS NOT NULL AND NOT fe.embedding_zero
+                             ORDER BY score DESC, fe.fact_id
+                             {pool_limit}) top
+                      JOIN public.facts f ON f.id = top.fact_id
+                     WHERE f.conversation_id = %s AND f.superseded_by IS NULL
+                     ORDER BY top.score DESC, f.id
+                     LIMIT %s""",
+                (*vectors, conversation_id, model,
+                 *((pool,) if pool is not None else ()), conversation_id, limit),
+            ).fetchall()
+
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            if not self._vector_schema_installed(conn):
+                return None
+            if not self._vector_ready_on_connection(conn, VECTOR_MODEL):
+                raise RuntimeError("Native fact search requires a complete semantic vector migration; run admin migrate-semantic-vectors")
+            rows = ranked(conn, limit * 2)
+            if len(rows) < limit:
+                rows = ranked(conn, None)
+        return [(self._row_to_fact(row), float(row["_dense_score"])) for row in rows]

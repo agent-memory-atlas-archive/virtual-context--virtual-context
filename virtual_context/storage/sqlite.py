@@ -15789,6 +15789,60 @@ CREATE TABLE IF NOT EXISTS request_captures (
             )
         return result
 
+    def search_fact_embeddings(
+        self,
+        conversation_id: str,
+        model: str,
+        queries: list[list[float]],
+        *,
+        limit: int,
+    ) -> list[tuple[Fact, float]] | None:
+        import numpy as np
+
+        if not queries or limit <= 0:
+            return []
+        query = np.asarray(queries, dtype=np.float32)
+        norms = np.linalg.norm(query, axis=1)
+        if not bool((norms > 0.0).all()):
+            return []
+        query = query / norms[:, None]
+        conn = self._get_conn()
+        # Vectors only; fact rows are read for the winners alone.
+        rows = conn.execute(
+            """SELECT fe.fact_id, fe.embedding_json
+                 FROM fact_embeddings fe
+                 JOIN facts f ON f.id = fe.fact_id
+                WHERE fe.conversation_id = ? AND fe.model = ?
+                  AND f.conversation_id = ? AND f.superseded_by IS NULL
+                ORDER BY fe.fact_id""",
+            (conversation_id, model, conversation_id),
+        ).fetchall()
+        ids: list[str] = []
+        vectors: list[list[float]] = []
+        for row in rows:
+            try:
+                vec = json.loads(row["embedding_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(vec, list) and len(vec) == query.shape[1]:
+                ids.append(row["fact_id"])
+                vectors.append(vec)
+        if not ids:
+            return []
+        matrix = np.asarray(vectors, dtype=np.float32)
+        lengths = np.linalg.norm(matrix, axis=1)
+        lengths[lengths == 0.0] = 1.0
+        scores = ((matrix / lengths[:, None]) @ query.T).max(axis=1)
+        # Stable sort over id-ordered rows: equal scores keep the lower id first.
+        top = np.argsort(-scores, kind="stable")[:limit]
+        chosen = [ids[i] for i in top]
+        placeholders = ",".join("?" for _ in chosen)
+        facts = {
+            row["id"]: self._row_to_fact(row)
+            for row in conn.execute(f"SELECT * FROM facts WHERE id IN ({placeholders})", chosen).fetchall()
+        }
+        return [(facts[ids[i]], float(scores[i])) for i in top if ids[i] in facts]
+
     def iter_facts_for_embedding_backfill(
         self,
         conversation_id: str,

@@ -797,6 +797,16 @@ class CompositeStore:
             conversation_id, model, expected_dim=expected_dim,
         )
 
+    def search_fact_embeddings(
+        self,
+        conversation_id: str,
+        model: str,
+        queries: list[list[float]],
+        *,
+        limit: int,
+    ) -> list[tuple[Fact, float]] | None:
+        return self._facts.search_fact_embeddings(conversation_id, model, queries, limit=limit)
+
     def iter_facts_for_embedding_backfill(
         self,
         conversation_id: str,

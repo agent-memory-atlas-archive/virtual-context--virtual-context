@@ -5,6 +5,15 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-082 — Dense fact retrieval loaded every fact and vector on each request
+
+- **Symptom**: With `retrieval.fact_dense_retrieval` on, each retrieval read every live fact row and its JSON vector for the conversation (about 33K rows and 278 MB of JSON for a large conversation, 30.9 s through a remote connection) before ranking.
+- **Root cause**: `_fetch_facts_dense` called `load_fact_embeddings`, which joins full fact rows to `embedding_json` and parses every vector, then scored them in a Python cosine loop.
+- **Fix**: New store method `search_fact_embeddings` returns only the top facts and their scores. PostgreSQL ranks inside the database once `migrate-semantic-vectors` has added the pgvector cache to `fact_embeddings` (a trigger keeps it in sync from `embedding_json` and the row's own `model`), ranking vector rows first and checking liveness for a padded candidate pool; an incomplete cache raises instead of reloading every vector. SQLite ranks id plus vector rows with numpy and reads fact rows for the winners. Stores without it return `None` and the retriever keeps the old path.
+- **Tests**:
+  - `test_fact_dense_search.py`
+  - `test_fact_dense_search_postgres.py`
+
 ### BUG-081 — Segments whose summary held the answer were missed by chunk matching
 
 - **Symptom**: A question answered by one segment's summary ("average muscle 81.7% and fat 14.0% on
@@ -922,6 +931,8 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_fact_dense_search.py` | BUG-082 |
+| `test_fact_dense_search_postgres.py` | BUG-082 |
 | `test_segment_summary_chunk.py` | BUG-081 |
 | `test_orphaned_compaction_operation.py` | BUG-080 |
 | `test_orphaned_compaction_operation_postgres.py` | BUG-080 |

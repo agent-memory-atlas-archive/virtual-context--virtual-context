@@ -1955,6 +1955,22 @@ class ContextStore(ABC):
         """
         return {}
 
+    def search_fact_embeddings(
+        self,
+        conversation_id: str,
+        model: str,
+        queries: list[list[float]],
+        *,
+        limit: int,
+    ) -> list[tuple[Fact, float]] | None:
+        """The ``limit`` live facts most similar to any of *queries*.
+
+        Scores are cosine similarity, the best over the queries; ties go to
+        the lower fact id. Vectors of another length are ignored. ``None``
+        means the store cannot search, and callers rank loaded vectors instead.
+        """
+        return None
+
     def iter_facts_for_embedding_backfill(
         self,
         conversation_id: str,
