@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-088 — A conversation without saved engine state was re-tagged from scratch
+
+- **Symptom**: after a derived-data reset (which deletes engine state), compaction's segmenter found every turn missing from the turn-tag index (3,515 of 3,515) and called the tagging model again for each, ignoring the tags stored on the canonical rows.
+- **Root cause**: engine start-up rebuilt the turn-tag index from canonical rows only while restoring a saved engine state; with none saved, the index stayed empty.
+- **Fix**: outside provider mode, an engine that starts with an empty index rebuilds it from the conversation's tagged canonical rows. Provider mode keeps restoring through the injected session state.
+- **Tests**:
+  - `test_tag_index_restore_without_state.py`
+
 ### BUG-087 — The proxy crashed on Apple silicon when threads embedded at once
 
 - **Symptom**: the proxy process exited with SIGSEGV (`EXC_BAD_ACCESS`, faulting thread "metal gpu stream" in `at::native::arange_mps_out`) after its first requests on a Mac, with no Python traceback.
@@ -971,6 +979,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
 | `test_tag_select_seam.py` | BUG-086 |
 | `test_jev_fact_curation_batches.py` | BUG-083 |

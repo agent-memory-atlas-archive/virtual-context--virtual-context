@@ -406,6 +406,17 @@ class VirtualContextEngine:
             self._restored_from_checkpoint = False
             self._restored_checkpoint_source = ""
 
+        # With no saved state (a new conversation, or one whose derived data
+        # was reset) the stored turns still carry their tags. Rebuild the
+        # index from them so compaction does not tag the history again.
+        # Provider mode is left to the injected session state, which restores
+        # from the same rows when its own index is empty.
+        if self._session_state_provider is None and not self._turn_tag_index.entries:
+            try:
+                self._restore_from_canonical_rows(self.config.conversation_id)
+            except Exception:
+                logger.warning("Turn-tag index restore from canonical rows failed", exc_info=True)
+
         # Create delegates with the (possibly restored) turn_tag_index
         self._semantic = SemanticSearchManager(
             store=self._store, config=self.config,
