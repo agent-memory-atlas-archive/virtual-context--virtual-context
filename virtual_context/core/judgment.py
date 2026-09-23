@@ -124,15 +124,23 @@ class JevClient:
         return _get_client(self.config.timeout_s)
 
     def _post(self, body: dict) -> dict:
-        resp = self._client().post(
-            self.config.base_url,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=self.config.timeout_s,
-        )
+        def send() -> httpx.Response:
+            return self._client().post(
+                self.config.base_url,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=self.config.timeout_s,
+            )
+
+        try:
+            resp = send()
+        except httpx.RemoteProtocolError:
+            # A pooled keep-alive connection the server already closed fails
+            # before any response; judgments are side-effect free, so resend once.
+            resp = send()
         resp.raise_for_status()
         return resp.json()
 
