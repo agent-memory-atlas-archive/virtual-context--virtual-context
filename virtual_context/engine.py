@@ -3008,7 +3008,12 @@ class VirtualContextEngine:
             canonical_turn_ids=canonical_turn_ids,
         )
 
-    def backfill_tag_summaries(self, *, force_rebuild: bool = False) -> int:
+    def backfill_tag_summaries(
+        self,
+        *,
+        force_rebuild: bool = False,
+        tags: Collection[str] | None = None,
+    ) -> int:
         """Generate ``tag_summaries`` rows from already-stored segments.
 
         Recovery primitive for conversations whose segments are already
@@ -3041,6 +3046,8 @@ class VirtualContextEngine:
                 every cover tag is rebuilt regardless (the existing
                 row is overwritten by the UPSERT in
                 ``save_tag_summary``).
+            tags: When given, rebuild exactly these cover tags (existing
+                rows are overwritten, as with ``force_rebuild``).
 
         Returns:
             The number of ``tag_summary`` rows written by this call.
@@ -3092,6 +3099,9 @@ class VirtualContextEngine:
             for tag in (getattr(seg, "tags", None) or []):
                 if tag and tag != "_general":
                     cover_tags_set.add(tag)
+        if tags is not None:
+            cover_tags_set &= {str(tag) for tag in tags}
+            force_rebuild = True
         cover_tags = sorted(cover_tags_set)
         logger.info(
             "backfill_tag_summaries: derived %d cover tags from segments "

@@ -455,6 +455,34 @@ def test_backfill_tag_summaries_force_rebuild_overwrites(
     assert stub.calls[1]["existing_tag_summaries"] == {}
 
 
+def test_backfill_tag_summaries_rebuilds_only_the_named_tags(
+    engine_with_stub_compactor,
+) -> None:
+    """``tags`` rebuilds exactly those tags, existing rows or not."""
+    engine, stub = engine_with_stub_compactor
+    conv_id = engine.config.conversation_id
+
+    raw = _underlying(engine)
+    for turn, tag in enumerate(("alpha", "beta")):
+        _seed_segment(
+            raw, conv_id, ref=f"seg-{tag}", primary_tag=tag,
+            tags=[tag], summary_text=f"{tag} content",
+        )
+        _seed_canonical_turn(
+            raw, conv_id, turn_number=turn, canonical_turn_id=f"ct-{turn}",
+            primary_tag=tag, tags=[tag],
+        )
+
+    assert engine.backfill_tag_summaries() == 2
+    assert len(stub.calls) == 1
+
+    rebuilt = engine.backfill_tag_summaries(tags=["beta"])
+    assert rebuilt == 1
+    assert len(stub.calls) == 2
+    assert stub.calls[1]["cover_tags"] == ["beta"]
+    assert stub.calls[1]["existing_tag_summaries"] == {}
+
+
 # ---------------------------------------------------------------------------
 # Diagnostic logging in backfill_tag_summaries
 # ---------------------------------------------------------------------------
