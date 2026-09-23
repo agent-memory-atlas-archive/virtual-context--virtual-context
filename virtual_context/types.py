@@ -3045,13 +3045,14 @@ class SearchConfig:
     # byte-identical to the pre-selection behavior.
     # YAML key: search.speaker_selection_enabled.
     speaker_selection_enabled: bool = False
-    # Audience granularity for speaker-aware reads. ``channel`` preserves the
-    # strict per-channel boundary. ``conversation`` keeps the proved owner /
-    # audience boundary but treats origin_channel_id as provenance rather than
-    # a retrieval filter, which is appropriate when every public channel in a
-    # guild deliberately shares one conversation owner.
+    # Audience granularity for speaker-aware reads. ``conversation`` keeps the
+    # proved owner / audience boundary but treats origin_channel_id as
+    # provenance rather than a retrieval filter: every channel of a guild that
+    # shares one conversation owner reads that owner's history. A request with
+    # no channel (a DM) always keeps exact channel matching. ``channel``
+    # restricts every read to the requesting channel's own rows.
     # YAML key: search.speaker_audience_scope.
-    speaker_audience_scope: str = "channel"
+    speaker_audience_scope: str = "conversation"
 
 
 @dataclass

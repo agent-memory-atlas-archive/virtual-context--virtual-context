@@ -601,7 +601,10 @@ def test_proxy_roles_come_from_the_active_entry_and_validated_audience(tmp_path)
     text, metadata = _extract_envelope_metadata(raw)
     active = Message(role="user", content=text, metadata=metadata)
     engine = SimpleNamespace(
-        config=SimpleNamespace(conversation_id=GUILD_KEY, tenant_id="t1"),
+        config=SimpleNamespace(
+            conversation_id=GUILD_KEY, tenant_id="t1",
+            search=SearchConfig(speaker_audience_scope="channel"),
+        ),
         _store=store,
     )
     engine._ingest_reconciler = _reconciler(store)
@@ -935,3 +938,52 @@ def test_tagger_rewrite_that_omits_the_edge_would_erase_it(tmp_path):
     # This is the failure mode the call sites must prevent.
     assert after.sender_actor_id == ""
     assert after.reply_subject_actor_id == ""
+
+
+@pytest.mark.regression("PROXY-035")
+def test_conversation_scope_is_the_default_for_group_channel_requests(tmp_path):
+    """A guild that shares one conversation reads across its own channels."""
+    store = SQLiteStore(tmp_path / "default-scope-group.db")
+    store.upsert_conversation(tenant_id="t1", conversation_id=GUILD_KEY)
+    raw = _conv_info(OPTICS, message_id="m3", group_channel="#p3ptides") + "thoughts?"
+    text, metadata = _extract_envelope_metadata(raw)
+    engine = SimpleNamespace(
+        config=SimpleNamespace(conversation_id=GUILD_KEY, tenant_id="t1", search=SearchConfig()),
+        _store=store,
+    )
+    engine._ingest_reconciler = _reconciler(store)
+
+    roles = _roles_for_active_user(
+        SimpleNamespace(engine=engine), Message(role="user", content=text, metadata=metadata),
+        "thoughts?", inbound_conversation_id=GUILD_KEY, audience_conversation_id=GUILD_KEY,
+    )
+
+    assert roles.audience_channel_scope == "conversation"
+    assert roles.origin_channel_id == "15249"
+    assert roles.audience_channel_id == ""
+
+
+@pytest.mark.regression("PROXY-035")
+def test_conversation_scope_keeps_a_dm_request_on_its_exact_channel(tmp_path):
+    """A DM has no channel, so conversation scope would admit none of its rows."""
+    store = SQLiteStore(tmp_path / "default-scope-dm.db")
+    store.upsert_conversation(tenant_id="t1", conversation_id=GUILD_KEY)
+    raw = _conv_info(OPTICS, chat_id="direct:998877", message_id="dm-2") + "hello privately"
+    text, metadata = _extract_envelope_metadata(raw)
+    engine = SimpleNamespace(
+        config=SimpleNamespace(
+            conversation_id=GUILD_KEY, tenant_id="t1",
+            search=SearchConfig(speaker_audience_scope="conversation"),
+        ),
+        _store=store,
+    )
+    engine._ingest_reconciler = _reconciler(store)
+
+    roles = _roles_for_active_user(
+        SimpleNamespace(engine=engine), Message(role="user", content=text, metadata=metadata),
+        "hello privately", inbound_conversation_id=GUILD_KEY, audience_conversation_id=GUILD_KEY,
+    )
+
+    assert roles.origin_channel_id == ""
+    assert roles.audience_channel_scope == "channel"
+    assert roles.audience_channel_id == ""

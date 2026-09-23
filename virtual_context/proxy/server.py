@@ -56,6 +56,7 @@ from ..types import (  # noqa: F401 — re-exported
     get_origin_channel,
 )
 from ..types import SOURCE_CONVERSATION_KEY as _SOURCE_CONVERSATION_KEY
+from ..types import SearchConfig
 
 from .dashboard import register_dashboard_routes
 from .formats import (
@@ -536,8 +537,12 @@ def _roles_for_active_user(
     search_config = getattr(getattr(state, "engine", None), "config", None)
     search_config = getattr(search_config, "search", None)
     speaker_audience_scope = getattr(
-        search_config, "speaker_audience_scope", "channel",
+        search_config, "speaker_audience_scope", SearchConfig.speaker_audience_scope,
     )
+    if not channel_id:
+        # Conversation scope admits only group-channel rows; a request with no
+        # channel is a DM and stays bound to its own exact (empty) channel.
+        speaker_audience_scope = "channel"
     speaker_channel_id = (
         "" if speaker_audience_scope == "conversation" else channel_id
     )

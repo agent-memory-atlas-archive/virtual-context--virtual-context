@@ -447,7 +447,7 @@ class TestSearchKnobPlumbing:
         assert config.search.tool_guard_window_seconds == 120
         assert config.search.tool_guard_threshold == 10
         assert config.search.speaker_annotations_enabled is False
-        assert config.search.speaker_audience_scope == "channel"
+        assert config.search.speaker_audience_scope == "conversation"
 
     def test_invalid_speaker_audience_scope_is_rejected(self):
         config = load_config(config_dict={

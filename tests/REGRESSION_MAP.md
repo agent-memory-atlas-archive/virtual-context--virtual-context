@@ -468,6 +468,22 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-035 — Summaries of a multi-channel guild were withheld under per-channel scope
+
+- **Symptom**: Every tag and segment summary for a guild conversation rendered as "[summary withheld:
+  speaker attribution is unresolved ...]"; for example 8 of the 16 source turns behind the hcg-dosing
+  summary were admitted.
+- **Root cause**: `speaker_audience_scope` defaulted to `channel`, which admits only source rows from the
+  requesting channel. A guild whose channels share one conversation builds summaries from several
+  channels, so no summary could prove all of its sources.
+- **Fix**: the default is `conversation` (the proved audience boundary still applies, channel is
+  provenance). A request with no channel (a DM) keeps exact channel matching, because conversation
+  scope admits only group-channel rows.
+- **Tests**:
+  - `test_actor_attribution.py::test_conversation_scope_is_the_default_for_group_channel_requests`
+  - `test_actor_attribution.py::test_conversation_scope_keeps_a_dm_request_on_its_exact_channel`
+  - `test_config.py::TestSearchKnobPlumbing::test_defaults_keep_the_guard_on_and_annotations_dark`
+
 ### PROXY-034 — A conversation named out of band never proved its audience
 
 - **Symptom**: On a signed route every summary was withheld and ingested rows were stored with a blank
