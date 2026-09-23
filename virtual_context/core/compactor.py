@@ -34,7 +34,6 @@ from ..types import (
 )
 from .llm_utils import format_code_ref, normalize_code_refs, normalize_tag, parse_llm_json
 from .summary_identity import (
-    contains_ambiguous_human_referent,
     human_label_collision_key,
     is_safe_human_label,
     structured_claims_contain_internal_identity,
@@ -78,11 +77,6 @@ SPEAKER IDENTITY CONTRACT:
   label formed from user, member, or person.
 - If a source has no display label, describe the topic without assigning its
   personal statements to a generic or guessed human."""
-
-
-_TAG_SUMMARY_IDENTITY_QUARANTINE = (
-    "[tag summary withheld: source prose lacks explicit speaker attribution]"
-)
 
 
 _MAX_SUMMARY_CLAIMS = 256
@@ -827,78 +821,10 @@ def _format_tag_rollup_source(summary: StoredSummary) -> str:
 
 
 def _safe_tag_rollup_fallback(summaries: list[StoredSummary]) -> str:
-    safe_parts = [
-        _format_tag_rollup_source(summary)
-        for summary in summaries
-        if not contains_ambiguous_human_referent(summary.summary)
-    ]
-    if not safe_parts:
-        return _TAG_SUMMARY_IDENTITY_QUARANTINE
-    fallback = "\n\n---\n\n".join(safe_parts)[:4000]
-    return (
-        fallback
-        if not contains_ambiguous_human_referent(fallback)
-        else _TAG_SUMMARY_IDENTITY_QUARANTINE
-    )
-
-
-def _ambiguous_tag_rollup_fields(parsed: dict) -> tuple[str, ...]:
-    return tuple(
-        field
-        for field in ("summary", "description")
-        if contains_ambiguous_human_referent(parsed.get(field, ""))
-    )
-
-
-def _single_proved_tag_rollup_label(
-    summaries: list[StoredSummary],
-) -> str:
-    """One exact human label shared by every source, or an empty string.
-
-    A multi-human rollup cannot be semantically attribution-validated with a
-    lexical detector: a model could move a claim between two real allowed
-    names and produce no forbidden phrase. Missing legacy label provenance is
-    equally unprovable. Both cases therefore bypass generative synthesis and
-    use the bounded, source-separated fallback.
-    """
-    if not summaries:
-        return ""
-    labels: set[str] = set()
-    fingerprints: set[str] = set()
-    scope_fingerprints: set[str] = set()
-    for summary in summaries:
-        metadata = getattr(summary, "metadata", None)
-        if int(_metadata_value(
-            metadata,
-            "source_speaker_identity_count",
-        ) or 0) != 1:
-            return ""
-        fingerprint = str(_metadata_value(
-            metadata,
-            "source_speaker_identity_fingerprint",
-        ) or "").strip()
-        if not fingerprint:
-            return ""
-        fingerprints.add(fingerprint)
-        if len(fingerprints) > 1:
-            return ""
-        scope_fingerprint = str(_metadata_value(
-            metadata,
-            "source_audience_fingerprint",
-        ) or "").strip()
-        if not scope_fingerprint:
-            return ""
-        scope_fingerprints.add(scope_fingerprint)
-        if len(scope_fingerprints) > 1:
-            return ""
-        source_labels = _summary_source_labels(summary)
-        if not source_labels:
-            return ""
-        labels.update(source_labels)
-        if len(labels) > 1:
-            return ""
-    return next(iter(labels)) if len(labels) == 1 else ""
-
+    """The segment summaries themselves, when a rollup could not be generated."""
+    return "\n\n---\n\n".join(
+        _format_tag_rollup_source(summary) for summary in summaries
+    )[:4000]
 
 class SegmentSummaryRequest(NamedTuple):
     """A fully constructed segment-summarize request, before any LLM call.
@@ -1872,13 +1798,6 @@ class DomainCompactor:
                               "present; otherwise summarize only the supplied conversation. Do not "
                               "import prior context, invert negation or intent, or make the summary "
                               "longer than the source segment."
-                            + (
-                                " Your previous summary used an ambiguous generic human referent. "
-                                "Rewrite every human reference with an exact display label listed "
-                                "in the speaker identity contract."
-                                if _reject_reason == "ambiguous_human_referent"
-                                else ""
-                            )
                         ),
                         user=prompt,
                         max_tokens=(
@@ -1904,37 +1823,25 @@ class DomainCompactor:
                         parsed.get("summary", ""), conversation_text, roster,
                     )
                     if _retry_reason is not None:
-                        if _retry_reason == "ambiguous_human_referent":
-                            # The free-form synopsis is an internal retrieval
-                            # index, not model-visible evidence. Keep the best
-                            # available index text after one hygiene retry; the
-                            # independently validated structured claims below
-                            # remain the only summary presentation artifact.
-                            logger.warning(
-                                "Generic referent persisted in retrieval synopsis "
-                                "for segment %s; retaining index text only",
-                                segment.id,
+                        if fail_closed:
+                            raise SegmentSummaryGenerationError(
+                                f"segment {segment.id} remained unusable after "
+                                f"retry: {_retry_reason}"
                             )
-                        else:
-                            if fail_closed:
-                                raise SegmentSummaryGenerationError(
-                                    f"segment {segment.id} remained unusable after "
-                                    f"retry: {_retry_reason}"
-                                )
-                            logger.warning(
-                                "Unusable LLM summary persisted after retry for segment %s "
-                                "(reason=%s); using bounded source-text fallback",
-                                segment.id,
-                                _retry_reason,
-                            )
-                            parsed = {
-                                "summary": conversation_text[:target_tokens * 4],
-                                "entities": [],
-                                "key_decisions": [],
-                                "action_items": [],
-                                "date_references": [],
-                                "refined_tags": segment.tags,
-                            }
+                        logger.warning(
+                            "Unusable LLM summary persisted after retry for segment %s "
+                            "(reason=%s); using bounded source-text fallback",
+                            segment.id,
+                            _retry_reason,
+                        )
+                        parsed = {
+                            "summary": conversation_text[:target_tokens * 4],
+                            "entities": [],
+                            "key_decisions": [],
+                            "action_items": [],
+                            "date_references": [],
+                            "refined_tags": segment.tags,
+                        }
         except Exception as e:
             if fail_closed:
                 raise
@@ -2539,13 +2446,8 @@ class DomainCompactor:
         source_text: str,
         roster: "ActorRoster | None",
     ) -> str | None:
-        """Fail closed on generic people even when provenance is incomplete."""
-        # ``roster`` remains explicit in this boundary because it controls the
-        # companion prompt contract; acceptance itself must not become fail-open
-        # merely because an old row lacks complete identity metadata.
+        """Why a segment summary is unusable, or None."""
         _ = roster
-        if contains_ambiguous_human_referent(summary):
-            return "ambiguous_human_referent"
         return cls._unusable_reason(summary, source_text)
 
     @classmethod
@@ -2878,53 +2780,6 @@ class DomainCompactor:
                     )
             else:
                 parsed = self._parse_response(response_text)
-            ambiguous_fields = _ambiguous_tag_rollup_fields(parsed)
-            if ambiguous_fields:
-                logger.warning(
-                    "Ambiguous human referent in tag rollup '%s' fields=%s; "
-                    "retrying once",
-                    tag,
-                    ",".join(ambiguous_fields),
-                )
-                retry_started = time.time()
-                response_text, usage = self.llm.complete(
-                    system=(
-                        system
-                        + " Your previous response used an ambiguous generic human "
-                          "referent in: "
-                        + ", ".join(ambiguous_fields)
-                        + ". Rewrite both summary and description using only exact "
-                          "source display labels. If no label is supplied, omit the "
-                          "personal attribution rather than guessing."
-                    ),
-                    user=prompt,
-                    max_tokens=(
-                        self.config.max_summary_tokens
-                        + self.config.llm_token_overhead
-                    ),
-                )
-                self._log_usage(
-                    "tag_rollup_retry",
-                    duration_ms=(time.time() - retry_started) * 1000,
-                    usage=usage,
-                )
-                if fail_closed:
-                    parsed = self._parse_tag_response_strict(response_text)
-                    if parsed is None:
-                        raise TagSummaryGenerationError(
-                            f"tag {tag!r} returned malformed JSON after retry"
-                        )
-                else:
-                    parsed = self._parse_response(response_text)
-                retry_fields = _ambiguous_tag_rollup_fields(parsed)
-                if retry_fields:
-                    logger.warning(
-                        "Ambiguous human referent persisted in tag rollup '%s' "
-                        "fields=%s; using safe source fallback",
-                        tag,
-                        ",".join(retry_fields),
-                    )
-                    parsed = {"summary": fallback_text, "description": ""}
         except Exception as e:
             if fail_closed:
                 raise
@@ -2939,19 +2794,6 @@ class DomainCompactor:
 
         summary_text = parsed.get("summary", "")
         description = parsed.get("description", "")
-        # Final storage boundary: no control-flow or parsing change above may
-        # turn an unsafe retry into persisted prose.
-        if (
-            contains_ambiguous_human_referent(summary_text)
-            or contains_ambiguous_human_referent(description)
-        ):
-            logger.error(
-                "Unsafe tag rollup reached final storage gate for '%s'; "
-                "using safe source fallback",
-                tag,
-            )
-            summary_text = fallback_text
-            description = ""
         source_refs, source_turns, source_ids = _tag_rollup_coordinates(
             summaries,
             turn_numbers,
