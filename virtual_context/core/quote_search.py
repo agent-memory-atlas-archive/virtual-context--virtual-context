@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date
 from itertools import product
 
@@ -28,10 +28,7 @@ from .speaker_labels import (
 )
 from .store import ContextStore
 from .summary_identity import (
-    SUMMARY_ATTRIBUTION_QUARANTINE,
-    SummarySpeakerAttribution,
-    render_summaries_for_model,
-    resolve_summary_speaker_attributions,
+    summaries_admitted_for_audience,
 )
 
 logger = logging.getLogger(__name__)
@@ -2923,18 +2920,10 @@ def _contain_summary_results_for_speaker_context(
     results: list[QuoteResult],
     *,
     conversation_id: str | None,
-    speaker_context: SpeakerRetrievalContext,
+    speaker_context: SpeakerRetrievalContext | None,
     judgment_runtime: object | None = None,
-) -> tuple[list[QuoteResult], dict[str, SummarySpeakerAttribution]]:
-    """Prove and render segment claims before any model-visible derivation.
-
-    The bridge is exact-segment -> exact canonical ids -> exact physical rows.
-    Stored free-form summary prose is used only to rank candidates. The
-    model-visible value is the segment's independently validated structured
-    claims at SEGMENTS depth (or the exact canonical fallback for a legacy
-    row). Missing segments and audience/channel mismatches fail closed. Actor
-    ids stay only in the returned internal attribution map.
-    """
+) -> tuple[list[QuoteResult], dict]:
+    """Render segment results as stored text, dropping other audiences' turns."""
     segments_by_ref: OrderedDict[str, object] = OrderedDict()
     for result in results:
         ref = (result.segment_ref or "").strip()
@@ -2949,100 +2938,22 @@ def _contain_summary_results_for_speaker_context(
         if segment is not None:
             segments_by_ref[ref] = segment
 
-    refs = list(segments_by_ref)
-    segment_values = list(segments_by_ref.values())
-    attributions = resolve_summary_speaker_attributions(
-        segment_values,
-        store=store,
-        conversation_id=conversation_id or "",
-        speaker_context=speaker_context,
-    )
-    attribution_by_ref = dict(zip(refs, attributions, strict=True))
-    rendered_segments = render_summaries_for_model(
-        segment_values,
-        store=store,
-        conversation_id=conversation_id or "",
-        speaker_context=speaker_context,
-        depth="segments",
-        judgment_runtime=judgment_runtime,
-    )
-    rendered_by_ref = dict(zip(refs, rendered_segments, strict=True))
-
+    admitted_by_ref = dict(zip(
+        segments_by_ref,
+        summaries_admitted_for_audience(
+            list(segments_by_ref.values()),
+            store=store,
+            conversation_id=conversation_id or "",
+            speaker_context=speaker_context,
+        ),
+        strict=True,
+    ))
     contained: list[QuoteResult] = []
-    proved_by_ref: dict[str, SummarySpeakerAttribution] = {}
     for result in results:
         ref = (result.segment_ref or "").strip()
-        attribution = attribution_by_ref.get(ref)
-        rendered = rendered_by_ref.get(ref, SUMMARY_ATTRIBUTION_QUARANTINE)
-        if attribution is None:
-            continue
-        if rendered == SUMMARY_ATTRIBUTION_QUARANTINE:
-            continue
-        contained.append(replace(result, text=rendered))
-        proved_by_ref[result.segment_ref] = attribution
-    return contained, proved_by_ref
-
-
-def _project_summary_historical_speaker(
-    entry: dict[str, object],
-    result: QuoteResult,
-    attributions: dict[str, SummarySpeakerAttribution],
-) -> None:
-    """Validated claim sources carry their own role-local speakers.
-
-    A segment-wide label would stamp the same human over an adjacent assistant
-    source (or another participant's claim) and recreate the reassignment this
-    boundary exists to prevent.
-    """
-    return None
-
-
-def _all_summary_results_prove_same_actor(
-    results: list[QuoteResult],
-    attributions: dict[str, SummarySpeakerAttribution],
-) -> bool:
-    """Whether every surviving result is exactly attributed to one actor."""
-    actors: set[str] = set()
-    for result in results:
-        attribution = attributions.get(result.segment_ref)
-        if attribution is None or not attribution.is_proved_single_human:
-            return False
-        actors.update(attribution.actor_ids)
-    return bool(results) and len(actors) == 1
-
-
-def _strip_canonical_summary_derivatives(response: dict) -> dict:
-    """Keep proved summary envelopes and structure, never lossy derivatives.
-
-    Quantity lists, current-state priorities, calculations, preference anchors,
-    coverage prose, and reader hints were historically synthesized from the
-    generated summary text. Recomputing them from a structured-claim envelope
-    would erase which exact claim source supplied a value. They remain disabled
-    until each derivative carries a validated claim/source reference.
-    """
-    allowed_response = {
-        "query", "mode", "query_intent", "session_filter", "found",
-        "results", "message",
-    }
-    allowed_entry = {
-        "excerpt", "topic", "segment_ref", "segment_refs", "session",
-        "session_date_normalized", "match_type", "similarity",
-        "merged_count", "historical_speaker", "matched_components",
-    }
-    for key in list(response):
-        if key not in allowed_response:
-            response.pop(key, None)
-    results = response.get("results")
-    if isinstance(results, list):
-        response["results"] = [
-            {
-                key: value for key, value in entry.items()
-                if key in allowed_entry
-            }
-            if isinstance(entry, dict) else entry
-            for entry in results
-        ]
-    return response
+        if admitted_by_ref.get(ref, True):
+            contained.append(result)
+    return contained, {}
 
 
 def search_summaries(
@@ -3067,17 +2978,6 @@ def search_summaries(
         return {"error": "empty query"}
 
     mode = _normalize_search_summary_mode(mode)
-    if (
-        speaker_context is not None
-        and not getattr(speaker_context, "eligible", False)
-    ):
-        return {
-            "query": query,
-            "mode": mode,
-            "found": False,
-            "results": [],
-            "message": "Summary search was withheld because request audience authority is unproved.",
-        }
     coverage_components: list[str] = []
 
     query_intent = _detect_query_intent(query, runtime=judgment_runtime)
@@ -3128,31 +3028,15 @@ def search_summaries(
             coverage_components,
             conversation_id=conversation_id,
         )
-    # This boundary precedes every reader hint, value candidate, and
-    # calculation below. On the speaker-aware branch, exact physical-row proof
-    # replaces the old actor-blind lexical filter: safe single-speaker history
-    # is explicitly attributed, while incomplete/mixed/cross-audience evidence
-    # is omitted as one indivisible bundle. The legacy branch retains its
-    # stateless guard for callers without request-owned retrieval authority.
-    speaker_gate_active = bool(
-        speaker_context is not None
-        and getattr(speaker_context, "eligible", False)
+    # Summary results are shown as stored text; results drawn from another
+    # audience's turns are dropped before ranking.
+    results, _ = _contain_summary_results_for_speaker_context(
+        store,
+        results,
+        conversation_id=conversation_id,
+        speaker_context=speaker_context,
+        judgment_runtime=judgment_runtime,
     )
-    summary_attributions: dict[str, SummarySpeakerAttribution] = {}
-    if speaker_gate_active:
-        assert speaker_context is not None
-        results, summary_attributions = _contain_summary_results_for_speaker_context(
-            store,
-            results,
-            conversation_id=conversation_id,
-            speaker_context=speaker_context,
-            judgment_runtime=judgment_runtime,
-        )
-    else:
-        # Generated summary prose is not evidence even when it happens to use
-        # a real name. Without request-owned canonical-row authority there is
-        # no safe projection, so the summary search fails closed.
-        results = []
 
     # Rank only admissible evidence. Ranking first would let a handful of
     # high-scoring private/mixed rows consume ``max_results`` and hide safe
@@ -3225,9 +3109,6 @@ def search_summaries(
                         "session_date_normalized": session_dates_normalized.get(session_date, ""),
                         "match_type": qr.match_type,
                     }
-                    _project_summary_historical_speaker(
-                        entry, qr, summary_attributions,
-                    )
                     if mode in _MULTI_EVIDENCE_SUMMARY_MODES and coverage_components:
                         matched_components = _match_coverage_components(
                             qr.text,
@@ -3281,9 +3162,6 @@ def search_summaries(
                 "topic": qr.tag,
                 "match_type": qr.match_type,
             }
-            _project_summary_historical_speaker(
-                entry, qr, summary_attributions,
-            )
             if mode in _MULTI_EVIDENCE_SUMMARY_MODES and coverage_components:
                 matched_components = _match_coverage_components(
                     qr.text,
@@ -3337,11 +3215,7 @@ def search_summaries(
                 query=query,
                 intent_context=intent_context,
             )
-        return (
-            _strip_canonical_summary_derivatives(response)
-            if speaker_gate_active
-            else response
-        )
+        return response
 
     session_items = list(session_groups.items())
     if query_intent == "current_state":
@@ -3355,14 +3229,9 @@ def search_summaries(
         )
 
     current_state_multi_session = False
-    same_actor_current_state = (
-        not speaker_gate_active
-        or _all_summary_results_prove_same_actor(results, summary_attributions)
-    )
     if (
         query_intent == "current_state"
         and len(session_items) > 1
-        and same_actor_current_state
     ):
         # Only suppress older sessions when the newest session has a
         # topically relevant match (FTS/like hit, or semantic >= 0.4).
@@ -3393,9 +3262,6 @@ def search_summaries(
                     "session_date_normalized": session_dates_normalized.get(session_date, ""),
                     "match_type": qr.match_type,
                 }
-                _project_summary_historical_speaker(
-                    entry, qr, summary_attributions,
-                )
                 if mode in _MULTI_EVIDENCE_SUMMARY_MODES and coverage_components:
                     matched_components = _match_coverage_components(
                         qr.text,
@@ -3473,9 +3339,6 @@ def search_summaries(
             "segment_ref": qr.segment_ref,
             "match_type": qr.match_type,
         }
-        _project_summary_historical_speaker(
-            entry, qr, summary_attributions,
-        )
         if mode in _MULTI_EVIDENCE_SUMMARY_MODES and coverage_components:
             matched_components = _match_coverage_components(
                 qr.text,
@@ -3506,27 +3369,14 @@ def search_summaries(
         newest_date = ""
         if formatted:
             newest_date = formatted[0].get("session_date_normalized", "") or formatted[0].get("session", "")
-        if speaker_gate_active:
-            historical_speaker = str(
-                formatted[0].get("historical_speaker", "") if formatted else ""
-            ).strip()
-            response["reader_hint"] = (
-                "CURRENT-STATE RESOLUTION RULE (mandatory): "
-                "The most recent proved session"
-                + (f" ({newest_date})" if newest_date else "")
-                + f" is authoritative for {historical_speaker}'s state within the returned history. "
-                f"Older sessions attributed to {historical_speaker} are superseded history. "
-                "Identity continuity with this request is unproved."
-            )
-        else:
-            response["reader_hint"] = (
-                "CURRENT-STATE RESOLUTION RULE (mandatory): "
-                "The most recent session"
-                + (f" ({newest_date})" if newest_date else "")
-                + " is the preferred temporal evidence within the returned history. "
-                "Older sessions are superseded history — do NOT use them to override the newest session. "
-                "Identity continuity with this request is unproved."
-            )
+        response["reader_hint"] = (
+            "CURRENT-STATE RESOLUTION RULE (mandatory): "
+            "The most recent session"
+            + (f" ({newest_date})" if newest_date else "")
+            + " is the preferred temporal evidence within the returned history. "
+            "Older sessions are superseded history — do NOT use them to override the newest session. "
+            "Identity continuity with this request is unproved."
+        )
     elif mode == "exact_value":
         _apply_exact_value_metadata(
             response,
@@ -3591,11 +3441,7 @@ def search_summaries(
                     "and anchor_example_calculation may illustrate the structure. "
                     "Do not substitute alternate illustrative rates or counts from supporting summaries."
                 )
-    return (
-        _strip_canonical_summary_derivatives(response)
-        if speaker_gate_active
-        else response
-    )
+    return response
 
 
 def _apply_speaker_conditioning_metadata(

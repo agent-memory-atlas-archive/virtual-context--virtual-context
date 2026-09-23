@@ -170,7 +170,7 @@ class TestAssemblerPagingDepths:
         )
 
     def test_summary_depth_default(self):
-        """Unproved summary depth keeps structure but withholds prose."""
+        """Without working_set, tags render at SUMMARY depth."""
         asm = self._make_assembler()
         summary = self._make_summary("database")
         result = asm.assemble(
@@ -181,8 +181,7 @@ class TestAssemblerPagingDepths:
         )
         assert "database" in result.tag_sections
         assert "virtual-context" in result.tag_sections["database"]
-        assert "Summary text" not in result.tag_sections["database"]
-        assert "summary withheld" in result.tag_sections["database"]
+        assert "Summary text" in result.tag_sections["database"]
 
     def test_segments_depth_with_working_set(self):
         """SEGMENTS depth renders individual segment summaries."""
@@ -206,7 +205,7 @@ class TestAssemblerPagingDepths:
         assert 'depth="segments"' in result.tag_sections["api"]
 
     def test_full_depth_with_working_set(self):
-        """FULL depth cannot bypass proof through stored full_text."""
+        """FULL depth renders full_text from StoredSegment."""
         asm = self._make_assembler()
         summary = self._make_summary("auth")
         full_text = "Complete authentication implementation discussion with all details."
@@ -226,8 +225,7 @@ class TestAssemblerPagingDepths:
         )
         assert "auth" in result.tag_sections
         assert 'depth="full"' in result.tag_sections["auth"]
-        assert full_text not in result.tag_sections["auth"]
-        assert "summary withheld" in result.tag_sections["auth"]
+        assert full_text in result.tag_sections["auth"]
 
     def test_none_depth_skips_tag(self):
         """NONE depth skips the tag entirely (hint only)."""
@@ -590,9 +588,9 @@ class TestEnginePagingAPI:
         self._seed_segments(engine, "new-topic", n=2, tokens_per=200)
 
         # Expand old topic first (lower last_accessed_turn)
-        engine.expand_topic("old-topic", depth="full", speaker_context=getattr(engine, "_test_speaker_context", None))
+        engine.expand_topic("old-topic", depth="full")
         # Now expand new topic which should trigger eviction of old
-        result = engine.expand_topic("new-topic", depth="full", speaker_context=getattr(engine, "_test_speaker_context", None))
+        result = engine.expand_topic("new-topic", depth="full")
 
         # old-topic should have been evicted (collapsed or removed)
         if "old-topic" in engine._paging.working_set:
@@ -1244,7 +1242,7 @@ class TestReassembleContext:
         assert "database" in text.lower() or "PostgreSQL" in text.lower()
 
     def test_reflects_expanded_depth(self, tmp_path):
-        """Expansion cannot bypass missing canonical source authority."""
+        """After expand_topic, reassemble includes expanded content."""
         engine = self._make_engine(tmp_path)
         history = [
             Message(role="user", content="Tell me about databases"),
@@ -1258,10 +1256,9 @@ class TestReassembleContext:
         # Expand to FULL
         engine.expand_topic("database", "full")
 
-        # Re-assembly may change depth, but cannot trust stored full_text.
+        # Re-assemble should now include full text
         expanded = engine.reassemble_context()
-        assert "B-tree indexes" not in expanded
-        assert "summary withheld" in expanded
+        assert "B-tree indexes" in expanded  # full_text content
         # Initial (summary) should NOT have had the full text
         assert "B-tree indexes" not in initial
 

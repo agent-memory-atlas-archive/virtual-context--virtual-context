@@ -29,7 +29,6 @@ from .core.monitor import ContextMonitor
 from .core.retriever import ContextRetriever
 from .core.segmenter import TopicSegmenter, pair_messages_into_turns
 from .core.store_capabilities import capabilities_of
-from .core.summary_identity import sanitize_summary_payload_for_model
 from .core.tag_canonicalizer import TagCanonicalizer
 from .core.tag_generator import build_tag_generator, TagGenerator
 from .core.turn_tag_index import TurnTagIndex
@@ -4960,11 +4959,7 @@ class VirtualContextEngine:
             intent_context=intent_context,
             speaker_context=resolved_context,
         )
-        return sanitize_summary_payload_for_model(
-            result,
-            allow_proved_renderings=resolved_context.eligible,
-            speaker_context=resolved_context,
-        )
+        return result
 
     # ------------------------------------------------------------------
     # query_with_tools: sync tool loop for non-proxy callers

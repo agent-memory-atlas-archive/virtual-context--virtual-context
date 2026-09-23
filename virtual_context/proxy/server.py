@@ -41,7 +41,6 @@ from ..core.tool_loop import (  # noqa: F401 — compatibility exports
     is_vc_tool,
     execute_vc_tool,
 )
-from ..core.summary_identity import render_summary_for_model
 from ..types import (  # noqa: F401 — re-exported
     CanonicalTurnRow,
     Fact,
@@ -380,9 +379,7 @@ def _serialize_recall_segment(
         "selected_because": reasons,
         "matched_query_tags": matched_query_tags,
         "related_match_tags": related_match_tags,
-        "summary": render_summary_for_model(
-            summary.summary, require_proved_scope=True,
-        ),
+        "summary": summary.summary,
         "summary_tokens": summary.summary_tokens,
         "full_tokens": summary.full_tokens,
         "turn_count": meta.turn_count if meta else 0,

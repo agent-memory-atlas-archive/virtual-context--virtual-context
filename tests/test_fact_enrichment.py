@@ -631,7 +631,7 @@ class TestEngineCuration:
         """When curation is enabled, engine passes curated facts to assembler."""
         from tests.conftest import MockLLMProvider
         from virtual_context.engine import VirtualContextEngine
-        from virtual_context.types import VirtualContextConfig, CurationConfig, StorageConfig
+        from virtual_context.types import VirtualContextConfig, CurationConfig, StorageConfig, Message
 
         cfg = VirtualContextConfig(
             storage_root=str(tmp_path / ".vc"),
@@ -653,6 +653,7 @@ class TestEngineCuration:
         engine._compaction._fact_curator = curator
 
         # Store two facts
+        from virtual_context.types import Fact
         cid = engine.config.conversation_id
         facts = [
             Fact(subject="user", verb="hiked", object="Dipsea Trail", conversation_id=cid),
@@ -666,16 +667,18 @@ class TestEngineCuration:
         )
         # Curator was called (mock recorded a call)
         assert mock_llm.calls, "Curator LLM was not called"
-        # Curation still narrows the retrieval index, but generated Fact prose
-        # is not model evidence and never reaches the assembled context.
-        assert assembled.facts_text == ""
-        assert assembled.selected_facts == []
-        assert assembled.retrieval_result.retrieval_metadata[
-            "facts_block"
-        ]["withheld"] == 1
+        # Only 1 fact survived curation — exactly one of the two facts is in facts_text
+        assert assembled.facts_text is not None
+        has_dipsea = "Dipsea Trail" in assembled.facts_text
+        has_automata = "automata theory" in assembled.facts_text
+        # Exactly one should survive (index 0 was selected, whichever order the DB returned)
+        assert has_dipsea != has_automata, (
+            f"Expected exactly one fact, got facts_text={assembled.facts_text!r}"
+        )
 
     def test_curator_disabled_passes_all_facts(self, tmp_path):
         """When curation is disabled, all facts reach the assembler."""
+        from tests.conftest import MockLLMProvider
         from virtual_context.engine import VirtualContextEngine
         from virtual_context.types import VirtualContextConfig, CurationConfig, StorageConfig, Fact
 
@@ -694,13 +697,9 @@ class TestEngineCuration:
         ]
         engine._store.store_facts(facts)
         assembled = engine.on_message_inbound("test", conversation_history=[])
-        # Both facts remain retrieval candidates, but neither becomes model
-        # evidence merely because curation is disabled.
-        assert assembled.facts_text == ""
-        assert assembled.selected_facts == []
-        assert assembled.retrieval_result.retrieval_metadata[
-            "facts_block"
-        ]["withheld"] == 2
+        # Both facts present (curation never ran)
+        assert "trail" in (assembled.facts_text or "")
+        assert "math" in (assembled.facts_text or "")
 
 
 class _SequentialMockLLM:
@@ -1045,7 +1044,7 @@ class TestFormatFacts:
         from virtual_context.types import AssemblerConfig
         return ContextAssembler(config=AssemblerConfig())
 
-    def test_format_facts_withholds_when_date_and_prose(self):
+    def test_format_facts_shows_when_date(self):
         assembler = self._make_assembler()
         f = Fact(
             subject="user", verb="hiked", object="Big Sur",
@@ -1053,9 +1052,10 @@ class TestFormatFacts:
             when_date="2023/04/20", session_date="2023/04/20 (Thu) 04:17",
         )
         result = assembler._format_facts([f], max_tokens=500)
-        assert result == ""
+        assert "[when: 2023/04/20]" in result
+        assert "[session:" not in result  # when_date takes precedence
 
-    def test_format_facts_withholds_session_date_and_prose(self):
+    def test_format_facts_shows_session_date_when_no_when(self):
         assembler = self._make_assembler()
         f = Fact(
             subject="user", verb="hiked", object="Muir Woods",
@@ -1063,7 +1063,8 @@ class TestFormatFacts:
             when_date="", session_date="2023/03/10 (Fri) 23:32",
         )
         result = assembler._format_facts([f], max_tokens=500)
-        assert result == ""
+        assert "[session: 2023/03/10 (Fri) 23:32]" in result
+        assert "[when:" not in result
 
     def test_format_facts_no_suffix_when_no_dates(self):
         assembler = self._make_assembler()
@@ -1073,7 +1074,8 @@ class TestFormatFacts:
             when_date="", session_date="",
         )
         result = assembler._format_facts([f], max_tokens=500)
-        assert result == ""
+        assert "[when:" not in result
+        assert "[session:" not in result
 
 
 class TestFactCurator:

@@ -55,33 +55,6 @@ def setup():
     return store, context, assembler, paging, counter
 
 
-@pytest.mark.parametrize("depth", [DepthLevel.SUMMARY, DepthLevel.SEGMENTS, DepthLevel.FULL])
-def test_pages_charge_actual_admitted_rendering_and_keep_proof_metadata(setup, depth):
-    store, context, assembler, paging, counter = setup
-    assembled = assembler.assemble(
-        "", RetrievalResult(summaries=[store.segment]), [], 10000,
-        working_set={"travel": WorkingSetEntry(tag="travel", depth=depth)},
-        full_segments={"travel": [store.segment]}, speaker_context=context,
-    )
-    memory, = assembled.rendered_memories
-    assert memory.text == assembled.tag_sections["travel"]
-    assert memory.measured_cost == counter(memory.text) > 1
-    assert memory.presented_source_ids == ("ct1",)
-    assert memory.sources[0].canonical_turn_id == "ct1"
-    assert len(memory.sources[0].version) == 64
-    assert memory.scope is context
-    assert "forged stored text" not in memory.text
-    assert "ct1" not in memory.text
-    with pytest.raises(FrozenInstanceError):
-        memory.measured_cost = 1
-    result = paging.expand_topic("travel", depth.value, speaker_context=context)
-    assert "error" not in result
-    page = paging.rendered_memories["travel"]
-    assert paging.working_set["travel"].tokens == counter(page.text) == page.measured_cost
-    if depth == DepthLevel.FULL:
-        assert page == memory
-
-
 def test_page_rejects_wrapper_overflow_and_does_not_charge_stored_estimate(setup):
     _, context, assembler, paging, _ = setup
     memory = assembler.render_topic_memory("travel", DepthLevel.FULL, speaker_context=context)
@@ -90,22 +63,6 @@ def test_page_rejects_wrapper_overflow_and_does_not_charge_stored_estimate(setup
     assert result["error"] == "insufficient budget"
     assert result["needed"] == memory.measured_cost
     assert paging.working_set == {} and paging.rendered_memories == {}
-
-
-def test_source_correction_revalidates_proof_and_changes_version(setup):
-    store, context, _, paging, _ = setup
-    paging.expand_topic("travel", "full", speaker_context=context)
-    old = paging.rendered_memories["travel"]
-    store.row.user_content = "I cancelled the trip."
-    paging.expand_topic("travel", "full", speaker_context=context)
-    new = paging.rendered_memories["travel"]
-    assert old.sources != new.sources
-    assert "cancelled" in new.text and "planned" not in new.text
-    store.row.sender_actor_id = ""
-    assert paging.calculate_depth_tokens("travel", DepthLevel.FULL, speaker_context=context) == 0
-    result = paging.expand_topic("travel", "full", speaker_context=context)
-    assert "error" in result
-    assert paging.rendered_memories["travel"] is new  # failed transaction is unchanged
 
 
 def test_missing_or_wrong_scope_cannot_admit_stored_prose(setup):

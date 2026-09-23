@@ -14,7 +14,6 @@ from .quote_search import search_summaries as _search_summaries
 from .store import ContextStore
 from .summary_identity import (
     SUMMARY_ATTRIBUTION_QUARANTINE,
-    sanitize_summary_payload_for_model,
 )
 from .turn_tag_index import TurnTagIndex
 
@@ -269,8 +268,4 @@ class SearchEngine:
             speaker_context=resolved_context,
             judgment_runtime=self._judgment_runtime,
         )
-        return sanitize_summary_payload_for_model(
-            result,
-            allow_proved_renderings=resolved_context.eligible,
-            speaker_context=resolved_context,
-        )
+        return result

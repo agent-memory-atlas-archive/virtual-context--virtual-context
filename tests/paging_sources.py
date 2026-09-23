@@ -40,8 +40,8 @@ def seed_paging_sources(engine, tag, n=1, tokens_per=100, *, context=None):
         ),))
         segment = StoredSegment(
             ref=f"{tag}-seg-{index}", conversation_id=owner, primary_tag=tag, tags=[tag],
-            summary="Unproved stored synopsis must not be rendered", summary_tokens=1,
-            full_text="Unproved stored full text must not be rendered", full_tokens=1,
+            summary=evidence, summary_tokens=1,
+            full_text=f"{evidence} " + "expanded assistant detail " * tokens_per, full_tokens=1,
             metadata=SegmentMetadata(canonical_turn_ids=[canonical_id], source_mapping_complete=True,
                                      structured_summary=StructuredSummary(schema_version=1, claims=(claim,),
                                                                           source_digest=structured_source_digest([record]))),
@@ -49,7 +49,7 @@ def seed_paging_sources(engine, tag, n=1, tokens_per=100, *, context=None):
         engine._store.store_segment(segment)
         result.append(segment)
     engine._test_speaker_context = context
-    # Bind a real source proof to one request snapshot. These tests exercise
-    # paging directly rather than invoking an unrelated query/tagging turn.
+    # Bind the request snapshot. These tests exercise paging directly rather
+    # than invoking an unrelated query/tagging turn.
     engine._retrieval._last_reassembly_snapshot = (RetrievalResult(), [], "", None, context, None)
     return result, context

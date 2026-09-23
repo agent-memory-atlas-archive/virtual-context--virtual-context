@@ -59,8 +59,7 @@ def test_format_tag_section_standalone():
     result = format_tag_section("cooking", [s1])
     assert '<virtual-context tags="cooking, italian"' in result
     assert "[1/1]" in result
-    assert "speaker attribution is unresolved" in result
-    assert "Italian cooking techniques" not in result
+    assert "Italian cooking techniques" in result
     assert "</virtual-context>" in result
 
 
@@ -106,80 +105,6 @@ def test_fill_pass_no_op_when_over_target():
     )
     assert summaries == 0
     assert turns == 0
-
-
-def test_fill_pass_skips_unproved_breadth_summaries():
-    from virtual_context.proxy.message_filter import fill_pass
-
-    body = _make_anthropic_body(["hello"])
-    fmt = detect_format(body)
-
-    ts1 = TagSummary(tag="cooking", summary="Italian cooking", summary_tokens=50,
-                     source_segment_refs=["seg_a"], updated_at=datetime.now(timezone.utc))
-    ts2 = TagSummary(tag="baking", summary="Bread baking", summary_tokens=50,
-                     source_segment_refs=["seg_b"], updated_at=datetime.now(timezone.utc))
-    mock_store = MagicMock()
-    mock_store.get_all_tag_summaries.return_value = [ts1, ts2]
-
-    assembled = AssembledContext(
-        presented_segment_refs=set(),
-        presented_tags=set(),
-        tag_sections={},
-        retrieval_result=RetrievalResult(),
-    )
-
-    result, summaries_added, turns_added = fill_pass(
-        body=body, fmt=fmt, outbound_tokens=70000, target_tokens=90000,
-        assembled=assembled, pre_filter_body=copy.deepcopy(body),
-        store=mock_store, conversation_id="test",
-        summary_ratio=1.0,
-    )
-    assert summaries_added == 0
-    mock_store.get_all_tag_summaries.assert_called_once_with(conversation_id="test")
-    rendered = json.dumps(result)
-    assert "Italian cooking" not in rendered
-    assert "Bread baking" not in rendered
-    assert SUMMARY_ATTRIBUTION_QUARANTINE not in rendered
-
-
-def test_fill_pass_skips_unscoped_overflow_segment_summary():
-    """A direct StoredSummary without attribution must fail closed."""
-    from virtual_context.proxy.message_filter import fill_pass
-
-    body = _make_anthropic_body(["hello"])
-    fmt = detect_format(body)
-    summary = StoredSummary(
-        ref="seg-health",
-        primary_tag="health",
-        tags=["health"],
-        summary="BigTex stopped tesamorelin.",
-        summary_tokens=20,
-        metadata=SegmentMetadata(),
-        start_timestamp=datetime.now(timezone.utc),
-    )
-    assembled = AssembledContext(
-        presented_segment_refs=set(),
-        presented_tags=set(),
-        tag_sections={},
-        retrieval_result=RetrievalResult(overflow_summaries=[summary]),
-    )
-
-    result, summaries_added, _ = fill_pass(
-        body=body,
-        fmt=fmt,
-        outbound_tokens=1_000,
-        target_tokens=10_000,
-        assembled=assembled,
-        pre_filter_body=copy.deepcopy(body),
-        store=None,
-        conversation_id="test",
-        summary_ratio=1.0,
-    )
-
-    rendered = json.dumps(result)
-    assert summaries_added == 0
-    assert "BigTex stopped tesamorelin." not in rendered
-    assert SUMMARY_ATTRIBUTION_QUARANTINE not in rendered
 
 
 def test_presented_tags_from_segments_and_full_sections():
@@ -273,10 +198,9 @@ def test_fill_pass_accounting_summary_and_turns():
         summary_ratio=0.5,
     )
 
-    assert summaries_added == 0
+    assert summaries_added >= 1
     result_json = json.dumps(result_body)
-    assert "Historical events discussed" not in result_json
-    assert SUMMARY_ATTRIBUTION_QUARANTINE not in result_json
+    assert "Historical events discussed" in result_json
 
 
 def test_fill_pass_sanitizes_restored_turns():

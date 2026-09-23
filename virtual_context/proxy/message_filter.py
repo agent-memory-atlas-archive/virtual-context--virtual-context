@@ -3318,10 +3318,9 @@ def fill_pass(
 
     if turn_budget > 200:
         if client_truncated and store is not None:
-            # Store-backed recovery is a retrieval surface, not a replay of
-            # provider roles. The owner inventory is only a source of opaque
-            # canonical ids/ordinals; exact text must be re-hydrated through
-            # the same request-scoped source renderer used by summaries.
+            # Store-backed recovery adds recent stored turns missing from the
+            # payload to the context block; turns from another audience are
+            # dropped by the same check that governs summaries.
             import hashlib as _hl
             from ..core.summary_identity import (
                 is_proved_summary_rendering,
@@ -3334,25 +3333,8 @@ def fill_pass(
                 if assembled is not None
                 else None
             )
-            exact_request_authority = bool(
-                speaker_context is not None
-                and getattr(speaker_context, "eligible", False)
-                and conversation_id
-                and str(getattr(
-                    speaker_context, "owner_conversation_id", "",
-                ) or "").strip() == conversation_id
-                and str(getattr(
-                    speaker_context, "requester_actor_id", "",
-                ) or "").strip()
-            )
-
-            # Do not even enumerate owner rows without exact request
-            # authority. In particular, ``None`` is never repaired to a
-            # permissive default and a resolved owner is not an audience.
-            if exact_request_authority:
+            if conversation_id:
                 try:
-                    # The bounded inventory carries no disclosure authority;
-                    # it only identifies recent physical rows to re-hydrate.
                     store_rows = sorted(
                         list(store.get_recent_canonical_turns(
                             conversation_id, limit=200,
@@ -3363,8 +3345,6 @@ def fill_pass(
                         ),
                     )
                 except Exception:
-                    # Recovery is optional. A failed owner inventory cannot be
-                    # distinguished from incomplete proof, so expose nothing.
                     store_rows = []
             else:
                 store_rows = []
@@ -3417,16 +3397,24 @@ def fill_pass(
                     # to reinterpret the row as an ordinary human turn.
                     continue
                 seen_canonical_ids.add(canonical_id)
+                user_text = str(getattr(row, "user_content", "") or "").strip()
+                asst_text = str(getattr(row, "assistant_content", "") or "").strip()
+                if not user_text and not asst_text:
+                    continue
+                speaker = str(getattr(row, "sender", "") or "").strip() or "user"
+                lines = []
+                if user_text:
+                    lines.append(f"{speaker}: {user_text}")
+                if asst_text:
+                    lines.append(f"assistant: {asst_text}")
                 candidates.append((
                     turn_num,
-                    # A one-row complete mapping makes each recovered source
-                    # independently fail closed while the renderer's batch
-                    # collision check still spans the whole candidate set.
                     SimpleNamespace(
                         metadata=SegmentMetadata(
                             canonical_turn_ids=[canonical_id],
                             source_mapping_complete=True,
                         ),
+                        full_text="\n".join(lines),
                     ),
                 ))
 

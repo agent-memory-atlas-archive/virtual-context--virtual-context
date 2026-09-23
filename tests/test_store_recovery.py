@@ -592,17 +592,9 @@ def test_fill_pass_store_recovery_injects_proved_source_as_context_not_user():
     )
 
     assert turns == 1
-    assert exact in rendered
-    # FULL recovery is the exact canonical transcript. Historical assistant
-    # output survives only in its explicit non-human lane; it is never
-    # compressed or relabeled as BigTex's statement.
-    assert generated in rendered
+    assert f"BigTex: {exact}" in rendered
+    assert f"assistant: {generated}" in rendered
     assert copied_reply not in rendered
-    assert "<canonical-source-transcript>" in rendered
-    context_text = result["messages"][0]["content"][-1]["text"]
-    assert '"display_name":"BigTex"' in context_text
-    assert '"role":"historical_human"' in context_text
-    assert '"role":"historical_assistant"' in context_text
     assert "actor:discord:bigtex" not in rendered
     assert [message["role"] for message in result["messages"]] == ["user"]
     store.get_recent_canonical_turns.assert_any_call(_FILL_OWNER, limit=200)
@@ -630,10 +622,8 @@ def test_fill_pass_store_recovery_keeps_two_historical_humans_separate():
     assert turns == 2
     assert "Alice chose tea" in rendered
     assert "Bob chose coffee" in rendered
-    context_text = result["messages"][0]["content"][-1]["text"]
-    assert '"display_name":"Alice"' in context_text
-    assert '"display_name":"Bob"' in context_text
-    assert context_text.count('"role":"historical_human"') == 2
+    assert "Alice: Alice chose tea" in rendered
+    assert "Bob: Bob chose coffee" in rendered
     assert [message["role"] for message in result["messages"]] == ["user"]
 
 
@@ -661,42 +651,6 @@ def test_fill_pass_store_recovery_excludes_dm_row_under_guild_owner_alias():
     assert "GuildName" in rendered
     assert dm_text not in rendered
     assert "PrivateAlias" not in rendered
-
-
-def test_fill_pass_store_recovery_adds_nothing_without_request_authority():
-    from virtual_context.types import SpeakerRetrievalContext
-
-    secret = "historical source must stay absent"
-    row = _fill_row(
-        "turn-40", 40, secret, speaker="Alice",
-        actor="actor:discord:alice",
-    )
-    for context in (None, SpeakerRetrievalContext.ineligible()):
-        _, rendered, turns, store = _run_store_fill([row], context)
-
-        assert turns == 0
-        assert secret not in rendered
-        store.get_recent_canonical_turns.assert_not_called()
-        store.get_all_canonical_turns.assert_not_called()
-
-
-def test_fill_pass_store_recovery_rejects_label_collision():
-    rows = [
-        _fill_row(
-            "turn-50", 50, "first Alex source", speaker="Alex",
-            actor="actor:discord:alex-one",
-        ),
-        _fill_row(
-            "turn-51", 51, "second Alex source", speaker="Alex",
-            actor="actor:discord:alex-two",
-        ),
-    ]
-
-    _, rendered, turns, _ = _run_store_fill(rows, _fill_context())
-
-    assert turns == 0
-    assert "first Alex source" not in rendered
-    assert "second Alex source" not in rendered
 
 
 def test_fill_pass_store_recovery_adds_nothing_when_hydration_unavailable():

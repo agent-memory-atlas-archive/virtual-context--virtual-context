@@ -18,12 +18,7 @@ from typing import TYPE_CHECKING
 
 from .math_utils import cosine_similarity
 from .quote_search import _parse_session_date as _parse_session_date_str
-from .summary_identity import (
-    SUMMARY_ATTRIBUTION_QUARANTINE,
-    contains_ambiguous_human_referent,
-    render_summaries_for_model,
-    resolve_summary_speaker_attributions,
-)
+from .summary_identity import summaries_admitted_for_audience
 
 if TYPE_CHECKING:
     from .semantic_search import SemanticSearchManager
@@ -225,7 +220,7 @@ class TemporalResolver:
             target_date=state_target_date,
             intent_context=intent_context,
         )
-        filtered, segment_actors = self._scope_segment_results_for_request(
+        filtered, _ = self._scope_segment_results_for_request(
             filtered,
             speaker_context=speaker_context,
         )
@@ -245,7 +240,7 @@ class TemporalResolver:
                 target_date=state_target_date,
                 intent_context=intent_context,
             )
-            filtered, segment_actors = self._scope_segment_results_for_request(
+            filtered, _ = self._scope_segment_results_for_request(
                 filtered,
                 speaker_context=speaker_context,
             )
@@ -263,7 +258,7 @@ class TemporalResolver:
             segment_results=filtered,
             target_date=state_target_date,
         )
-        fact_results, fact_actors = self._scope_fact_results_for_request(
+        fact_results, _ = self._scope_fact_results_for_request(
             fact_results,
             speaker_context=speaker_context,
         )
@@ -283,7 +278,7 @@ class TemporalResolver:
                 segment_results=filtered,
                 target_date=state_target_date,
             )
-            fact_results, fact_actors = self._scope_fact_results_for_request(
+            fact_results, _ = self._scope_fact_results_for_request(
                 fact_results,
                 speaker_context=speaker_context,
             )
@@ -296,7 +291,7 @@ class TemporalResolver:
                 start=start,
                 end=end,
             )
-            filtered, segment_actors = self._scope_segment_results_for_request(
+            filtered, _ = self._scope_segment_results_for_request(
                 filtered,
                 speaker_context=speaker_context,
             )
@@ -326,7 +321,7 @@ class TemporalResolver:
                     if len(fallback_results) >= max_results:
                         break
                 filtered = fallback_results
-                filtered, segment_actors = self._scope_segment_results_for_request(
+                filtered, _ = self._scope_segment_results_for_request(
                     filtered,
                     speaker_context=speaker_context,
                 )
@@ -348,15 +343,7 @@ class TemporalResolver:
             "facts_in_window": fact_results,
             "message": message,
         }
-        canonical_source_mode = bool(
-            speaker_context is not None
-            and getattr(speaker_context, "eligible", False)
-        )
-        if (
-            not canonical_source_mode
-            and resolved_mode
-            in (_REMEMBER_WHEN_SUMMARY_MODES | _REMEMBER_WHEN_CHANGE_MODES)
-        ):
+        if resolved_mode in (_REMEMBER_WHEN_SUMMARY_MODES | _REMEMBER_WHEN_CHANGE_MODES):
             ordered_milestones = self._build_ordered_milestones(
                 query=query,
                 results=filtered,
@@ -370,10 +357,7 @@ class TemporalResolver:
                 )
                 if phase_milestones:
                     result["phase_milestones"] = phase_milestones
-        if (
-            not canonical_source_mode
-            and resolved_mode in _REMEMBER_WHEN_DATE_BUCKET_MODES
-        ):
+        if resolved_mode in _REMEMBER_WHEN_DATE_BUCKET_MODES:
             date_buckets = self._build_change_date_buckets(
                 results=filtered,
                 facts=fact_results,
@@ -381,12 +365,7 @@ class TemporalResolver:
             )
             if date_buckets:
                 result["date_buckets"] = date_buckets
-        historical_actors = segment_actors | fact_actors
-        if (
-            not canonical_source_mode
-            and state_target_date is not None
-            and len(historical_actors) <= 1
-        ):
+        if state_target_date is not None:
             state_view = self._resolve_state_view(
                 results=filtered,
                 facts=fact_results,
@@ -407,12 +386,6 @@ class TemporalResolver:
             )
             if state_anchor:
                 result["state_anchor"] = state_anchor
-        elif state_target_date is not None:
-            # A chronology can be shown with each source explicitly scoped,
-            # but choosing one cross-speaker "current state" would silently
-            # let the newest participant suppress everyone else.
-            result["target_date"] = state_target_date.isoformat()
-            result["state_resolution"] = "withheld_multiple_historical_speakers"
         return result
 
     def _scope_segment_results_for_request(
@@ -421,29 +394,7 @@ class TemporalResolver:
         *,
         speaker_context: "SpeakerRetrievalContext | None",
     ) -> tuple[list[dict], set[str]]:
-        """Render temporal hits as source-bound segment claims.
-
-        Free-form segment summaries remain useful for ranking above, but are
-        never copied into this model-facing result. Version-one claims are
-        validated against exact audience/channel-scoped canonical rows; a
-        legacy segment receives the renderer's exact canonical fallback.
-        Claims from different historical humans remain separate rather than
-        forcing a segment-wide speaker.
-        """
-        if speaker_context is None:
-            # Direct legacy/admin callers have no authority with which to
-            # hydrate structured sources. Preserve that compatibility path,
-            # but never let anonymous person prose feed milestone/state
-            # derivation.
-            return [
-                item for item in results
-                if not contains_ambiguous_human_referent(
-                    item.get("excerpt", ""),
-                )
-            ], set()
-        if not getattr(speaker_context, "eligible", False):
-            return [], set()
-
+        """Drop segment hits whose source turns belong to another audience."""
         conversation_id = self._config.conversation_id or ""
         refs = list(dict.fromkeys(
             str(item.get("segment_ref", "") or "").strip()
@@ -467,43 +418,23 @@ class TemporalResolver:
             if segment is not None:
                 loaded_refs.append(ref)
                 segments.append(segment)
-
-        rendered = render_summaries_for_model(
-            segments,
-            store=self._store,
-            conversation_id=conversation_id,
-            speaker_context=speaker_context,
-            depth="segments",
-            judgment_runtime=self._judgment_runtime,
-        )
-        rendered_by_ref = dict(zip(loaded_refs, rendered, strict=True))
-        resolved = resolve_summary_speaker_attributions(
-            segments,
-            store=self._store,
-            conversation_id=conversation_id,
-            speaker_context=speaker_context,
-        )
-        attribution_by_ref = dict(zip(loaded_refs, resolved, strict=True))
-        scoped: list[dict] = []
-        actors: set[str] = set()
-        for item in results:
-            ref = str(item.get("segment_ref", "") or "").strip()
-            excerpt = rendered_by_ref.get(
-                ref, SUMMARY_ATTRIBUTION_QUARANTINE,
+        withheld = {
+            ref for ref, ok in zip(
+                loaded_refs,
+                summaries_admitted_for_audience(
+                    segments,
+                    store=self._store,
+                    conversation_id=conversation_id,
+                    speaker_context=speaker_context,
+                ),
+                strict=True,
             )
-            if excerpt == SUMMARY_ATTRIBUTION_QUARANTINE:
-                continue
-            projected = dict(item)
-            projected["excerpt"] = excerpt
-            # The exact transcript may contain both human and assistant
-            # lanes. A segment-wide human label would relabel the assistant's
-            # words, so only lane-local labels inside the envelope survive.
-            projected.pop("historical_speaker", None)
-            scoped.append(projected)
-            attribution = attribution_by_ref.get(ref)
-            if attribution is not None and attribution.complete:
-                actors.update(attribution.actor_ids)
-        return scoped, actors
+            if not ok
+        }
+        return [
+            item for item in results
+            if str(item.get("segment_ref", "") or "").strip() not in withheld
+        ], set()
 
     def _scope_fact_results_for_request(
         self,
@@ -511,16 +442,8 @@ class TemporalResolver:
         *,
         speaker_context: "SpeakerRetrievalContext | None",
     ) -> tuple[list[dict], set[str]]:
-        """Withhold derived fact prose at model-facing summary boundaries.
-
-        Fact rows remain useful inside retrieval, but author/source metadata
-        cannot prove that generated ``what`` prose preserved modality, time,
-        or coreference. Exact canonical human turns are the only evidence
-        admitted when a request context marks this as a model-facing path.
-        """
-        if speaker_context is None:
-            return results, set()
-        return [], set()
+        """Facts are shown as stored."""
+        return results, set()
 
     def _default_remember_when_max_results(self, resolved_mode: str) -> int:
         base = self._config.search.remember_when_max_results

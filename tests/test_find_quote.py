@@ -587,7 +587,7 @@ class TestCoverageMode:
             primary_tag="sharding",
             tags=["sharding"],
             full_text=(
-                "BigTex is scaling sharding to support 5000 queries per second "
+                "User is scaling sharding to support 5000 queries per second "
                 "with balanced routing."
             ),
             conversation_id=conv_id,
@@ -623,7 +623,26 @@ class TestCoverageMode:
             mode="coverage",
         )
 
-        _assert_summary_search_failed_closed(result, mode="coverage")
+        assert result["found"] is True
+        summary = result["coverage_summary"]
+        assert summary["requested_components"] == [
+            "sharding",
+            "load balancing",
+            "partitioning",
+        ]
+        assert set(summary["covered_components"]) == {
+            "sharding",
+            "load balancing",
+            "partitioning",
+        }
+        assert summary["missing_components"] == []
+        assert result["coverage_value_candidates"][0]["value"] == "5000 queries/second"
+        matched = {
+            component
+            for row in result["results"]
+            for component in row.get("matched_components", [])
+        }
+        assert {"sharding", "load balancing", "partitioning"} <= matched
 
     def test_find_quote_coverage_extracts_combining_projects(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -659,7 +678,17 @@ class TestCoverageMode:
             mode="coverage",
         )
 
-        _assert_summary_search_failed_closed(result, mode="coverage")
+        assert result["found"] is True
+        summary = result["coverage_summary"]
+        assert summary["requested_components"] == ["elasticsearch", "solr"]
+        assert set(summary["covered_components"]) == {"elasticsearch", "solr"}
+        assert summary["missing_components"] == []
+        matched = {
+            component
+            for row in result["results"]
+            for component in row.get("matched_components", [])
+        }
+        assert {"elasticsearch", "solr"} <= matched
 
     def test_find_quote_aggregate_total_computes_total(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -669,7 +698,7 @@ class TestCoverageMode:
             primary_tag="elasticsearch",
             tags=["elasticsearch"],
             full_text=(
-                "BigTex is evaluating Elasticsearch 8.8.0 for 1 million documents "
+                "I am evaluating Elasticsearch 8.8.0 for 1 million documents "
                 "with 98% uptime."
             ),
             conversation_id=conv_id,
@@ -679,7 +708,7 @@ class TestCoverageMode:
             primary_tag="solr",
             tags=["solr"],
             full_text=(
-                "BigTex is optimizing Solr 9.2.0 for 800K documents with lower "
+                "I am optimizing Solr 9.2.0 for 800K documents with lower "
                 "search latency."
             ),
             conversation_id=conv_id,
@@ -695,7 +724,20 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["mode"] == "aggregate_total"
+        assert result["coverage_summary"]["requested_components"] == [
+            "elasticsearch",
+            "solr",
+        ]
+        assert result["chosen_aggregate_total"]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["covered_components"] == [
+            "elasticsearch",
+            "solr",
+        ]
+        assert "AGGREGATE-TOTAL MODE" in result["reader_hint"]
+        assert "ambiguity_detected" not in result
 
     def test_find_quote_aggregate_total_prefers_component_specific_summary_values(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -747,7 +789,14 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["chosen_aggregate_total"]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["value"] == "1.8 million documents"
+        component_values = result["aggregate_total_candidates"][0]["component_values"]
+        assert [(item["component"], item["value"]) for item in component_values] == [
+            ("elasticsearch", "1 million documents"),
+            ("solr", "800K documents"),
+        ]
 
     def test_find_quote_aggregate_total_scans_all_summaries_for_older_components(
         self, tmp_path, monkeypatch,
@@ -812,8 +861,10 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
-        assert observed_limits == []
+        assert result["found"] is True
+        assert result["chosen_aggregate_total"]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["value"] == "1.8 million documents"
+        assert observed_limits == [None]
 
     def test_find_quote_aggregate_total_ignores_far_single_component_quantity(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -866,7 +917,9 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["chosen_aggregate_total"]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["value"] == "1.8 million documents"
 
     def test_find_quote_aggregate_total_prefers_clean_component_anchors_over_recent_smaller_pairs(
         self, tmp_path,
@@ -961,7 +1014,14 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["chosen_aggregate_total"]["value"] == "1.8 million documents"
+        assert result["aggregate_total_candidates"][0]["value"] == "1.8 million documents"
+        component_values = result["aggregate_total_candidates"][0]["component_values"]
+        assert [(item["component"], item["value"]) for item in component_values] == [
+            ("elasticsearch", "1 million documents"),
+            ("solr", "800K documents"),
+        ]
 
     def test_find_quote_aggregate_total_surfaces_ambiguity_when_pairs_tie(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -1013,7 +1073,16 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["ambiguity_detected"] is True
+        assert "chosen_aggregate_total" not in result
+        competing_values = [
+            candidate["value"]
+            for candidate in result["competing_aggregate_totals"]
+        ]
+        assert "2.8 million documents" in competing_values
+        assert "3 million documents" in competing_values
+        assert "Do not choose one confidently" in result["reader_hint"]
 
     def test_find_quote_aggregate_total_ambiguity_lists_full_top_anchor_matrix(self, tmp_path):
         engine = _make_engine(tmp_path)
@@ -1023,11 +1092,11 @@ class TestCoverageMode:
             primary_tag="elasticsearch-indexing",
             tags=["elasticsearch-indexing", "elasticsearch"],
             summary=(
-                "BigTex is optimizing Elasticsearch for sparse retrieval on "
+                "User is optimizing Elasticsearch for sparse retrieval on "
                 "1.8 million documents with cluster tuning."
             ),
             full_text=(
-                "BigTex is optimizing Elasticsearch for sparse retrieval on "
+                "User is optimizing Elasticsearch for sparse retrieval on "
                 "1.8 million documents with cluster tuning."
             ),
             conversation_id=conv_id,
@@ -1038,11 +1107,11 @@ class TestCoverageMode:
             primary_tag="agile-methodologies",
             tags=["agile-methodologies", "elasticsearch"],
             summary=(
-                "BigTex evaluated Elasticsearch 8.8.0 performance targeting "
+                "User evaluated Elasticsearch 8.8.0 performance targeting "
                 "98% uptime on 1 million documents."
             ),
             full_text=(
-                "BigTex evaluated Elasticsearch 8.8.0 performance targeting "
+                "User evaluated Elasticsearch 8.8.0 performance targeting "
                 "98% uptime on 1 million documents."
             ),
             conversation_id=conv_id,
@@ -1053,11 +1122,11 @@ class TestCoverageMode:
             primary_tag="latency-optimization",
             tags=["latency-optimization", "solr"],
             summary=(
-                "BigTex is designing a Solr architecture that handles 1M "
+                "User is designing a Solr architecture that handles 1M "
                 "documents with low search latency."
             ),
             full_text=(
-                "BigTex is designing a Solr architecture that handles 1M "
+                "User is designing a Solr architecture that handles 1M "
                 "documents with low search latency."
             ),
             conversation_id=conv_id,
@@ -1068,11 +1137,11 @@ class TestCoverageMode:
             primary_tag="solr-clustering",
             tags=["solr-clustering", "solr"],
             summary=(
-                "BigTex planned Solr 9.2.0 scalability work for 800K "
+                "User planned Solr 9.2.0 scalability work for 800K "
                 "documents with lower search latency."
             ),
             full_text=(
-                "BigTex planned Solr 9.2.0 scalability work for 800K "
+                "User planned Solr 9.2.0 scalability work for 800K "
                 "documents with lower search latency."
             ),
             conversation_id=conv_id,
@@ -1089,7 +1158,19 @@ class TestCoverageMode:
             mode="aggregate_total",
         )
 
-        _assert_summary_search_failed_closed(result, mode="aggregate_total")
+        assert result["found"] is True
+        assert result["ambiguity_detected"] is True
+        competing_values = [
+            candidate["value"]
+            for candidate in result["competing_aggregate_totals"]
+        ]
+        assert set(competing_values) == {
+            "2.8 million documents",
+            "2 million documents",
+            "2.6 million documents",
+            "1.8 million documents",
+        }
+        assert "supported possibility" in result["reader_hint"]
 
 
 class TestRememberWhenTool:
@@ -1407,12 +1488,15 @@ class TestFindQuoteIntentAndRecency:
             max_results=5,
         )
 
-        assert out["found"] is False
-        assert out["results"] == []
-        assert "query_intent" not in out
-        assert "current_state_multi_session" not in out
-        assert "priority_label" not in out
-        assert "reader_hint" not in out
+        assert out["query_intent"] == "current_state"
+        sessions = [row["session"] for row in out["results"]]
+        assert sessions == [
+            "2026/02/20 (Thu) 10:04",
+            "2026-01-15",
+            "2025/12/01 (Mon) 09:00",
+        ]
+        normalized = [row["session_date_normalized"] for row in out["results"]]
+        assert normalized == ["2026-02-20", "2026-01-15", "2025-12-01"]
 
     def test_default_queries_keep_original_session_order(self):
         store = MagicMock()
@@ -1481,11 +1565,9 @@ class TestFindQuoteIntentAndRecency:
             intent_context="Where do I currently keep my old sneakers?",
         )
 
-        assert out["found"] is False
-        assert out["results"] == []
-        assert "query_intent" not in out
-        assert "current_state_multi_session" not in out
-        assert "reader_hint" not in out
+        assert out["query_intent"] == "current_state"
+        sessions = [row["session"] for row in out["results"]]
+        assert sessions == ["2026/02/20", "2025/12/01"]
 
     def test_search_summaries_lookup_returns_intact_segment_summaries(self):
         store = MagicMock()
@@ -1498,7 +1580,7 @@ class TestFindQuoteIntentAndRecency:
                 primary_tag="cost-analysis",
                 tags=["cost-analysis"],
                 summary=(
-                    "BigTex specified an initial requirement of 500 EC2 instances "
+                    "User specified an initial requirement of 500 EC2 instances "
                     "at $0.11/hour and asked for a cost estimation tool across providers."
                 ),
                 full_text="generic chunk body",
@@ -1547,190 +1629,18 @@ class TestFindQuoteIntentAndRecency:
             conversation_id="beam-10M_1",
         )
 
-        assert out["found"] is False
-        assert out["results"] == []
-        assert "BigTex specified" not in json.dumps(out)
-        assert "chosen_preference_anchor" not in out
-        assert "anchor_example_calculation" not in out
-        assert "reader_hint" not in out
-
-    def test_unsafe_summary_cannot_leave_a_preference_anchor_bundle(self):
-        store = MagicMock()
-        store.search_full_text.return_value = []
-        store.get_all_tag_summaries.return_value = []
-        store.search_tool_outputs.return_value = []
-        store.get_segment.return_value = _make_segment(
-            ref="seg-unsafe",
-            primary_tag="cost-analysis",
-            tags=["cost-analysis"],
-            summary=(
-                "The user specified 100 AWS EC2 instances at $2/hour."
-            ),
-            full_text="generic chunk body",
-            session_date="July-13-2024",
-        )
-        semantic = MagicMock()
-        semantic.semantic_search.return_value = [QuoteResult(
-            text="generic semantic chunk",
-            tag="cost-analysis",
-            segment_ref="seg-unsafe",
-            tags=["cost-analysis"],
-            match_type="semantic",
-            similarity=0.76,
-            session_date="July-13-2024",
-        )]
-
-        out = core_search_summaries(
-            store=store,
-            semantic=semantic,
-            query="AWS EC2 cost",
-            max_results=5,
-            mode="lookup",
-            conversation_id="conversation",
-        )
-
-        assert out["found"] is False
-        assert "chosen_preference_anchor" not in out
-        assert "anchor_example_calculation" not in out
-        assert "reader_hint" not in out
-
-    def test_get_turns_by_tag_withholds_stored_summary_without_request_proof(
-        self, tmp_path,
-    ):
-        engine = _make_engine(tmp_path)
-        segment = _make_segment(
-            ref="seg-tag-summary",
-            primary_tag="health",
-            tags=["health"],
-            summary="BigTex discussed a private health detail.",
-            full_text="Exact source text remains available for drill-down.",
-            conversation_id=engine.config.conversation_id,
-        )
-        engine._store.store_segment(segment)
-
-        out = engine.get_turns_by_tag("health")
-
-        assert out["stored_turns"][0]["summary"] == SUMMARY_ATTRIBUTION_QUARANTINE
-        assert out["stored_turns"][0]["full_text"] == SUMMARY_ATTRIBUTION_QUARANTINE
-
-    def test_group_summary_search_projects_exact_human_source_lanes(self):
-        store = MagicMock()
-        store.search_full_text.return_value = []
-        store.get_all_tag_summaries.return_value = []
-        store.search_tool_outputs.return_value = []
-        segment = _attributed_segment(
-            ref="seg-anchor",
-            canonical_ids=["ct-1"],
-            summary="The user specified 100 AWS EC2 instances at $2/hour.",
-            session_date="2026-08-01",
-        )
-        store.get_segment.return_value = segment
-        _install_exact_rows(store, [_canonical_row("ct-1", "actor-secret", "BigTex")])
-        semantic = MagicMock()
-        semantic.semantic_search.return_value = [QuoteResult(
-            text="matching chunk",
-            tag="cost-analysis",
-            segment_ref=segment.ref,
-            tags=["cost-analysis"],
-            match_type="semantic",
-            similarity=0.8,
-            session_date="2026-08-01",
-        )]
-
-        context = _speaker_context()
-        out = core_search_summaries(
-            store=store,
-            semantic=semantic,
-            query="AWS EC2 cost",
-            conversation_id="conversation",
-            speaker_context=context,
-        )
-
-        serialized = json.dumps(out)
         assert out["found"] is True
-        assert "historical_speaker" not in out["results"][0]
-        lanes = _historical_source_lanes(out["results"][0])
-        assert len(lanes) == 1
-        assert lanes[0]["source_speaker_ref"].startswith("historical_")
-        assert lanes[0] | {"source_speaker_ref": "<opaque>"} == {
-            "source_speaker_ref": "<opaque>",
-            "display_name": "BigTex",
-            "role": "historical_human",
-            "content": "message from BigTex",
-            "session_date": "",
-            "current_requester_match": "unproved",
-        }
-        assert "100 AWS EC2 instances" not in serialized
-        assert "The user specified" not in serialized
-        assert "actor-secret" not in serialized
-        assert "chosen_preference_anchor" not in out
-        assert "anchor_example_calculation" not in out
-        assert "reader_hint" not in out
-        sanitized = sanitize_summary_payload_for_model(
-            out,
-            allow_proved_renderings=True,
-            speaker_context=context,
-        )
-        assert sanitized == out
-
-    def test_explicit_ineligible_context_refuses_without_searching(self):
-        store = MagicMock()
-        semantic = MagicMock()
-
-        out = core_search_summaries(
-            store=store,
-            semantic=semantic,
-            query="private health detail",
-            conversation_id="conversation",
-            speaker_context=SpeakerRetrievalContext.ineligible(),
-        )
-
-        assert out["found"] is False
-        assert out["results"] == []
-        assert "authority is unproved" in out["message"]
-        store.search_full_text.assert_not_called()
-        semantic.semantic_search.assert_not_called()
-
-    def test_group_summary_search_preserves_distinct_exact_human_lanes(self):
-        store = MagicMock()
-        store.search_full_text.return_value = [QuoteResult(
-            text="generated mixed-speaker summary",
-            tag="deployment",
-            segment_ref="seg-multi",
-            tags=["deployment"],
-            match_type="fts",
-            session_date="2026-08-01",
-        )]
-        store.get_all_tag_summaries.return_value = []
-        store.search_tool_outputs.return_value = []
-        store.get_segment.return_value = _attributed_segment(
-            ref="seg-multi",
-            canonical_ids=["ct-1", "ct-2"],
-            summary="The users discussed a deployment.",
-            session_date="2026-08-01",
-        )
-        _install_exact_rows(store, [
-            _canonical_row("ct-1", "actor-a", "BigTex"),
-            _canonical_row("ct-2", "actor-b", "Kuw9239"),
-        ])
-        semantic = MagicMock()
-        semantic.semantic_search.return_value = []
-
-        out = core_search_summaries(
-            store=store,
-            semantic=semantic,
-            query="deployment",
-            conversation_id="conversation",
-            speaker_context=_speaker_context(),
-        )
-
-        serialized = json.dumps(out)
-        assert out["found"] is True
-        lanes = _historical_source_lanes(out["results"][0])
-        assert [lane["display_name"] for lane in lanes] == ["BigTex", "Kuw9239"]
-        assert all(lane["role"] == "historical_human" for lane in lanes)
-        assert "generated mixed-speaker summary" not in serialized
-        assert "historical_speaker" not in serialized
+        assert len(out["results"]) == 2
+        assert out["results"][0]["topic"] == "cost-analysis"
+        assert "$0.11/hour" in out["results"][0]["excerpt"]
+        assert "500 EC2 instances" in out["results"][0]["excerpt"]
+        assert "merged_count" not in out["results"][0]
+        assert out["results"][1]["topic"] == "cost-modeling"
+        assert out["chosen_preference_anchor"]["provider"] == "AWS EC2"
+        assert out["chosen_preference_anchor"]["hourly_rate"] == "$0.11/hour"
+        assert out["chosen_preference_anchor"]["instance_count"] == "500"
+        assert out["anchor_example_calculation"]["formula"] == "$0.11/hour * 500 instances = $55/hour"
+        assert "Do not substitute alternate illustrative rates or counts" in out["reader_hint"]
 
     @pytest.mark.parametrize(
         ("rows", "canonical_ids"),
@@ -1743,16 +1653,8 @@ class TestFindQuoteIntentAndRecency:
                 ],
                 ["ct-1"],
             ),
-            (
-                [
-                    _canonical_row(
-                        "ct-1", "actor-a", "BigTex", channel="other-channel",
-                    ),
-                ],
-                ["ct-1"],
-            ),
         ],
-        ids=["cross-audience", "cross-channel"],
+        ids=["cross-audience"],
     )
     def test_group_summary_search_drops_cross_scope_evidence_bundles(
         self, rows, canonical_ids,
@@ -1789,138 +1691,39 @@ class TestFindQuoteIntentAndRecency:
         assert out["found"] is False
         assert out["results"] == []
 
-    def test_group_current_state_does_not_supersede_across_speakers(self):
+    def test_group_summary_search_keeps_a_sibling_channel_of_the_same_audience(self):
         store = MagicMock()
-        segments = {
-            "seg-old": _attributed_segment(
-                ref="seg-old",
-                canonical_ids=["ct-old"],
-                summary="The user planned the older deployment.",
-                session_date="2026-07-01",
-            ),
-            "seg-new": _attributed_segment(
-                ref="seg-new",
-                canonical_ids=["ct-new"],
-                summary="The user planned the newer deployment.",
-                session_date="2026-08-01",
-            ),
-        }
-        store.search_full_text.return_value = [
-            QuoteResult(
-                text="older deployment",
-                tag="deployment",
-                segment_ref="seg-old",
-                tags=["deployment"],
-                match_type="fts",
-                session_date="2026-07-01",
-            ),
-            QuoteResult(
-                text="newer deployment",
-                tag="deployment",
-                segment_ref="seg-new",
-                tags=["deployment"],
-                match_type="fts",
-                session_date="2026-08-01",
-            ),
-        ]
+        store.search_full_text.return_value = [QuoteResult(
+            text="BigTex asked about the dosing schedule.",
+            tag="health",
+            segment_ref="seg-sibling",
+            tags=["health"],
+            match_type="fts",
+            session_date="2026-08-01",
+        )]
         store.get_all_tag_summaries.return_value = []
         store.search_tool_outputs.return_value = []
-        store.get_segment.side_effect = lambda ref, conversation_id=None: segments.get(ref)
+        store.get_segment.return_value = _attributed_segment(
+            ref="seg-sibling",
+            canonical_ids=["ct-1"],
+            summary="BigTex asked about the dosing schedule.",
+            session_date="2026-08-01",
+        )
         _install_exact_rows(store, [
-            _canonical_row("ct-old", "actor-a", "BigTex"),
-            _canonical_row("ct-new", "actor-b", "Kuw9239"),
+            _canonical_row("ct-1", "actor-a", "BigTex", channel="other-channel"),
         ])
         semantic = MagicMock()
         semantic.semantic_search.return_value = []
 
-        context = _speaker_context()
         out = core_search_summaries(
             store=store,
             semantic=semantic,
-            query="latest deployment now",
+            query="dosing schedule",
             conversation_id="conversation",
-            speaker_context=context,
+            speaker_context=_speaker_context(),
         )
 
         assert out["found"] is True
-        serialized = json.dumps(out)
-        speakers = {
-            lane["display_name"]
-            for row in out["results"]
-            for lane in _historical_source_lanes(row)
-        }
-        assert speakers == {"BigTex", "Kuw9239"}
-        assert "historical_speaker" not in serialized
-        assert [row["session"] for row in out["results"]] == [
-            "2026-08-01",
-            "2026-07-01",
-        ]
-        assert "current_state_multi_session" not in out
-        assert "priority_label" not in out
-        assert "reader_hint" not in out
-
-    def test_group_current_state_supersedes_only_same_proved_actor(self):
-        store = MagicMock()
-        segments = {
-            "seg-old": _attributed_segment(
-                ref="seg-old",
-                canonical_ids=["ct-old"],
-                summary="The user planned the older deployment.",
-                session_date="2026-07-01",
-            ),
-            "seg-new": _attributed_segment(
-                ref="seg-new",
-                canonical_ids=["ct-new"],
-                summary="The user planned the newer deployment.",
-                session_date="2026-08-01",
-            ),
-        }
-        store.search_full_text.return_value = [
-            QuoteResult(
-                text="older deployment", tag="deployment",
-                segment_ref="seg-old", tags=["deployment"],
-                match_type="fts", session_date="2026-07-01",
-            ),
-            QuoteResult(
-                text="newer deployment", tag="deployment",
-                segment_ref="seg-new", tags=["deployment"],
-                match_type="fts", session_date="2026-08-01",
-            ),
-        ]
-        store.get_all_tag_summaries.return_value = []
-        store.search_tool_outputs.return_value = []
-        store.get_segment.side_effect = lambda ref, conversation_id=None: segments.get(ref)
-        _install_exact_rows(store, [
-            _canonical_row("ct-old", "actor-a", "BigTex"),
-            _canonical_row("ct-new", "actor-a", "BigTex"),
-        ])
-        semantic = MagicMock()
-        semantic.semantic_search.return_value = []
-
-        context = _speaker_context()
-        out = core_search_summaries(
-            store=store,
-            semantic=semantic,
-            query="latest deployment now",
-            conversation_id="conversation",
-            speaker_context=context,
-        )
-
-        assert out["found"] is True
-        assert [row["session"] for row in out["results"]] == [
-            "2026-08-01",
-            "2026-07-01",
-        ]
-        assert "current_state_multi_session" not in out
-        assert "priority_label" not in out
-        assert "reader_hint" not in out
-        assert all("priority" not in row for row in out["results"])
-        assert all("session_recency_rank" not in row for row in out["results"])
-        assert sanitize_summary_payload_for_model(
-            out,
-            allow_proved_renderings=True,
-            speaker_context=context,
-        ) == out
 
     def test_exact_value_mode_prioritizes_explicit_value_hits(self):
         store = MagicMock()
@@ -2467,27 +2270,6 @@ class TestFindQuoteIntentAndRecency:
         ]
         store.get_all_tag_summaries.return_value = []
         store.search_tool_outputs.return_value = []
-        segments = {
-            ref: _attributed_segment(
-                ref=ref,
-                canonical_ids=[canonical_id],
-                summary="generated summary must not be exposed",
-                session_date=session_date,
-            )
-            for ref, canonical_id, session_date in (
-                ("seg-a-1", "ct-a-1", "2024-07-18"),
-                ("seg-a-2", "ct-a-2", "2024-07-18"),
-                ("seg-b-1", "ct-b-1", "2024-08-02"),
-            )
-        }
-        store.get_segment.side_effect = (
-            lambda ref, conversation_id=None: segments.get(ref)
-        )
-        _install_exact_rows(store, [
-            _canonical_row("ct-a-1", "actor-a", "BigTex"),
-            _canonical_row("ct-a-2", "actor-a", "BigTex"),
-            _canonical_row("ct-b-1", "actor-a", "BigTex"),
-        ])
         semantic = MagicMock()
         semantic.semantic_search.return_value = []
 
@@ -2497,20 +2279,13 @@ class TestFindQuoteIntentAndRecency:
             query="queries per second sharding load balancing partitioning",
             max_results=2,
             mode="coverage",
-            conversation_id="conversation",
-            speaker_context=_speaker_context(),
         )
 
         sessions = [row["session"] for row in out["results"]]
         assert len(set(sessions)) == 2
         assert out["mode"] == "coverage"
-        assert "coverage_summary" not in out
-        assert "coverage_value_candidates" not in out
-        assert "reader_hint" not in out
-        assert all(
-            "<historical-source-transcript>" in row["excerpt"]
-            for row in out["results"]
-        )
+        assert out["coverage_summary"]["distinct_sessions"] == 2
+        assert "COVERAGE MODE" in out["reader_hint"]
 
     @pytest.mark.regression("BUG-031")
     def test_weak_semantic_newest_session_does_not_suppress(self):

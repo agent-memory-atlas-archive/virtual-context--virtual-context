@@ -42,14 +42,11 @@ HOST_ATTRIBUTION_TAGS: tuple[str, ...] = (
 # emission cannot appear without its insertion lanes being audited.
 ENGINE_EMITTED_TAGS: tuple[str, ...] = (
     "actor-card",
-    "canonical-source-transcript",
     "context-topics",
     "facts",
-    "historical-source-transcript",
     "recent-conversation",
     "reply-participant-context",
     "speaker-roster",
-    "structured-summary",
     "virtual-context",
 )
 

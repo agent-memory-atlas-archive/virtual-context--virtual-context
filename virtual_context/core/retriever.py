@@ -344,7 +344,10 @@ class ContextRetriever:
                 tags=[ts.tag],
                 summary=ts.summary,
                 summary_tokens=ts.summary_tokens,
-                metadata=SegmentMetadata(code_refs=list(getattr(ts, "code_refs", []) or [])),
+                metadata=SegmentMetadata(
+                    code_refs=list(getattr(ts, "code_refs", []) or []),
+                    canonical_turn_ids=list(getattr(ts, "source_canonical_turn_ids", None) or []),
+                ),
                 created_at=ts.updated_at,
                 start_timestamp=ts.created_at,
                 end_timestamp=ts.updated_at,

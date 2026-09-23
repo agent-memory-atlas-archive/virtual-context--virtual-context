@@ -148,9 +148,7 @@ def test_speaker_only_filters_role_local_facts():
     ])
     payload = _payload(_run(engine, {"speaker": "roo", "speaker_only": True}))
     assert payload["count"] == 1, payload
-    assert payload["facts"] == [{
-        "id": "f1", "segment_ref": "seg-f1", "tags": [],
-    }]
+    assert payload["facts"][0]["subject"] == "roo topic"
     assert payload["filter_applied"] is True
     assert payload["excluded_other_speakers"] == 1
     assert "speaker_selection_note" not in payload
@@ -241,7 +239,9 @@ def test_speaker_only_filters_linked_fact_enrichment_too():
         {"speaker": "roo", "speaker_only": True},
     ))
 
-    assert [item["id"] for item in payload["linked_facts"]] == ["f1"]
+    assert [item["subject"] for item in payload["linked_facts"]] == [
+        "roo topic",
+    ]
     assert "other linked topic" not in json.dumps(payload)
 
 
@@ -252,7 +252,7 @@ def test_speaker_hint_ranks_without_dropping_other_facts():
     ])
     payload = _payload(_run(engine, {"speaker": "roo"}))
     assert payload["count"] == 2, payload
-    assert [fact["id"] for fact in payload["facts"]] == ["f2", "f1"]
+    assert payload["facts"][0]["subject"] == "roo topic"
     assert payload["filter_applied"] is False
 
 
@@ -262,10 +262,5 @@ def test_no_speaker_selection_leaves_response_unchanged():
     ])
     payload = _payload(_run(engine, {"subject": "retatrutide"}))
     assert payload["count"] == 1
-    assert payload["facts"] == [{
-        "id": "f1", "segment_ref": "seg-f1", "tags": [],
-    }]
-    assert payload["fact_content_withheld"] is True
-    assert "retatrutide" not in json.dumps(payload)
     assert "conditioning_source" not in payload
     assert "speaker_selection_note" not in payload

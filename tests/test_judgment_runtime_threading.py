@@ -10,8 +10,6 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parents[1] / "virtual_context"
 
 SEAM_CALLS = (
-    "render_summaries_for_model",
-    "render_summary_items_for_model",
     "format_tag_section",
     "_detect_query_intent",
     "is_safety_critical_personal_evidence",

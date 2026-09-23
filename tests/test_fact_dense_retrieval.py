@@ -964,24 +964,15 @@ def test_gate_on_candidate_union_superset_of_legacy_floor_for_tagged_all_and_no_
     assert set(meta3["fact_tag_floor_ids"]) == {"buried", "dense_hit", "other"}
 
 
-def test_gate_off_fact_candidates_stay_ranking_only_at_model_boundary():
+def test_gate_off_fact_selection_order_and_budget_byte_identical():
     facts = [_dfact("a"), _dfact("b"), _dfact("c")]
     rr = RetrievalResult(facts=facts, retrieval_metadata={})
     asm = ContextAssembler(config=AssemblerConfig(), token_counter=lambda t: 5)
     out = asm.assemble("", rr, [], token_budget=100_000)
-    # Retrieval candidates remain available internally, but derived fact
-    # prose is never represented as evidence shown to the model.
-    assert out.selected_facts == []
-    assert out.facts_text == ""
-    assert rr.retrieval_metadata["facts_block"]["candidates"] == 3
-    assert rr.retrieval_metadata["facts_block"]["rendered"] == 0
-    assert rr.retrieval_metadata["facts_block"]["withheld"] == 3
-    assert rr.retrieval_metadata["facts_block"]["policy"] == (
-        "derived_fact_prose_not_model_evidence"
-    )
+    # Gate off: legacy index order, no dense metadata attached (INV-3).
+    assert [f.id for f in out.selected_facts] == ["a", "b", "c"]
     assert "fact_dense_rank_by_id" not in rr.retrieval_metadata
     assert "fact_dense_assembler" not in rr.retrieval_metadata
-
 
 def test_assembler_legacy_floor_non_evictable_when_dense_budget_saturated():
     keep = _dfact("keep", what="small")
@@ -998,10 +989,12 @@ def test_assembler_legacy_floor_non_evictable_when_dense_budget_saturated():
         token_counter=lambda t: 100 if "BIG" in t else 5,
     )
     out = asm.assemble("", rr, [], token_budget=100_000)
-    assert out.selected_facts == []
-    assert out.facts_text == ""
-    assert rr.retrieval_metadata["fact_tag_floor_ids"] == ["keep"]
-    assert rr.retrieval_metadata["facts_block"]["withheld"] == 2
+    ids = {f.id for f in out.selected_facts}
+    assert "keep" in ids            # legacy floor is non-evictable
+    assert "big" not in ids         # dense-only skipped under saturation
+    br = rr.retrieval_metadata["fact_dense_assembler"]
+    assert br["skipped_dense_budget"] == 1
+    assert br["selected_legacy_floor"] == 1
 
 
 def test_assembler_dense_rank_survives_legacy_scorer_and_output_order():
@@ -1022,13 +1015,7 @@ def test_assembler_dense_rank_survives_legacy_scorer_and_output_order():
     })
     asm = ContextAssembler(config=AssemblerConfig(), token_counter=lambda t: 5)
     out = asm.assemble("", rr, [], token_budget=100_000)
-    assert out.selected_facts == []
-    assert out.facts_text == ""
-    assert rr.retrieval_metadata["fact_dense_rank_by_id"] == {
-        "dense1": 0,
-        "dense2": 1,
-    }
-    assert rr.retrieval_metadata["facts_block"]["withheld"] == 3
+    assert [f.id for f in out.selected_facts] == ["dense1", "dense2", "floorx"]
 
 
 def test_dense_fact_in_both_sets_charged_once_and_marked_both():
@@ -1049,9 +1036,7 @@ def test_dense_fact_in_both_sets_charged_once_and_marked_both():
     rr = RetrievalResult(facts=union, retrieval_metadata=dict(meta, tags_queried=["t"]))
     asm = ContextAssembler(config=AssemblerConfig(), token_counter=lambda t: 5)
     out = asm.assemble("", rr, [], token_budget=100_000)
-    assert out.selected_facts == []
-    assert out.facts_text == ""
-    assert rr.retrieval_metadata["facts_block"]["withheld"] == 2
+    assert [f.id for f in out.selected_facts].count("shared") == 1
 
 
 def test_dense_query_embedder_works_when_inbound_tagger_type_is_llm():
@@ -1114,11 +1099,7 @@ def test_dense_on_does_not_demote_easy_tag_exact_fact_out_of_budget():
     rr = RetrievalResult(facts=union, retrieval_metadata=dict(meta, tags_queried=["t"]))
     asm = ContextAssembler(config=AssemblerConfig(), token_counter=lambda t: 5)
     out = asm.assemble("", rr, [], token_budget=100_000)
-    assert "easy" in {f.id for f in union}
-    assert meta["fact_tag_floor_ids"] == ["easy"]
-    assert out.selected_facts == []
-    assert out.facts_text == ""
-    assert rr.retrieval_metadata["facts_block"]["withheld"] == 3
+    assert "easy" in {f.id for f in out.selected_facts}
 
 
 def test_dense_vectors_present_before_engine_construct_rank_same_as_after_construct_compaction(tmp_path):

@@ -13,10 +13,6 @@ from ..core.speaker_labels import (
     strip_to_structural_speaker_fields,
 )
 from ..core.render_escape import escape_host_attribution_markup
-from ..core.summary_identity import (
-    render_summary_for_model,
-    sanitize_summary_payload_for_model,
-)
 from ..types import SpeakerRetrievalContext
 
 logger = logging.getLogger(__name__)
@@ -116,10 +112,7 @@ def recall_context(
     rendered_summary_by_object: dict[int, str] = {}
     summaries_by_tag: dict[str, list] = {}
     for summary in summaries:
-        rendered_summary_by_object[id(summary)] = render_summary_for_model(
-            summary.summary,
-            require_proved_scope=True,
-        )
+        rendered_summary_by_object[id(summary)] = summary.summary
         summaries_by_tag.setdefault(summary.primary_tag, []).append(summary)
 
     return "\n\n".join(
@@ -262,7 +255,6 @@ def remember_when(query: str, time_range: dict, max_results: int = 12, mode: str
         mode=mode,
         speaker_context=SpeakerRetrievalContext.ineligible(),
     )
-    result = sanitize_summary_payload_for_model(result)
     result = _stateless_speaker_exposure(engine, result)
     return json.dumps(result)
 
@@ -319,7 +311,6 @@ def search_summaries(query: str, mode: str = "lookup") -> str:
         mode=mode,
         speaker_context=SpeakerRetrievalContext.ineligible(),
     )
-    result = sanitize_summary_payload_for_model(result)
     result = _stateless_speaker_exposure(engine, result)
     return json.dumps(result)
 
@@ -381,7 +372,7 @@ def get_domain_summaries(tag: str) -> str:
             f"Tags: {', '.join(s.tags)}\n"
             f"Tokens: {s.summary_tokens}\n"
             f"Created: {s.created_at.isoformat()}\n\n"
-            f"{render_summary_for_model(s.summary, require_proved_scope=True)}"
+            f"{s.summary}"
         )
     return "\n\n---\n\n".join(parts)
 

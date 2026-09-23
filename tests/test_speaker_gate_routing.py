@@ -146,19 +146,6 @@ class TestGateRouter:
             engine.search_summaries("q", speaker_context=context)
         assert spy.call_args.kwargs["speaker_context"] is context
 
-    def test_summary_search_does_not_launder_syntax_only_envelope(self):
-        engine = self._engine(enabled=True)
-        with patch(
-            "virtual_context.core.search_engine._search_summaries",
-            return_value={
-                "found": True,
-                "results": [{"excerpt": _syntax_only_canonical_envelope()}],
-            },
-        ):
-            result = engine.search_summaries("q", speaker_context=_ctx())
-
-        assert result["results"][0]["excerpt"] == SUMMARY_ATTRIBUTION_QUARANTINE
-
 
 class TestContextForwarding:
     def test_engine_search_summaries_forwards_the_context(self):
@@ -186,24 +173,6 @@ class TestContextForwarding:
             speaker_context=context,
         )
         assert recorder.remember_when.call_args.kwargs["speaker_context"] is context
-
-    def test_engine_remember_when_does_not_launder_syntax_only_envelope(self):
-        from virtual_context.engine import VirtualContextEngine
-
-        recorder = MagicMock()
-        recorder.remember_when.return_value = {
-            "found": True,
-            "results": [{"excerpt": _syntax_only_canonical_envelope()}],
-        }
-
-        result = VirtualContextEngine.remember_when(
-            SimpleNamespace(_temporal=recorder),
-            "tesamorelin",
-            {"last_n_days": 30},
-            speaker_context=_ctx(),
-        )
-
-        assert result["results"][0]["excerpt"] == SUMMARY_ATTRIBUTION_QUARANTINE
 
     def test_execute_vc_tool_forwards_a_derived_context(self):
         from virtual_context.core.tool_loop import execute_vc_tool
