@@ -3267,6 +3267,9 @@ class JudgmentConfig:
     # ranking) or "embedding" (query similarity to tag-summary embeddings,
     # which skips the other signals).
     topic_pool_source: str = "fused"
+    # Segments most similar to the query that live topic_select judges in the
+    # same call as the topics (0 = topics only).
+    segment_pool_size: int = 0
     seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 

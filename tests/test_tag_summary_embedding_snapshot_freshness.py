@@ -60,3 +60,30 @@ def test_a_deleted_snapshot_is_dropped_by_other_workers():
     assert b.load_tag_summary_embedding_snapshot(CONV)
     a.delete_tag_summary_embedding_snapshot(CONV)
     assert b.load_tag_summary_embedding_snapshot(CONV) is None
+
+
+class _ChunkStore:
+    def __init__(self):
+        self.rows = [{"segment_ref": "s1", "chunk_index": 0, "embedding": [1.0, 0.0]}]
+
+    def get_segment_chunk_embedding_page(self, *, conversation_id=None, limit=200, after=None):
+        rows = [dict(r, cursor=(r["segment_ref"], r["chunk_index"])) for r in self.rows]
+        return [r for r in rows if after is None or r["cursor"] > after][:limit]
+
+
+def test_segment_chunk_matrix_is_rebuilt_when_the_snapshot_version_moves():
+    shared = fakeredis.FakeRedis(decode_responses=False)
+    store = _ChunkStore()
+    writer = SessionStateProvider(redis_client=shared, store=store)
+    reader = SessionStateProvider(redis_client=shared, store=store)
+    writer.save_tag_summary_embedding_snapshot(CONV, {"t": [1.0, 0.0]})
+    refs, matrix = reader.load_segment_chunk_matrix(CONV)
+    assert refs == ["s1"] and matrix.shape == (1, 2)
+
+    store.rows.append({"segment_ref": "s2", "chunk_index": 0, "embedding": [0.0, 3.0]})
+    assert reader.load_segment_chunk_matrix(CONV)[0] == ["s1"]
+    writer.save_tag_summary_embedding_snapshot(CONV, {"t": [1.0, 0.0]})
+
+    refs, matrix = reader.load_segment_chunk_matrix(CONV)
+    assert refs == ["s1", "s2"]
+    assert np.allclose(matrix[1], [0.0, 1.0])

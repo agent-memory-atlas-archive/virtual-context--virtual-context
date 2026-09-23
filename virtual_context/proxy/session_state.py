@@ -201,6 +201,8 @@ class SessionStateProvider:
             )
         self._tag_embedding_runtime_max_per_model = int(resolved_cap)
         self._tag_stats_runtime_cache: dict[str, list[TagStats]] = {}
+        # conversation -> (snapshot version, segment ref per chunk row, matrix)
+        self._segment_chunk_matrix_runtime_cache: dict[str, tuple[int, list[str], object]] = {}
         # conversation -> (snapshot version, normalized map, lazily built matrix)
         self._tag_summary_embedding_snapshot_runtime_cache: dict[
             str, tuple[int, dict[str, list[float]], tuple[list[str], object] | None]
@@ -1131,6 +1133,55 @@ class SessionStateProvider:
             matrix = (tags, rows[keep] / norms[keep][:, None])
             self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (version, normalized, matrix)
         return matrix
+
+    def load_segment_chunk_matrix(
+        self,
+        conversation_id: str,
+    ) -> tuple[list[str], object] | None:
+        """Segment chunk embeddings as one unit-length float32 matrix.
+
+        Row ``i`` belongs to segment ``refs[i]``. Compaction stores chunk
+        embeddings before it saves the tag-summary snapshot, so the matrix is
+        rebuilt from the store whenever that snapshot's version moves.
+        """
+        getter = getattr(self._store, "get_segment_chunk_embedding_page", None)
+        if not callable(getter):
+            return None
+        version = self._tag_summary_embedding_version(conversation_id)
+        cached = self._segment_chunk_matrix_runtime_cache.get(conversation_id)
+        if cached is not None and (version is None or cached[0] == version):
+            return cached[1], cached[2]
+        import numpy as np
+
+        refs: list[str] = []
+        rows: list[list[float]] = []
+        after = None
+        try:
+            while True:
+                page = getter(conversation_id=conversation_id, limit=200, after=after)
+                if not page:
+                    break
+                for row in page:
+                    embedding = row.get("embedding")
+                    if embedding:
+                        refs.append(str(row["segment_ref"]))
+                        rows.append(embedding)
+                cursor = page[-1].get("cursor")
+                if cursor is None or (after is not None and tuple(cursor) <= after):
+                    break
+                after = tuple(cursor)
+        except Exception:
+            logger.warning("Segment chunk embeddings unavailable for %s", conversation_id[:12], exc_info=True)
+            return None
+        if not rows:
+            return None
+        matrix = np.asarray(rows, dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1)
+        keep = norms > 0.0
+        refs = [ref for ref, ok in zip(refs, keep.tolist()) if ok]
+        matrix = matrix[keep] / norms[keep][:, None]
+        self._segment_chunk_matrix_runtime_cache[conversation_id] = (version or 0, refs, matrix)
+        return refs, matrix
 
     def save_tag_summary_embedding_snapshot(
         self,

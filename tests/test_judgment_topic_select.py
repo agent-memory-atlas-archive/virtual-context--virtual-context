@@ -44,39 +44,40 @@ def _load(tags):
 
 def test_legacy_takes_the_top_of_the_fused_ranking_without_calling_jev():
     rt, seen = _runtime("legacy", {})
-    assert select_topics("q", RANKED, _load, max_results=3, runtime=rt) == (RANKED[:3], False)
+    assert select_topics("q", RANKED, _load, max_results=3, runtime=rt) == (RANKED[:3], False, [])
     assert seen == []
 
 
 def test_jev_picks_relevant_topics_from_beyond_the_fused_top():
-    rt, seen = _runtime("jev", {"hcg-dosing": 0.94, "weekly": 0.94, "selank": 0.6, "vitamin-d": 0.1},
+    rt, seen = _runtime("jev", {"T:hcg-dosing": 0.94, "T:weekly": 0.94, "T:selank": 0.6, "T:vitamin-d": 0.1},
                         topic_pool_size=6, topic_min_probability=0.5)
-    tags, by_jev = select_topics("how long does the kit last", RANKED, _load, max_results=3, runtime=rt)
+    tags, by_jev, ordered = select_topics("how long does the kit last", RANKED, _load, max_results=3, runtime=rt)
     # Equal probability keeps the fused order; irrelevant topics are left out.
     assert (tags, by_jev) == (["hcg-dosing", "weekly", "selank"], True)
-    assert seen[0]["state"]["candidates"]["hcg-dosing"] == "hcg-dosing summary"
+    assert ordered == ["T:hcg-dosing", "T:weekly", "T:selank"]
+    assert seen[0]["state"]["candidates"]["T:hcg-dosing"] == "hcg-dosing summary"
     assert len(seen[0]["state"]["candidates"]) == 6
 
 
 def test_pool_is_bounded_by_the_configured_size():
-    rt, seen = _runtime("jev", {"selank": 0.9}, topic_pool_size=3)
+    rt, seen = _runtime("jev", {"T:selank": 0.9}, topic_pool_size=3)
     select_topics("q", RANKED, _load, max_results=2, runtime=rt)
-    assert set(seen[0]["state"]["candidates"]) == {"vitamin-d", "selank", "vast-ai"}
+    assert set(seen[0]["state"]["candidates"]) == {"T:vitamin-d", "T:selank", "T:vast-ai"}
 
 
 def test_nothing_relevant_keeps_the_legacy_choice():
-    rt, _ = _runtime("jev", {tag: 0.1 for tag in RANKED}, topic_min_probability=0.5)
-    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False)
+    rt, _ = _runtime("jev", {f"T:{tag}": 0.1 for tag in RANKED}, topic_min_probability=0.5)
+    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False, [])
 
 
 def test_a_failed_jev_call_keeps_the_legacy_choice():
     rt, _ = _runtime("jev", {}, fail=True)
-    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False)
+    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False, [])
 
 
 def test_shadow_uses_the_legacy_choice():
-    rt, seen = _runtime("shadow", {"hcg-dosing": 0.99})
-    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False)
+    rt, seen = _runtime("shadow", {"T:hcg-dosing": 0.99})
+    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False, [])
     assert len(seen) == 1
 
 
@@ -89,11 +90,12 @@ def test_chosen_topic_summaries_lead_the_retrieved_items():
     retriever = ContextRetriever.__new__(ContextRetriever)
     retriever.store = _Store()
     retriever._conversation_id = "conv"
-    rt, _ = _runtime("jev", {"hcg-dosing": 0.9}, topic_pool_size=6)
+    retriever._session_state_provider = None
+    rt, _ = _runtime("jev", {"T:hcg-dosing": 0.9}, topic_pool_size=6)
     retriever.judgment_runtime = rt
-    tags, by_jev, loaded = retriever._select_topics("q", RANKED, 3, None, "")
+    tags, by_jev, items = retriever._select_topics("q", RANKED, 3, None, "")
     assert (tags, by_jev) == (["hcg-dosing"], True)
-    item = retriever._tag_summary_item(loaded["hcg-dosing"])
+    item = items[0]
     assert item.ref == "tag-summary-hcg-dosing"
     assert "23 months" in item.summary
     assert item.metadata.canonical_turn_ids == ["ct-hcg-dosing"]
@@ -127,3 +129,46 @@ def test_embedding_pool_needs_live_topic_selection_from_embeddings(mode, source)
     """Legacy and shadow keep the fused pool; so does a live choice from the fused source."""
     retriever = _pool_retriever(mode, source, {"a": [1.0, 0.0]})
     assert retriever._embedding_pool_enabled() is False
+
+
+def test_topics_and_segments_are_judged_in_one_call_and_ordered_together():
+    rt, seen = _runtime("jev", {"T:weekly": 0.7, "S:seg-hr": 0.95, "S:seg-noise": 0.1, "T:selank": 0.2},
+                        topic_pool_size=6)
+    tags, by_jev, ordered = select_topics(
+        "what did my heart rate peak at", RANKED, _load, max_results=3, runtime=rt,
+        segment_candidates=[("seg-hr", "heart rate peaked at 175 bpm"), ("seg-noise", "unrelated")],
+    )
+    assert len(seen) == 1
+    assert seen[0]["state"]["candidates"]["S:seg-hr"] == "heart rate peaked at 175 bpm"
+    assert (tags, by_jev, ordered) == (["weekly"], True, ["S:seg-hr", "T:weekly"])
+
+
+def test_each_kind_is_capped_separately():
+    probs = {f"S:s{i}": 0.9 for i in range(5)} | {"T:weekly": 0.8}
+    rt, _ = _runtime("jev", probs, topic_pool_size=6)
+    _, _, ordered = select_topics(
+        "q", RANKED, _load, max_results=2, runtime=rt,
+        segment_candidates=[(f"s{i}", f"text {i}") for i in range(5)],
+    )
+    assert ordered == ["S:s0", "S:s1", "T:weekly"]
+
+
+def test_segment_candidates_come_from_the_chunk_matrix_best_first():
+    import numpy as np
+    from virtual_context.types import StoredSegment
+
+    class _Provider:
+        def load_segment_chunk_matrix(self, conversation_id):
+            refs = ["a", "b", "a", "c"]
+            return refs, np.asarray([[1, 0], [0.6, 0.8], [0.9, 0.44], [0, 1]], dtype=np.float32)
+
+    class _Store:
+        def get_segment(self, ref, conversation_id=None):
+            return StoredSegment(ref=ref, summary=f"segment {ref}", summary_tokens=3)
+
+    retriever = ContextRetriever.__new__(ContextRetriever)
+    retriever.store = _Store()
+    retriever._conversation_id = "conv"
+    retriever._session_state_provider = _Provider()
+    retriever.judgment_runtime, _ = _runtime("jev", {}, segment_pool_size=2)
+    assert [s.ref for s in retriever._segment_candidates([1.0, 0.0])] == ["a", "b"]

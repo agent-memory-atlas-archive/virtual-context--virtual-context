@@ -348,6 +348,13 @@ class ContextRetriever:
         from .judgment import current
         return current()
 
+    def _embedding_pool_live(self) -> bool:
+        """Topic selection is live (not legacy or shadow)."""
+        from .judgment import JudgmentMode
+
+        rt = self._judgment_runtime()
+        return rt.enabled_for("topic_select") and rt.mode_for("topic_select") is JudgmentMode.JEV
+
     def _embedding_pool_enabled(self) -> bool:
         from .judgment import JudgmentMode
 
@@ -389,6 +396,59 @@ class ContextRetriever:
         top = np.argsort(similarities)[::-1][:size]
         return {tags[i]: float(similarities[i]) for i in top}
 
+    def _segment_candidates(self, query_embedding: list[float] | None) -> list[StoredSummary]:
+        """The segments whose chunks are most similar to the query, best first."""
+        rt = self._judgment_runtime()
+        size = int(getattr(rt.config, "segment_pool_size", 0) or 0)
+        provider = self._session_state_provider
+        if (
+            size <= 0 or query_embedding is None or provider is None or not self._conversation_id
+            or not hasattr(provider, "load_segment_chunk_matrix")
+        ):
+            return []
+        import numpy as np
+
+        loaded = provider.load_segment_chunk_matrix(self._conversation_id)
+        if loaded is None:
+            return []
+        refs, matrix = loaded
+        query = np.asarray(query_embedding, dtype=np.float32)
+        norm = float(np.linalg.norm(query))
+        if norm == 0.0:
+            return []
+        similarities = matrix @ (query / norm)
+        chosen: list[str] = []
+        for index in np.argsort(similarities)[::-1]:
+            ref = refs[index]
+            if ref not in chosen:
+                chosen.append(ref)
+                if len(chosen) >= size:
+                    break
+        segments: list[StoredSummary] = []
+        for ref in chosen:
+            try:
+                segment = self.store.get_segment(ref, conversation_id=self._conversation_id)
+            except Exception:
+                segment = None
+            if segment is not None and (segment.summary or "").strip():
+                segments.append(self._segment_item(segment))
+        return segments
+
+    @staticmethod
+    def _segment_item(segment: StoredSegment) -> StoredSummary:
+        return StoredSummary(
+            ref=segment.ref,
+            primary_tag=segment.primary_tag,
+            tags=list(segment.tags),
+            summary=segment.summary,
+            summary_tokens=segment.summary_tokens,
+            full_tokens=segment.full_tokens,
+            metadata=segment.metadata,
+            created_at=segment.created_at,
+            start_timestamp=segment.start_timestamp,
+            end_timestamp=segment.end_timestamp,
+        )
+
     def _select_topics(
         self,
         lookup_text: str,
@@ -396,8 +456,10 @@ class ContextRetriever:
         max_results: int,
         provider: object | None,
         memo_key: str,
-    ) -> tuple[list[str], bool, dict[str, TagSummary]]:
-        """The topics to retrieve, and whether Jev chose them.
+        *,
+        query_embedding: list[float] | None = None,
+    ) -> tuple[list[str], bool, list[StoredSummary]]:
+        """The topics to retrieve, whether Jev chose them, and the items it chose in order.
 
         A turn's continuation calls resend the same request, so a Jev choice
         is kept in the shared retrieval memo next to the scores it was made
@@ -419,21 +481,43 @@ class ContextRetriever:
                     loaded[tag] = ts
             return {tag: loaded[tag].summary for tag in tags if tag in loaded}
 
+        def items(ordered: list[str], segments: dict[str, StoredSummary]) -> list[StoredSummary]:
+            out: list[StoredSummary] = []
+            for key in ordered:
+                kind, name = key[:2], key[2:]
+                if kind == "T:" and name in loaded:
+                    out.append(self._tag_summary_item(loaded[name]))
+                elif kind == "S:" and name in segments:
+                    out.append(segments[name])
+            return out
+
         topics_key = f"{memo_key}:topics" if memo_key else ""
         can_memo = bool(topics_key and provider is not None and self._conversation_id)
         if can_memo:
             cached = provider.load_retrieval_memo(self._conversation_id, topics_key)
-            tags = cached.get("tags") if isinstance(cached, dict) else None
-            if isinstance(tags, list) and tags and all(isinstance(t, str) for t in tags):
+            ordered = cached.get("ordered") if isinstance(cached, dict) else None
+            if isinstance(ordered, list) and ordered and all(isinstance(k, str) for k in ordered):
+                tags = [k[2:] for k in ordered if k.startswith("T:")]
                 load(tags)
-                return tags, True, loaded
-        tags, chosen_by_jev = select_topics(
+                segments: dict[str, StoredSummary] = {}
+                for key in ordered:
+                    if key.startswith("S:"):
+                        try:
+                            segment = self.store.get_segment(key[2:], conversation_id=self._conversation_id)
+                        except Exception:
+                            segment = None
+                        if segment is not None:
+                            segments[key[2:]] = self._segment_item(segment)
+                return tags, True, items(ordered, segments)
+        segment_pool = self._segment_candidates(query_embedding) if self._embedding_pool_live() else []
+        tags, chosen_by_jev, ordered = select_topics(
             lookup_text, ranked_tags, load,
             max_results=max_results, runtime=self.judgment_runtime,
+            segment_candidates=[(seg.ref, seg.summary) for seg in segment_pool],
         )
         if chosen_by_jev and can_memo:
-            provider.save_retrieval_memo(self._conversation_id, topics_key, {"tags": tags})
-        return tags, chosen_by_jev, loaded
+            provider.save_retrieval_memo(self._conversation_id, topics_key, {"ordered": ordered})
+        return tags, chosen_by_jev, items(ordered, {seg.ref: seg for seg in segment_pool}) if chosen_by_jev else []
 
     def _load_all_tag_summaries(self, token_budget: int) -> tuple[list[StoredSummary], int]:
         """Load all tag summaries within *token_budget*.
@@ -791,8 +875,9 @@ class ContextRetriever:
 
         ranked_tags = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)
         _topic_stage = time.monotonic()
-        top_tags, jev_topics, topic_summaries = self._select_topics(
+        top_tags, jev_topics, jev_items = self._select_topics(
             lookup_text, ranked_tags, strategy.max_results, _provider, _memo_key,
+            query_embedding=query_embedding,
         )
         _note("select_topics", _topic_stage)
         retrieval_metadata["top_tags"] = list(top_tags)
@@ -833,13 +918,10 @@ class ContextRetriever:
         from .judgment import rerank_summaries as _rerank_summaries
         all_summaries = _rerank_summaries(lookup_text, all_summaries, runtime=self.judgment_runtime)
         if jev_topics:
-            # The chosen topics' own summaries lead, in the order they were
-            # judged relevant; a topic can hold the answer without having
-            # segments of its own.
-            all_summaries = [
-                self._tag_summary_item(topic_summaries[tag])
-                for tag in top_tags if tag in topic_summaries
-            ] + all_summaries
+            # The judged topics' own summaries and segments lead, most relevant
+            # first; a topic can hold the answer without segments of its own,
+            # and a segment can hold it without its topic being chosen.
+            all_summaries = jev_items + all_summaries
 
         selected: list[StoredSummary] = []
         selected_refs: set[str] = set()

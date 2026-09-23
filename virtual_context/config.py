@@ -195,6 +195,7 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
             raw.get("topic_min_probability", defaults.topic_min_probability)
         ),
         topic_pool_source=_topic_pool_source(raw.get("topic_pool_source", defaults.topic_pool_source)),
+        segment_pool_size=int(raw.get("segment_pool_size", defaults.segment_pool_size)),
     )
 
 
