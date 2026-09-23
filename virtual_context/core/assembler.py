@@ -1287,22 +1287,30 @@ class ContextAssembler:
                 1 for i in selected_fact_indices
                 if retrieval_result.facts[i].id in _floor_ids
             )
+            # Dense facts that never reached assembly (fact curation removed
+            # them) are counted apart from those the budget left out.
+            _selected_set = set(selected_fact_indices)
+            dense_removed_before_assembly = sum(
+                1 for _fid in _dense_rank_by_id if _fid not in _id_to_index
+            )
             skipped_dense_budget = sum(
                 1 for _fid in _dense_rank_by_id
-                if _id_to_index.get(_fid) not in set(selected_fact_indices)
+                if _fid in _id_to_index and _id_to_index[_fid] not in _selected_set
             )
             retrieval_result.retrieval_metadata["fact_dense_assembler"] = {
                 "selected_legacy_floor": selected_floor,
                 "selected_dense_only": selected_dense_only,
                 "skipped_dense_budget": skipped_dense_budget,
+                "dense_removed_before_assembly": dense_removed_before_assembly,
                 "facts_tokens": facts_tokens,
                 "pool_remaining": pool - pool_used,
             }
             logger.info(
                 "FACT_DENSE_BREAKDOWN assembler selected_floor=%d selected_dense_only=%d "
-                "skipped_dense_budget=%d facts_tokens=%d pool_remaining=%d",
+                "skipped_dense_budget=%d dense_removed_before_assembly=%d "
+                "facts_tokens=%d pool_remaining=%d",
                 selected_floor, selected_dense_only, skipped_dense_budget,
-                facts_tokens, pool - pool_used,
+                dense_removed_before_assembly, facts_tokens, pool - pool_used,
             )
         _note("format_facts", _stage)
 

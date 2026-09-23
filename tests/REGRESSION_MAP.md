@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-084 — Dense facts removed by curation were logged as budget skips
+
+- **Symptom**: `FACT_DENSE_BREAKDOWN assembler ... skipped_dense_budget=15` on a turn whose facts block used 5,139 tokens with 43,282 of the pool unused.
+- **Root cause**: the counter counted every dense-ranked fact missing from the selection, including facts that fact curation removed before assembly ever saw them.
+- **Fix**: `skipped_dense_budget` now counts only dense facts that reached assembly and were not selected; `dense_removed_before_assembly` counts the rest.
+- **Tests**:
+  - `test_fact_dense_retrieval.py::test_dense_facts_removed_before_assembly_are_not_counted_as_budget_skips`
+
 ### BUG-083 — Fact curation failed on large fact sets and on dropped connections
 
 - **Symptom**: With about 520 retrieved facts the judgment service answered `400 {"error_type":"max_tokens_exceeded"}`; separately, some calls failed at once with `RemoteProtocolError: Server disconnected`. Either way curation made no judged choice and fell back.

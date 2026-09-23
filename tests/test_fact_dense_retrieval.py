@@ -1132,3 +1132,21 @@ def test_dense_vectors_present_before_engine_construct_rank_same_as_after_constr
     assert meta_a["fact_dense_rank_by_id"] == meta_b["fact_dense_rank_by_id"]
     assert meta_a["fact_dense_score_by_id"] == meta_b["fact_dense_score_by_id"]
     assert meta_a["fact_dense_rank_by_id"]["fa"] == 0
+
+
+@pytest.mark.regression("BUG-084")
+def test_dense_facts_removed_before_assembly_are_not_counted_as_budget_skips():
+    kept = _dfact("kept", what="small")
+    rr = RetrievalResult(facts=[kept], retrieval_metadata={
+        # "curated_away" was ranked dense but curation removed it before assembly.
+        "fact_dense_rank_by_id": {"kept": 0, "curated_away": 1},
+        "fact_dense_score_by_id": {"kept": 0.9, "curated_away": 0.8},
+        "fact_tag_floor_ids": [],
+        "fact_source_by_id": {"kept": "dense", "curated_away": "dense"},
+    })
+    asm = ContextAssembler(config=AssemblerConfig(), token_counter=lambda t: 5)
+    asm.assemble("", rr, [], token_budget=100_000)
+    br = rr.retrieval_metadata["fact_dense_assembler"]
+    assert br["selected_dense_only"] == 1
+    assert br["skipped_dense_budget"] == 0
+    assert br["dense_removed_before_assembly"] == 1
