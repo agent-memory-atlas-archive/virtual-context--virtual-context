@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-083 — Fact curation failed on large fact sets and on dropped connections
+
+- **Symptom**: With about 520 retrieved facts the judgment service answered `400 {"error_type":"max_tokens_exceeded"}`; separately, some calls failed at once with `RemoteProtocolError: Server disconnected`. Either way curation made no judged choice and fell back.
+- **Root cause**: `jev_fact_curation` sent every fact in one request regardless of size, and `JevClient._post` did not resend when a pooled keep-alive connection had been closed by the server.
+- **Fix**: Facts are grouped into batches whose estimated request tokens fit `curation_batch_tokens` (40,000) and the batches are sent concurrently; a set that fits still goes in one call. `_post` resends once on `RemoteProtocolError`.
+- **Tests**:
+  - `test_jev_fact_curation_batches.py`
+
 ### BUG-082 — Dense fact retrieval loaded every fact and vector on each request
 
 - **Symptom**: With `retrieval.fact_dense_retrieval` on, each retrieval read every live fact row and its JSON vector for the conversation (about 33K rows and 278 MB of JSON for a large conversation, 30.9 s through a remote connection) before ranking.
@@ -931,6 +939,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_jev_fact_curation_batches.py` | BUG-083 |
 | `test_fact_dense_search.py` | BUG-082 |
 | `test_fact_dense_search_postgres.py` | BUG-082 |
 | `test_segment_summary_chunk.py` | BUG-081 |

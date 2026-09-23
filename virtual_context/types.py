@@ -3260,6 +3260,9 @@ class JudgmentConfig:
     admission_max_state_bytes: int = 120_000
     tag_reuse_candidates: int = 12
     curation_min_probability: float = 0.3
+    # Estimated request tokens per fact-curation call; larger fact sets are
+    # split into batches sent together (the service rejects oversized requests).
+    curation_batch_tokens: int = 40_000
     grounding_max_state_bytes: int = 120_000
     topic_pool_size: int = 30
     topic_min_probability: float = 0.5

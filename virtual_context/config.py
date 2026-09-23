@@ -187,6 +187,7 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         curation_min_probability=float(
             raw.get("curation_min_probability", defaults.curation_min_probability)
         ),
+        curation_batch_tokens=int(raw.get("curation_batch_tokens", defaults.curation_batch_tokens)),
         grounding_max_state_bytes=int(
             raw.get("grounding_max_state_bytes", defaults.grounding_max_state_bytes)
         ),

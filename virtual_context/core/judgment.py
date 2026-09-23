@@ -26,7 +26,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, TypeVar
 
@@ -1220,38 +1220,77 @@ def judge_tag_consolidation(
 
 # --- seam S9: fact curation --------------------------------------------------
 
+# Measured request cost of one fact: about 95 tokens of question scaffolding
+# plus about 0.22 tokens per character of fact text. The estimate rounds both up.
+_FACT_QUESTION_TOKENS = 100
+
+
+def _fact_batches(facts: list[str], budget: int) -> list[list[int]]:
+    """Consecutive fact indices grouped so each group's estimated tokens fit *budget*."""
+    batches: list[list[int]] = []
+    current: list[int] = []
+    used = 0
+    for index, text in enumerate(facts):
+        cost = _FACT_QUESTION_TOKENS + len(text) // 4 + 1
+        if current and used + cost > budget:
+            batches.append(current)
+            current, used = [], 0
+        current.append(index)
+        used += cost
+    if current:
+        batches.append(current)
+    return batches
+
+
 def jev_fact_curation(
     client: JevClient, question: str, facts: list[str], *, batch: int | None = None,
 ) -> JevOutcome | None:
     """Value maps each fact index to the probability that it could help answer the question.
 
-    Every fact is judged in one call unless *batch* splits them.
+    Facts go in one call when they fit the request token budget
+    (``curation_batch_tokens``); otherwise they are split into batches that
+    are sent together. *batch* forces a fixed batch size.
     """
-    batch = batch or max(1, len(facts))
-    probs: dict[int, float] = {}
-    responses: list[JevResponse] = []
-    for start in range(0, len(facts), batch):
-        chunk = facts[start:start + batch]
-        state = {"question": question, "facts": {str(start + i): text for i, text in enumerate(chunk)}}
+    if batch:
+        batches = [list(range(s, min(s + batch, len(facts)))) for s in range(0, len(facts), batch)]
+    else:
+        batches = _fact_batches(facts, int(getattr(client.config, "curation_batch_tokens", 40_000)))
+
+    def ask(indices: list[int]) -> JevResponse | None:
+        state = {"question": question, "facts": {str(i): facts[i] for i in indices}}
         questions = {
-            f"rel__{start + i}": noul_q(
-                f"Could `facts.{start + i}` help answer `question`, even tangentially?",
+            f"rel__{i}": noul_q(
+                f"Could `facts.{i}` help answer `question`, even tangentially?",
                 true="the fact bears on the question's subject, on the people or things it names, "
                      "or on context needed to answer it",
                 false="the fact concerns an unrelated matter and could not inform the answer",
             )
-            for i in range(len(chunk))
+            for i in indices
         }
-        resp = client.ask(seam="fact_curation", state=state, questions=questions)
-        if resp is None:
-            return None
-        for i in range(len(chunk)):
-            ans = resp.answers.get(f"rel__{start + i}")
+        return client.ask(seam="fact_curation", state=state, questions=questions)
+
+    if not batches:
+        return JevOutcome(value={}, detail={"n": 0, "batches": 0}, response=None)
+    if len(batches) == 1:
+        responses = [ask(batches[0])]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+            responses = list(pool.map(ask, batches))
+    if any(resp is None for resp in responses):
+        return None
+    probs: dict[int, float] = {}
+    for indices, resp in zip(batches, responses):
+        for i in indices:
+            ans = resp.answers.get(f"rel__{i}")
             if ans is None or ans.kind != "noul":
                 return JevOutcome.fallback("bad_answer", response=resp)
-            probs[start + i] = float(ans.value)
-        responses.append(resp)
-    return JevOutcome(value=probs, detail={"n": len(facts)}, response=_merge_responses(responses))
+            probs[i] = float(ans.value)
+    merged = _merge_responses(responses)
+    # The batches ran together, so the call took as long as the slowest one.
+    merged = replace(merged, latency_ms=max(r.latency_ms for r in responses))
+    return JevOutcome(value=probs, detail={"n": len(facts), "batches": len(batches)}, response=merged)
 
 
 def judge_fact_curation(
