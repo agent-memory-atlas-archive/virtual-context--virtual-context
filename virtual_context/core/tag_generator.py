@@ -548,6 +548,9 @@ class LLMTagGenerator:
         known = set(existing_tags)
         if judged["new_topic"] >= 0.5:
             tags = self._dedupe_tags(tags + [t for t in result.tags if t not in known])
+        if not tags:
+            # Nothing kept and no new tag proposed: the tagging model's tags stand.
+            return result
         for tag in result.tags:
             if tag not in tags and self._tag_vocabulary.get(tag):
                 self._tag_vocabulary[tag] -= 1

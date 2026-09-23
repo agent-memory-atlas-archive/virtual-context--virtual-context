@@ -171,3 +171,14 @@ def test_selection_keeps_at_most_the_configured_number_of_likeliest_tags():
     tagger, _ = _tagger(rt)
     result = tagger.generate_tags("squat and vitamin d", existing_tags=EXISTING)
     assert result.tags == ["squat", "vitamin-d"]
+
+
+@pytest.mark.regression("BUG-086")
+def test_no_kept_topic_and_no_new_tag_keeps_the_tagging_model_result():
+    # The judgment model keeps nothing but reports an untagged subject, while
+    # every tag the tagging model proposed already exists: nothing is left to select.
+    rt, _ = _runtime("jev", {}, new_topic=0.9)
+    tagger, llm = _tagger(rt)
+    tagger.llm.response = json.dumps({"tags": ["vitamin-d", "squat"], "primary": "vitamin-d", "temporal": False})
+    result = tagger.generate_tags("vitamin d and squats", existing_tags=EXISTING)
+    assert result.tags == ["vitamin-d", "squat"] and result.primary == "vitamin-d"

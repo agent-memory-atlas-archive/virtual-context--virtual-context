@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-086 — tag_select raised IndexError when nothing was left to select
+
+- **Symptom**: `IndexError: list index out of range` at `result.primary = tags[0]` in `_apply_tag_select` during a history re-tag.
+- **Root cause**: when the judgment model kept no existing topic but reported an untagged subject, and every tag the tagging model proposed already existed, the selected list was empty.
+- **Fix**: an empty selection leaves the tagging model's result unchanged.
+- **Tests**:
+  - `test_tag_select_seam.py::test_no_kept_topic_and_no_new_tag_keeps_the_tagging_model_result`
+
 ### BUG-085 — Every proxy-route Discord group turn logged a false admission error
 
 - **Symptom**: `ERROR SOURCE_ATTESTATION_REQUIRED phase=prepare ... canonical admission skipped` on each proxied Discord group turn, although the turn was stored with its source message id when the reply completed.
@@ -955,6 +963,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_tag_select_seam.py` | BUG-086 |
 | `test_jev_fact_curation_batches.py` | BUG-083 |
 | `test_fact_dense_search.py` | BUG-082 |
 | `test_fact_dense_search_postgres.py` | BUG-082 |
