@@ -3277,6 +3277,9 @@ class JudgmentConfig:
     # judgment model, and the probability a topic needs to be kept.
     tag_select_candidates: int = 30
     tag_select_min_probability: float = 0.5
+    # Most tags tag_select keeps for a turn, likeliest first; beyond a handful
+    # the selection pads with close variants of the same topic.
+    tag_select_max_tags: int = 6
     seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 

@@ -525,7 +525,7 @@ class LLMTagGenerator:
             probs = out.value["probs"]
             floor = rt.config.tag_select_min_probability
             ranked = sorted((t for t in probs if probs[t] >= floor), key=lambda t: -probs[t])
-            kept = self._collapse_synonyms(ranked)[: self.config.max_tags]
+            kept = self._collapse_synonyms(ranked)[: rt.config.tag_select_max_tags]
             judged["new_topic"] = out.value["new_topic"]
             if not kept and out.value["new_topic"] < 0.5:
                 return JevOutcome.fallback("none_relevant", response=out.response)

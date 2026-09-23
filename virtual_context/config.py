@@ -194,6 +194,7 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         topic_pool_size=int(raw.get("topic_pool_size", defaults.topic_pool_size)),
         tag_select_candidates=int(raw.get("tag_select_candidates", defaults.tag_select_candidates)),
         tag_select_min_probability=float(raw.get("tag_select_min_probability", defaults.tag_select_min_probability)),
+        tag_select_max_tags=int(raw.get("tag_select_max_tags", defaults.tag_select_max_tags)),
         topic_min_probability=float(
             raw.get("topic_min_probability", defaults.topic_min_probability)
         ),

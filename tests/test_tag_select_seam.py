@@ -162,3 +162,12 @@ def test_legacy_mode_never_asks_the_judgment_model():
     tagger, llm = _tagger(rt)
     tagger.generate_tags("how long does a kit last", existing_tags=EXISTING)
     assert seen == [] and llm.n == 1
+
+
+def test_selection_keeps_at_most_the_configured_number_of_likeliest_tags():
+    probs = {"squat": 0.99, "vitamin-d": 0.9, "deployment": 0.8, "core-work": 0.7}
+    rt, _ = _runtime("jev", probs)
+    rt.config.tag_select_max_tags = 2
+    tagger, _ = _tagger(rt)
+    result = tagger.generate_tags("squat and vitamin d", existing_tags=EXISTING)
+    assert result.tags == ["squat", "vitamin-d"]
