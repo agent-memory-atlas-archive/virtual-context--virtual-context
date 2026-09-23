@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(
 class _FakeModel:
     constructions = 0
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, **kwargs):
         type(self).constructions += 1
         self.model_name = model_name
 
@@ -92,7 +92,7 @@ def test_failed_load_is_not_cached_and_retries():
     calls = {"n": 0}
 
     class _Flaky:
-        def __init__(self, model_name):
+        def __init__(self, model_name, **kwargs):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("transient download failure")
@@ -117,7 +117,7 @@ def test_concurrent_first_touch_loads_exactly_once():
     class _SlowModel(_FakeModel):
         constructions = 0
 
-        def __init__(self, model_name):
+        def __init__(self, model_name, **kwargs):
             time.sleep(0.05)
             super().__init__(model_name)
 

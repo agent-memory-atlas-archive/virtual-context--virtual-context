@@ -55,7 +55,9 @@ def _load_sentence_transformer(
         old_stderr = sys.stderr
         try:
             sys.stderr = open(os.devnull, "w")
-            model = SentenceTransformer(model_name)
+            # CPU on every platform: encoding is shared across threads, and
+            # concurrent encodes on the Apple MPS device crash the process.
+            model = SentenceTransformer(model_name, device="cpu")
         finally:
             try:
                 sys.stderr.close()

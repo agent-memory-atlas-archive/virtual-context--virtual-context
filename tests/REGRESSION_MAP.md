@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-087 — The proxy crashed on Apple silicon when threads embedded at once
+
+- **Symptom**: the proxy process exited with SIGSEGV (`EXC_BAD_ACCESS`, faulting thread "metal gpu stream" in `at::native::arange_mps_out`) after its first requests on a Mac, with no Python traceback.
+- **Root cause**: the process-wide sentence-transformers model was loaded on the default device, which is MPS on Apple silicon, and request, tagging and compaction threads encode concurrently without serialization.
+- **Fix**: the shared model is loaded with `device="cpu"` on every platform.
+- **Tests**:
+  - `test_embedding_model_device.py`
+
 ### BUG-086 — tag_select raised IndexError when nothing was left to select
 
 - **Symptom**: `IndexError: list index out of range` at `result.primary = tags[0]` in `_apply_tag_select` during a history re-tag.
@@ -963,6 +971,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_embedding_model_device.py` | BUG-087 |
 | `test_tag_select_seam.py` | BUG-086 |
 | `test_jev_fact_curation_batches.py` | BUG-083 |
 | `test_fact_dense_search.py` | BUG-082 |
