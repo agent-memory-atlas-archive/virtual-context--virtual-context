@@ -1200,9 +1200,13 @@ def judge_tag_consolidation(
 # --- seam S9: fact curation --------------------------------------------------
 
 def jev_fact_curation(
-    client: JevClient, question: str, facts: list[str], *, batch: int = MAX_QUESTIONS_PER_CALL,
+    client: JevClient, question: str, facts: list[str], *, batch: int | None = None,
 ) -> JevOutcome | None:
-    """Value maps each fact index to the probability that it could help answer the question."""
+    """Value maps each fact index to the probability that it could help answer the question.
+
+    Every fact is judged in one call unless *batch* splits them.
+    """
+    batch = batch or max(1, len(facts))
     probs: dict[int, float] = {}
     responses: list[JevResponse] = []
     for start in range(0, len(facts), batch):
@@ -1230,10 +1234,14 @@ def jev_fact_curation(
 
 
 def judge_fact_curation(
-    question: str, facts: list[str], *, legacy: Callable[[], list[int]],
+    question: str, facts: list[str], *, legacy: Callable[[], list[int] | None],
     runtime: JudgmentRuntime | None = None,
-) -> list[int]:
-    """Return the indices of ``facts`` worth keeping for ``question``."""
+) -> list[int] | None:
+    """Return the indices of ``facts`` worth keeping for ``question``.
+
+    A judged choice may be empty (nothing relevant). ``None`` comes only from
+    *legacy* and means no choice was made.
+    """
     rt = runtime if runtime is not None else current()
     if not facts:
         return legacy()
@@ -1247,7 +1255,8 @@ def judge_fact_curation(
         return JevOutcome(value=keep, detail={"n": len(facts), "kept": len(keep)}, response=out.response)
 
     return decide("fact_curation", legacy, jev, runtime=rt,
-                  agree=lambda a, b: set(a) == set(b), describe=lambda idx: ",".join(map(str, idx)) or "-")
+                  agree=lambda a, b: set(a or []) == set(b or []),
+                  describe=lambda idx: ",".join(map(str, idx or [])) or "-")
 
 
 # --- seam S10: tag split -----------------------------------------------------

@@ -46,6 +46,10 @@ def _runtime(mode, answers_fn, **cfg):
     return rt, seen
 
 
+def _noul_all(p):
+    return lambda body: {k: {"type": "noul", "noul": p} for k in body["questions"]}
+
+
 def _choice(key, choice, confidence, options):
     return {key: {"type": "choice", "choice": choice, "confidence": confidence,
                   "probabilities": {o: (confidence if o == choice else (1 - confidence) / max(1, len(options) - 1)) for o in options}}}
@@ -220,6 +224,14 @@ def test_fact_curation_jev_keeps_facts_above_inclusive_floor():
     assert got == [0, 1]
     assert seen[0]["state"]["question"] == "where do I live?"
     assert seen[0]["state"]["facts"]["2"] == "user | ran | 5k"
+
+
+def test_fact_curation_judges_every_fact_in_one_call():
+    rt, seen = _runtime("jev", _noul_all(0.9))
+    facts = [f"user | fact | {i}" for i in range(120)]
+    assert judge_fact_curation("q", facts, legacy=lambda: [], runtime=rt) == list(range(120))
+    assert len(seen) == 1
+    assert len(seen[0]["questions"]) == 120
 
 
 def test_fact_curation_shadow_returns_legacy(caplog):

@@ -194,6 +194,14 @@ def test_curator_jev_filters_without_llm():
     assert seen[0]["state"]["question"] == "where do I live?"
 
 
+def test_curator_jev_keeps_no_facts_when_none_are_relevant():
+    rt, _ = _runtime("jev", _noul_all(0.05))
+    llm = MockLLMProvider(response="0")
+    curator = FactCurator(llm_provider=llm, model="m", config=CurationConfig(enabled=True), judgment_runtime=rt)
+    facts = [Fact(subject="user", verb="hiked", object="Dipsea"), Fact(subject="user", verb="lives-in", object="Seattle")]
+    assert curator.curate(facts, "what is the capital of France?") == [] and llm.calls == []
+
+
 def test_curator_shadow_uses_llm_and_logs(caplog):
     rt, _ = _runtime("shadow", _noul_all(0.9))
     llm = MockLLMProvider(response="0")

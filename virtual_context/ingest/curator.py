@@ -51,11 +51,13 @@ class FactCurator:
         selected = judge_fact_curation(
             question,
             [f.format_for_prompt() for f in facts],
-            legacy=lambda: self._llm_curate(facts, question),
+            # The curation model returns no indices both on failure and when
+            # nothing fits, so an empty answer from it keeps every fact.
+            legacy=lambda: self._llm_curate(facts, question) or None,
             runtime=self._judgment_runtime,
         )
-        if not selected:
-            logger.debug("Fact curation returned no indices — returning all facts")
+        if selected is None:
+            logger.debug("Fact curation made no choice — returning all facts")
             return facts
 
         logger.info("Fact curation: %d → %d facts", len(facts), len(selected))
