@@ -2219,6 +2219,10 @@ class CompositeStore:
             return list(fn(grace_s=grace_s))
         return []
 
+    def fail_orphaned_compaction_operation(self, **kwargs) -> bool:
+        fn = getattr(self._segments, "fail_orphaned_compaction_operation", None)
+        return bool(fn(**kwargs)) if callable(fn) else False
+
     def find_stale_compaction_operations(
         self, *, grace_s: float,
     ) -> list[dict]:

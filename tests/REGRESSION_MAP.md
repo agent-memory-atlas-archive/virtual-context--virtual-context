@@ -5,6 +5,20 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-080 — A compaction left running on an idle conversation was taken over forever
+
+- **Symptom**: The stale-lease sweeper logged SWEEPER_TAKEOVER_SPAWN for the same compaction operation
+  about thirty times a minute on every worker, for a conversation whose phase was already `active`.
+- **Root cause**: the takeover drives the ordinary prepare path, which does nothing when the conversation
+  is not compacting, so the operation stayed `running` with a stale heartbeat and was found again on
+  every tick.
+- **Fix**: `fail_orphaned_compaction_operation` marks exactly that operation failed, only while it is
+  still running, still stale, on the current epoch and its conversation is not compacting, in one
+  statement; the sweeper calls it when a takeover does not resume a compaction.
+- **Tests**:
+  - `test_orphaned_compaction_operation.py`
+  - `test_orphaned_compaction_operation_postgres.py`
+
 ### BUG-079 — Unreplied messages never compacted and capped the compacted prefix
 
 - **Symptom**: A conversation whose history contains a user message with no assistant reply
@@ -896,6 +910,8 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_orphaned_compaction_operation.py` | BUG-080 |
+| `test_orphaned_compaction_operation_postgres.py` | BUG-080 |
 | `test_embedding_memory_shape.py` | PROXY-038 |
 | `test_embedding_memory_shape.py` | PROXY-038 |
 | `test_tag_summary_embedding_snapshot_freshness.py` | PROXY-037 |

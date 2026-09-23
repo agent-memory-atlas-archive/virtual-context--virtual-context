@@ -7546,6 +7546,50 @@ CREATE TABLE IF NOT EXISTS request_captures (
             )
             return cur.rowcount == 1
 
+    def fail_orphaned_compaction_operation(
+        self,
+        *,
+        operation_id: str,
+        conversation_id: str,
+        lifecycle_epoch: int,
+        stale_after_s: float,
+        error_message: str,
+    ) -> bool:
+        """Retire one stale running compaction whose conversation is not compacting.
+
+        The stale-lease sweeper takes over running operations whose heartbeat
+        has aged out; when the conversation's phase is no longer
+        ``compacting`` there is nothing to resume. Marks exactly
+        ``operation_id`` failed, and only while it is still running, its
+        heartbeat is older than ``stale_after_s`` seconds, its epoch is the
+        conversation's current epoch and the conversation is not compacting,
+        all checked in the same statement. Returns True iff the row changed.
+        """
+        from datetime import datetime, timezone, timedelta
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)).isoformat()
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE compaction_operation
+                   SET status = 'failed', completed_at = ?, error_message = ?
+                 WHERE operation_id = ? AND conversation_id = ?
+                   AND status = 'running' AND heartbeat_ts < ?
+                   AND lifecycle_epoch = ?
+                   AND EXISTS (
+                       SELECT 1 FROM conversations c
+                        WHERE c.conversation_id = ?
+                          AND c.lifecycle_epoch = ?
+                          AND c.phase <> 'compacting'
+                   )
+                """,
+                (
+                    utcnow_iso(), error_message, operation_id, conversation_id,
+                    cutoff, lifecycle_epoch, conversation_id, lifecycle_epoch,
+                ),
+            )
+            return cur.rowcount == 1
+
     def fail_compaction_operation(
         self,
         *,

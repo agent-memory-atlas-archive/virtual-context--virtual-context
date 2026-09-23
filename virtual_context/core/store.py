@@ -1686,6 +1686,27 @@ class ContextStore(ABC):
         """
         raise NotImplementedError
 
+    def fail_orphaned_compaction_operation(
+        self,
+        *,
+        operation_id: str,
+        conversation_id: str,
+        lifecycle_epoch: int,
+        stale_after_s: float,
+        error_message: str,
+    ) -> bool:
+        """Retire one stale running compaction whose conversation is not compacting.
+
+        The stale-lease sweeper takes over running operations whose heartbeat
+        has aged out; when the conversation's phase is no longer
+        ``compacting`` there is nothing to resume. Marks exactly
+        ``operation_id`` failed, and only while it is still running, its
+        heartbeat is older than ``stale_after_s`` seconds, its epoch is the
+        conversation's current epoch and the conversation is not compacting,
+        all checked in the same statement. Returns True iff the row changed.
+        """
+        return False
+
     def cleanup_abandoned_compaction(
         self,
         *,

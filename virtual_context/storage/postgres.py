@@ -7683,6 +7683,49 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             )
             return cur.rowcount == 1
 
+    def fail_orphaned_compaction_operation(
+        self,
+        *,
+        operation_id: str,
+        conversation_id: str,
+        lifecycle_epoch: int,
+        stale_after_s: float,
+        error_message: str,
+    ) -> bool:
+        """Retire one stale running compaction whose conversation is not compacting.
+
+        The stale-lease sweeper takes over running operations whose heartbeat
+        has aged out; when the conversation's phase is no longer
+        ``compacting`` there is nothing to resume. Marks exactly
+        ``operation_id`` failed, and only while it is still running, its
+        heartbeat is older than ``stale_after_s`` seconds, its epoch is the
+        conversation's current epoch and the conversation is not compacting,
+        all checked in the same statement. Returns True iff the row changed.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        with self.pool.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE compaction_operation
+                   SET status = 'failed', completed_at = %s, error_message = %s
+                 WHERE operation_id = %s AND conversation_id = %s
+                   AND status = 'running' AND heartbeat_ts < %s
+                   AND lifecycle_epoch = %s
+                   AND EXISTS (
+                       SELECT 1 FROM conversations c
+                        WHERE c.conversation_id = %s
+                          AND c.lifecycle_epoch = %s
+                          AND c.phase <> 'compacting'
+                   )
+                """,
+                (
+                    datetime.now(timezone.utc), error_message, operation_id,
+                    conversation_id, cutoff, lifecycle_epoch, conversation_id,
+                    lifecycle_epoch,
+                ),
+            )
+            return cur.rowcount == 1
+
     def fail_compaction_operation(
         self,
         *,
