@@ -3234,7 +3234,7 @@ JUDGMENT_MODES: tuple[str, ...] = ("legacy", "shadow", "jev")
 JUDGMENT_SEAMS: tuple[str, ...] = (
     "rerank", "query_intent", "temporal_intent", "safety_critical", "admission",
     "tag_reuse", "supersession", "tag_consolidation", "fact_curation", "tag_split",
-    "summary_grounding", "topic_select",
+    "summary_grounding", "topic_select", "tag_select",
 )
 
 
@@ -3273,6 +3273,10 @@ class JudgmentConfig:
     # Segments most similar to the query that live topic_select judges in the
     # same call as the topics (0 = topics only).
     segment_pool_size: int = 0
+    # tag_select: topics nearest the turn by summary embedding offered to the
+    # judgment model, and the probability a topic needs to be kept.
+    tag_select_candidates: int = 30
+    tag_select_min_probability: float = 0.5
     seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 

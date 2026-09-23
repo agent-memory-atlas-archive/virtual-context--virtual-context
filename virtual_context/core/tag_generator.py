@@ -16,7 +16,7 @@ from ..types import (
     TagResult,
 )
 from .llm_utils import normalize_code_refs, normalize_tag, parse_llm_json
-from .judgment import current as judgment_current, judge_tag_reuse, nearest_existing_tags
+from .judgment import JevOutcome, current as judgment_current, decide, jev_tag_select, judge_tag_reuse, nearest_existing_tags
 from .telemetry import TelemetryLedger
 from .tag_canonicalizer import TagCanonicalizer
 
@@ -319,8 +319,11 @@ class LLMTagGenerator:
         cost_tracker=None,  # deprecated, ignored — legacy parameter
         code_mode: bool = False,
         judgment_runtime=None,
+        load_topic_matrix: "Callable[[], tuple[list[str], object] | None] | None" = None,
     ) -> None:
         self.llm = llm_provider
+        # Topic tags with unit-length summary embeddings, for tag_select candidates.
+        self._load_topic_matrix = load_topic_matrix
         self._judgment_runtime = judgment_runtime
         self.config = config
         self._tag_vocabulary: dict[str, int] = {}
@@ -406,6 +409,7 @@ class LLMTagGenerator:
 
         if result.source != "fallback":
             result = self._apply_tag_reuse(result, text, existing_tags, breakdown=_breakdown)
+            result = self._apply_tag_select(result, text, existing_tags, context_turns, breakdown=_breakdown)
 
         # Deterministic override: catch temporal queries the LLM missed
         if self.config.temporal_heuristic_enabled and not result.temporal and detect_temporal_heuristic(text, self._temporal_patterns):
@@ -456,6 +460,105 @@ class LLMTagGenerator:
                 logger.debug("embedding reuse candidates unavailable", exc_info=True)
                 extra = None
         return nearest_existing_tags(proposed, pool, limit=limit, extra_scores=extra)
+
+    # Tag names at least this similar are near-synonyms; tag_select keeps the likelier one.
+    _SYNONYM_SIMILARITY = 0.8
+
+    def _tag_select_candidates(self, text: str, existing_tags: list[str], limit: int) -> list[str]:
+        """Topics whose summaries are nearest the turn, then tags whose names are nearest it."""
+        candidates: list[str] = []
+        embed_fn = self._embed_fn_factory() if self._embed_fn_factory is not None else None
+        loaded = self._load_topic_matrix() if self._load_topic_matrix is not None else None
+        if embed_fn is not None and loaded is not None and loaded[0]:
+            import numpy as np
+
+            topics, matrix = loaded
+            query = np.asarray(embed_fn([text[:4000]])[0], dtype=np.float32)
+            norm = float(np.linalg.norm(query))
+            if norm > 0.0 and matrix.shape[1] == query.shape[0]:
+                existing = set(existing_tags)
+                order = np.argsort(matrix @ (query / norm))[::-1]
+                candidates = [topics[i] for i in order if topics[i] in existing][:limit]
+        by_name = self._select_relevant_store_tags(text, existing_tags, limit=10)
+        return self._dedupe_tags(candidates + by_name)
+
+    def _collapse_synonyms(self, ranked: list[str]) -> list[str]:
+        """Drop each tag whose name is a near-synonym of a likelier one already kept."""
+        embed_fn = self._embed_fn_factory() if self._embed_fn_factory is not None else None
+        if embed_fn is None or len(ranked) < 2:
+            return list(ranked)
+        import numpy as np
+
+        vectors = np.asarray(embed_fn([t.replace("-", " ") for t in ranked]), dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1)
+        norms[norms == 0.0] = 1.0
+        vectors = vectors / norms[:, None]
+        kept: list[int] = []
+        for i in range(len(ranked)):
+            if all(float(vectors[i] @ vectors[k]) < self._SYNONYM_SIMILARITY for k in kept):
+                kept.append(i)
+        return [ranked[i] for i in kept]
+
+    def _apply_tag_select(
+        self, result: TagResult, text: str, existing_tags: list[str] | None,
+        context_turns: list[str] | None, *, breakdown: dict[str, float] | None = None,
+    ) -> TagResult:
+        """Let the judgment model choose the turn's tags from existing topics (tag_select seam).
+
+        The model's result keeps everything else it extracted; only the tag
+        list changes, and its new tags survive only when the judgment model
+        finds a subject that no candidate names.
+        """
+        rt = self._judgment_runtime if self._judgment_runtime is not None else judgment_current()
+        if not rt.enabled_for("tag_select") or not existing_tags:
+            return result
+        started = time.monotonic()
+        judged: dict[str, float] = {}
+
+        def jev(client) -> JevOutcome | None:
+            candidates = self._tag_select_candidates(text, existing_tags, rt.config.tag_select_candidates)
+            if not candidates:
+                return None
+            out = jev_tag_select(client, text, "\n".join(context_turns or []), candidates)
+            if out is None or out.fallback_reason:
+                return out
+            probs = out.value["probs"]
+            floor = rt.config.tag_select_min_probability
+            ranked = sorted((t for t in probs if probs[t] >= floor), key=lambda t: -probs[t])
+            kept = self._collapse_synonyms(ranked)[: self.config.max_tags]
+            judged["new_topic"] = out.value["new_topic"]
+            if not kept and out.value["new_topic"] < 0.5:
+                return JevOutcome.fallback("none_relevant", response=out.response)
+            return JevOutcome(value=kept, detail=out.detail, response=out.response)
+
+        try:
+            tags = decide(
+                "tag_select", lambda: list(result.tags), jev, runtime=rt,
+                agree=lambda a, b: set(a) == set(b),
+                describe=lambda t: ",".join(t) or "-",
+            )
+        except Exception:
+            logger.debug("tag select judgment failed", exc_info=True)
+            return result
+        finally:
+            if breakdown is not None:
+                self._note_breakdown(breakdown, "tag_select", started)
+        if tags == result.tags or "new_topic" not in judged:
+            return result
+        known = set(existing_tags)
+        if judged["new_topic"] >= 0.5:
+            tags = self._dedupe_tags(tags + [t for t in result.tags if t not in known])
+        for tag in result.tags:
+            if tag not in tags and self._tag_vocabulary.get(tag):
+                self._tag_vocabulary[tag] -= 1
+                if not self._tag_vocabulary[tag]:
+                    del self._tag_vocabulary[tag]
+        for tag in tags:
+            if tag not in result.tags:
+                self._tag_vocabulary[tag] = self._tag_vocabulary.get(tag, 0) + 1
+        result.tags = tags
+        result.primary = tags[0]
+        return result
 
     def _apply_tag_reuse(
         self, result: TagResult, text: str, existing_tags: list[str] | None,
@@ -868,6 +971,7 @@ def build_tag_generator(
     cost_tracker=None,  # deprecated, ignored — re-exported for existing callers
     code_mode: bool = False,
     judgment_runtime=None,
+    load_topic_matrix: "Callable[[], tuple[list[str], object] | None] | None" = None,
 ) -> TagGenerator:
     if config.type == "llm" and llm_provider is not None:
         return LLMTagGenerator(
@@ -879,6 +983,7 @@ def build_tag_generator(
             save_cached_embeddings=save_cached_embeddings,
             code_mode=code_mode,
             judgment_runtime=judgment_runtime,
+            load_topic_matrix=load_topic_matrix,
         )
 
     if config.type == "embedding":

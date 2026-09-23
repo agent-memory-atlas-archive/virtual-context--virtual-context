@@ -1363,6 +1363,47 @@ def judge_tag_split(
                   runtime=rt, describe=str)
 
 
+# --- seam S13: tag select ---------------------------------------------------
+
+def jev_tag_select(
+    client: JevClient, text: str, context: str, candidates: list[str],
+) -> JevOutcome | None:
+    """Value is ``{"probs": {tag: p}, "new_topic": p}`` for one turn and its candidate tags.
+
+    ``probs`` is the probability that the turn is about each candidate's topic;
+    ``new_topic`` that the turn has a substantial subject no candidate names.
+    """
+    state = {"text": text[:4000], "recent_context": context[-4000:],
+             "tags": {str(i): tag for i, tag in enumerate(candidates)}}
+    questions = {
+        f"t__{i}": noul_q(
+            f"Is `text` substantially about the topic that `tags.{i}` names, so a later search "
+            "for that topic should find this exchange?",
+            true="the exchange discusses, asks about, or states facts about that topic",
+            false="the topic is absent, only mentioned in passing, or merely similar in wording",
+        )
+        for i in range(len(candidates))
+    }
+    questions["new_topic"] = noul_q(
+        "Does `text` discuss a substantial subject that none of the entries in `tags` names?",
+        true="a real subject of the exchange has no matching tag",
+        false="every substantial subject has a matching tag",
+    )
+    resp = client.ask(seam="tag_select", state=state, questions=questions)
+    if resp is None:
+        return None
+    probs: dict[str, float] = {}
+    for key in questions:
+        ans = resp.answers.get(key)
+        if ans is None or ans.kind != "noul":
+            return JevOutcome.fallback("bad_answer", response=resp)
+        if key != "new_topic":
+            probs[candidates[int(key[3:])]] = float(ans.value)
+    new_topic = float(resp.answers["new_topic"].value)
+    return JevOutcome(value={"probs": probs, "new_topic": new_topic},
+                      detail={"candidates": len(candidates), "new_topic": round(new_topic, 3)}, response=resp)
+
+
 # --- seam S11: summary grounding ---------------------------------------------
 
 def jev_summary_grounding(

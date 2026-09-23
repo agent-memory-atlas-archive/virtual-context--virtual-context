@@ -877,7 +877,16 @@ class VirtualContextEngine:
             save_cached_embeddings=shared_embedding_saver,
             code_mode=self.config.compactor.code_mode,
             judgment_runtime=self.judgment_runtime,
+            load_topic_matrix=self._load_topic_matrix,
         )
+
+    def _load_topic_matrix(self):
+        """Topic tags and their unit-length summary embeddings, from the shared snapshot."""
+        provider = self._session_state_provider
+        if provider is None or not self.config.conversation_id:
+            return None
+        loader = getattr(provider, "load_tag_summary_embedding_matrix", None)
+        return loader(self.config.conversation_id) if callable(loader) else None
 
     def _build_raw_store(self):
         """Return the unwrapped CompositeStore (or backend equivalent).
