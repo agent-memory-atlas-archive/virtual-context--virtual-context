@@ -201,7 +201,10 @@ class SessionStateProvider:
             )
         self._tag_embedding_runtime_max_per_model = int(resolved_cap)
         self._tag_stats_runtime_cache: dict[str, list[TagStats]] = {}
-        self._tag_summary_embedding_snapshot_runtime_cache: dict[str, dict[str, list[float]]] = {}
+        # conversation -> (snapshot version, normalized map, lazily built matrix)
+        self._tag_summary_embedding_snapshot_runtime_cache: dict[
+            str, tuple[int, dict[str, list[float]], tuple[list[str], object] | None]
+        ] = {}
 
     def _key(self, conversation_id: str) -> str:
         return f"vc:session:{conversation_id}"
@@ -218,6 +221,20 @@ class SessionStateProvider:
 
     def _tag_summary_embedding_snapshot_key(self, conversation_id: str) -> str:
         return f"vc:tag_summary_embeddings:{conversation_id}"
+
+    def _tag_summary_embedding_version_key(self, conversation_id: str) -> str:
+        return f"vc:tag_summary_embeddings_ver:{conversation_id}"
+
+    def _tag_summary_embedding_version(self, conversation_id: str) -> int | None:
+        """The shared snapshot version, bumped on every save; None when unreadable."""
+        try:
+            raw = self._redis.get(self._tag_summary_embedding_version_key(conversation_id))
+        except Exception:
+            return None
+        try:
+            return int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            return 0
 
     _RETRIEVAL_MEMO_TTL_SECONDS = 300
     _LAST_REQUEST_TTL_SECONDS = 24 * 60 * 60
@@ -1048,15 +1065,15 @@ class SessionStateProvider:
                 exc_info=True,
             )
 
-    def load_tag_summary_embedding_snapshot(
+    def _fresh_tag_summary_embedding_entry(
         self,
         conversation_id: str,
-    ) -> dict[str, list[float]] | None:
-        """Load cached normalized tag-summary embeddings for a conversation."""
-        if conversation_id in self._tag_summary_embedding_snapshot_runtime_cache:
-            return self._clone_embedding_map(
-                self._tag_summary_embedding_snapshot_runtime_cache[conversation_id]
-            )
+    ) -> tuple[int, dict[str, list[float]], tuple[list[str], object] | None] | None:
+        """This process's copy of the snapshot, reloaded when another worker saved a newer one."""
+        version = self._tag_summary_embedding_version(conversation_id)
+        cached = self._tag_summary_embedding_snapshot_runtime_cache.get(conversation_id)
+        if cached is not None and (version is None or cached[0] == version):
+            return cached
         try:
             raw = self._redis.get(self._tag_summary_embedding_snapshot_key(conversation_id))
             if raw is None:
@@ -1066,9 +1083,8 @@ class SessionStateProvider:
             normalized = self._decode_vector_map(raw)
             if normalized is None:
                 return None
-            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
-                self._clone_embedding_map(normalized)
-            )
+            entry = (version or 0, normalized, None)
+            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = entry
             if not self._is_packed(raw):
                 ttl = self._redis.ttl(self._tag_summary_embedding_snapshot_key(conversation_id))
                 self._redis.set(
@@ -1076,7 +1092,7 @@ class SessionStateProvider:
                     self._encode_vector_map(normalized),
                     ex=ttl if isinstance(ttl, int) and ttl > 0 else self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
                 )
-            return normalized
+            return entry
         except Exception:
             logger.warning(
                 "Redis tag-summary embedding snapshot load failed for %s",
@@ -1084,6 +1100,37 @@ class SessionStateProvider:
                 exc_info=True,
             )
             return None
+
+    def load_tag_summary_embedding_snapshot(
+        self,
+        conversation_id: str,
+    ) -> dict[str, list[float]] | None:
+        """Load cached normalized tag-summary embeddings for a conversation."""
+        entry = self._fresh_tag_summary_embedding_entry(conversation_id)
+        return self._clone_embedding_map(entry[1]) if entry is not None else None
+
+    def load_tag_summary_embedding_matrix(
+        self,
+        conversation_id: str,
+    ) -> tuple[list[str], object] | None:
+        """Tags and their unit-length embeddings as one float32 matrix, built once per snapshot."""
+        entry = self._fresh_tag_summary_embedding_entry(conversation_id)
+        if entry is None:
+            return None
+        version, normalized, matrix = entry
+        if matrix is None:
+            import numpy as np
+
+            tags = [tag for tag, values in normalized.items() if values]
+            if not tags:
+                return None
+            rows = np.asarray([normalized[tag] for tag in tags], dtype=np.float32)
+            norms = np.linalg.norm(rows, axis=1)
+            keep = norms > 0.0
+            tags = [tag for tag, ok in zip(tags, keep.tolist()) if ok]
+            matrix = (tags, rows[keep] / norms[keep][:, None])
+            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (version, normalized, matrix)
+        return matrix
 
     def save_tag_summary_embedding_snapshot(
         self,
@@ -1099,13 +1146,14 @@ class SessionStateProvider:
                 for tag, values in embeddings_by_tag.items()
                 if isinstance(values, list)
             }
-            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
-                self._clone_embedding_map(normalized)
-            )
             self._redis.set(
                 self._tag_summary_embedding_snapshot_key(conversation_id),
                 self._encode_vector_map(normalized),
                 ex=ttl_seconds or self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
+            )
+            version = int(self._redis.incr(self._tag_summary_embedding_version_key(conversation_id)))
+            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
+                version, self._clone_embedding_map(normalized), None,
             )
         except Exception:
             logger.warning(
@@ -1123,14 +1171,14 @@ class SessionStateProvider:
             return None
         embeddings = self._store.load_tag_summary_embeddings(conversation_id=conversation_id)
         self.save_tag_summary_embedding_snapshot(conversation_id, embeddings)
-        return self._clone_embedding_map(
-            self._tag_summary_embedding_snapshot_runtime_cache.get(conversation_id, {})
-        )
+        entry = self._tag_summary_embedding_snapshot_runtime_cache.get(conversation_id)
+        return self._clone_embedding_map(entry[1] if entry is not None else {})
 
     def delete_tag_summary_embedding_snapshot(self, conversation_id: str) -> None:
         self._tag_summary_embedding_snapshot_runtime_cache.pop(conversation_id, None)
         try:
             self._redis.delete(self._tag_summary_embedding_snapshot_key(conversation_id))
+            self._redis.incr(self._tag_summary_embedding_version_key(conversation_id))
         except Exception:
             pass
 

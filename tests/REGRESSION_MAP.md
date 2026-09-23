@@ -468,6 +468,19 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-037 — Workers kept serving the tag-summary embeddings they loaded first
+
+- **Symptom**: After compaction saved new tag summaries from one worker, the other workers' embedding
+  signal kept scoring the snapshot they had loaded earlier, so new topics were invisible to them until
+  the process restarted.
+- **Root cause**: the in-process copy of the snapshot was returned whenever present and never compared
+  with the shared snapshot in Redis.
+- **Fix**: every save and delete bumps a shared version key; each read compares it with the version
+  held in process and reloads when they differ. The same entry holds a normalized float32 matrix built
+  once per version.
+- **Tests**:
+  - `test_tag_summary_embedding_snapshot_freshness.py`
+
 ### PROXY-036 — A completed proxy turn was stored without its proved audience
 
 - **Symptom**: A routed turn's rows were stored with attribution version 0 and an assistant row with no
@@ -856,6 +869,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_tag_summary_embedding_snapshot_freshness.py` | PROXY-037 |
 | `test_completion_audience_stamp.py` | PROXY-036 |
 | `test_out_of_band_route_audience.py` | PROXY-034 |
 | `test_one_turn_per_message.py` | PROXY-033 |
