@@ -468,6 +468,19 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-034 — A conversation named out of band never proved its audience
+
+- **Symptom**: On a signed route every summary was withheld and ingested rows were stored with a blank
+  `audience_conversation_id` and attribution version 0.
+- **Root cause**: preparation took the inbound route only from an in-band conversation marker. A route
+  verified out of band carries none, so the request audience resolved to empty and the speaker context
+  was ineligible.
+- **Fix**: when the state resolver marks the conversation out of band and records
+  `request.state.conversation_route_id`, that raw id is the inbound route for preparation and the
+  request context.
+- **Tests**:
+  - `test_out_of_band_route_audience.py`
+
 ### PROXY-033 — A multi-round tool message was stored once per round
 
 - **Symptom**: Each routed Vast message that used tools produced two stored turns: the question plus the
@@ -815,6 +828,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_out_of_band_route_audience.py` | PROXY-034 |
 | `test_one_turn_per_message.py` | PROXY-033 |
 | `test_noop_ingest_skips_whole_conversation_passes.py` | PROXY-032 |
 | `test_retrieval_context_is_worker_independent.py` | PROXY-031 |

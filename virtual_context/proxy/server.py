@@ -3249,6 +3249,13 @@ def create_app(
             state, is_new = await asyncio.to_thread(
                 _resolver, request, body, inbound_conversation_id,
             )
+            # A route the resolver verified out of band carries no in-band
+            # marker; the id it named is this request's inbound route, which
+            # audience proof and ingest provenance both depend on.
+            if not inbound_conversation_id and getattr(request.state, "conversation_out_of_band", False) is True:
+                _route_id = getattr(request.state, "conversation_route_id", None)
+                if isinstance(_route_id, str) and _route_id.strip():
+                    inbound_conversation_id = _route_id.strip()
         elif registry:
             state, is_new = registry.get_or_create(
                 inbound_conversation_id, body=body,
