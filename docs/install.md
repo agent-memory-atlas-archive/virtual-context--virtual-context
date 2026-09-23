@@ -328,3 +328,35 @@ virtual-context daemon uninstall
 - If you use multi-instance proxy mode in YAML (`proxy.instances`), run `virtual-context -c <config> proxy` without `--upstream`.
 - If installed with `pipx`, command path is managed automatically.
 - If installed with `pip --user`, ensure your user scripts directory is on PATH.
+
+## OpenClaw
+
+A dedicated [OpenClaw plugin](https://github.com/virtual-context/openclaw-plugin) integrates through lifecycle hooks: synchronous retrieval on `message.pre`, fire-and-forget compaction on `agent.post`.
+
+Direct proxy use also works. The settings that matter, since OpenClaw manages its own history aggressively:
+
+```jsonc
+// 1. Raise history limits (per channel, e.g. channels.telegram)
+"historyLimit": 99999,
+"dmHistoryLimit": 99999,
+"messages": { "groupChat": { "historyLimit": 99999 } },
+
+// 2. Declare the virtual window on explicit model entries
+//    (baseUrl alone is not enough; without model entries the client
+//    falls back to its hardcoded 200K)
+"anthropic": {
+  "baseUrl": "https://anthropic.virtual-context.com?vckey=...",
+  "api": "anthropic-messages",
+  "models": [{ "id": "claude-opus-4-6", "contextWindow": 2000000 }]
+},
+
+// 3. Let the proxy control windowing
+"agents": { "defaults": {
+  "contextPruning": { "mode": "off" },
+  "contextTokens": 2000000
+}},
+
+// 4. Keep sessions alive long enough for memory to matter
+//    (default group idle reset is 12h)
+"session": { "resetByType": { "group": { "idleMinutes": 2880 } } }
+```

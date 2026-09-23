@@ -97,3 +97,20 @@ Facts use supersession (new fact invalidates old) rather than versioning (keep a
 The tradeoff is that supersession detection requires the compaction LLM to understand when two facts contradict. This is imperfect, but in practice the LLM is good at identifying direct contradictions ("moved from X to Y" supersedes "lives in X").
 
 For cases where history matters ("User lived in NYC from 2020-2023, then moved to LA"), the fact's `when` field and the underlying conversation segments preserve the timeline. Supersession cleans up the active fact set, not the historical record.
+
+## virtual-context vs RAG vs compaction
+
+These compose; RAG and compaction can run alongside virtual-context. The difference is what each manages.
+
+| | RAG | Compaction-only | virtual-context |
+|---|---|---|---|
+| **Mechanism** | Query-time retrieval by similarity | Summarize old history to fit | Tagged memory + retrieval + compaction + paging |
+| **What is kept** | External documents + recent chat | Summaries + recent chat | Three layers, from raw turns to topic digests |
+| **Specific fact lookup** | Depends on phrasing alignment | Lossy after summarizing | Structured fact queries + full-text + drill-down |
+| **Who said it** | Not modeled | Not modeled | Per-message provenance, per-person cards, speaker-scoped search |
+| **Time-scoped recall** | Custom logic outside RAG | Needs date fidelity in summaries | Backend-resolved date ranges |
+| **Vocabulary drift** | Embedding-dependent | Weak | 3-signal fusion + related tags + semantic fallback |
+| **Budget control** | Appends retrieved chunks | Compression only | Explicit paging with a bounded assembly |
+| **Cost at scale** | Grows with corpus | Grows with length | A ceiling you set |
+
+RAG retrieves and appends; it never frees space in the window it competes for. Compaction compresses but cannot bring detail back. virtual-context manages the window in both directions.
