@@ -30,6 +30,8 @@ scripts/*
 !scripts/install.ps1
 !scripts/install.sh
 !scripts/check_contracts.py
+!scripts/smoke_recommended.py
+!scripts/smoke_recommended.sh
 !scripts/apply_canonical_repair_artifact_20260802.py
 !scripts/export_discord_guild_transcript_20260802.py
 !scripts/extend_men_vast_disposition_20260802.py

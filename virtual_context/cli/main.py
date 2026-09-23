@@ -191,10 +191,14 @@ def cmd_init(args):
     print(f"Preset: {preset.name} — {preset.description}")
     print()
     print("Next steps:")
-    print("  1. Start your local LLM server (Ollama, llama.cpp, LM Studio, vLLM)")
-    print("     or set a cloud provider in the config (anthropic, openai, gemini)")
-    print("  2. Validate config:   virtual-context config validate")
-    print("  3. List tags:         virtual-context tags")
+    steps = preset.next_steps or [
+        "Start your local LLM server (Ollama, llama.cpp, LM Studio, vLLM)\n"
+        "     or set a cloud provider in the config (anthropic, openai, gemini)",
+        "Validate config:   virtual-context config validate",
+        "List tags:         virtual-context tags",
+    ]
+    for number, step in enumerate(steps, 1):
+        print(f"  {number}. {step}")
 
 
 def cmd_presets(args):

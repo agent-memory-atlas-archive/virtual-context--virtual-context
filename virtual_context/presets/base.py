@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -11,6 +11,8 @@ class Preset:
     description: str
     config_dict: dict
     template: str
+    # What to do after ``virtual-context init``; empty uses the generic steps.
+    next_steps: list[str] = field(default_factory=list)
 
 
 _PRESETS: dict[str, Preset] = {}
