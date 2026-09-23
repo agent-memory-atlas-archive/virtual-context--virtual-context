@@ -1109,9 +1109,12 @@ class IngestReconciler:
             source_conversation_key
         )
         if source_attestation_required and not current_source_claim:
-            logger.error(
-                "SOURCE_ATTESTATION_REQUIRED phase=prepare conv=%s route=%s; "
-                "canonical admission skipped",
+            # A prepare that carries no claim (the proxy route never does) is
+            # context only; the attested completion admits the turn, and an
+            # unattested completion is the error that means a lost turn.
+            logger.info(
+                "SOURCE_ATTESTATION_DEFERRED phase=prepare conv=%s route=%s; "
+                "admission deferred to the attested completion",
                 conversation_id[:64],
                 source_conversation_key[:128],
             )

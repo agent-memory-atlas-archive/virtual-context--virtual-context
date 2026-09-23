@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-085 — Every proxy-route Discord group turn logged a false admission error
+
+- **Symptom**: `ERROR SOURCE_ATTESTATION_REQUIRED phase=prepare ... canonical admission skipped` on each proxied Discord group turn, although the turn was stored with its source message id when the reply completed.
+- **Root cause**: the proxy prepare never carries the adapter's source claim, so the attested-route gate always skipped prepare admission and reported it as an error. Admission of these routes belongs to the attested completion, which keeps its own error for a genuinely unattested turn.
+- **Fix**: the prepare-phase skip logs `SOURCE_ATTESTATION_DEFERRED` at INFO; behavior is unchanged.
+- **Tests**:
+  - `test_canonical_source_admission.py::test_an_unattested_prepare_defers_to_completion_without_an_error`
+
 ### BUG-084 — Dense facts removed by curation were logged as budget skips
 
 - **Symptom**: `FACT_DENSE_BREAKDOWN assembler ... skipped_dense_budget=15` on a turn whose facts block used 5,139 tokens with 43,282 of the pool unused.

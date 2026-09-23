@@ -1037,3 +1037,21 @@ def test_sqlite_conversation_claim_never_reassigns_tenant(tmp_path: Path):
         tenant_id="other-tenant",
         conversation_id="c",
     )
+
+
+@pytest.mark.regression("BUG-085")
+def test_an_unattested_prepare_defers_to_completion_without_an_error(tmp_path: Path, caplog):
+    import logging
+
+    store = _store(tmp_path)
+    rec = _reconciler(store)
+    body = {"messages": [{"role": "user", "content": "the attested pair is written at completion"}]}
+    with caplog.at_level(logging.INFO, logger="virtual_context.core.ingest_reconciler"):
+        result = rec.ingest_batch(
+            "c", body=body, fmt=detect_format(body), expected_lifecycle_epoch=1,
+            source_conversation_key=f"agent:vast:discord:guild:{GUILD_ID}",
+            source_audience_conversation_id="aud-a",
+        )
+    assert result.merge_mode == "source_attestation_required_noop"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("SOURCE_ATTESTATION_DEFERRED phase=prepare" in r.getMessage() for r in caplog.records)
