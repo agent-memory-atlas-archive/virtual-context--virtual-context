@@ -171,12 +171,20 @@ class PostgresVectorSearchMixin:
     def _vector_ready_on_connection(self, conn, model: str) -> bool:
         if model != VECTOR_MODEL or not self._vector_schema_installed(conn):
             return False
-        for table in _TABLE_KEYS:
-            if conn.execute(
-                f"SELECT 1 FROM public.{table} WHERE {_residue_sql(table)} LIMIT 1"
-            ).fetchone():
-                return False
-        return True
+        # The residue predicate hashes every JSON vector and the planner cannot
+        # estimate it, so after bulk writes it may prefer a full scan over the
+        # empty partial residue index. Rule that out for these probes only.
+        previous = conn.execute("SELECT current_setting('enable_seqscan') AS value").fetchone()["value"]
+        conn.execute("SELECT set_config('enable_seqscan', 'off', TRUE)")
+        try:
+            for table in _TABLE_KEYS:
+                if conn.execute(
+                    f"SELECT 1 FROM public.{table} WHERE {_residue_sql(table)} LIMIT 1"
+                ).fetchone():
+                    return False
+            return True
+        finally:
+            conn.execute("SELECT set_config('enable_seqscan', %s, TRUE)", (previous,))
 
     def vector_search_ready(self, model: str) -> bool:
         if model != VECTOR_MODEL:
