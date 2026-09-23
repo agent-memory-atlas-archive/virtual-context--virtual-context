@@ -14,9 +14,11 @@
 
 # virtual-context
 
-**Virtual memory for LLM context.** Your client keeps sending its whole conversation; virtual-context stores all of it, organizes it by topic, and forwards the model a small window of what matters for the current turn. Nothing is discarded, and anything older can be paged back in at full fidelity.
+**Virtual memory for LLM context. Give your agent a context window of tens or hundreds of millions of tokens; the model only ever sees the part that matters.**
 
-It works the way an operating system lets a process address more memory than physically exists. It runs as an HTTP proxy, so integration is a base-URL change; a Python SDK and an MCP server are there for direct use.
+Your client sets `contextWindow: 20000000` (or 200,000,000). Your model's real window is 200K. virtual-context sits between them and makes it work, the same way an operating system lets a process address more memory than physically exists. The client keeps sending its whole conversation; virtual-context stores all of it, organizes it by topic, and forwards the model a compact window of what matters for the current turn, at a size you choose. Nothing is discarded, and anything older can be paged back in at full fidelity. The dashboard above shows a live 3 million token conversation served at 80K real tokens.
+
+It runs as an HTTP proxy, so integration is a base-URL change; a Python SDK and an MCP server are there for direct use.
 
 ## Why
 
