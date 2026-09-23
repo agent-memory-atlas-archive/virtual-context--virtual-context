@@ -21,6 +21,7 @@ from ..types import (
     StoredSegment,
     StoredSummary,
     TagResult,
+    TagSummary,
 )
 
 from .tag_canonicalizer import flatten_alias_map
@@ -323,6 +324,70 @@ class ContextRetriever:
             return {}
         return flatten_alias_map(aliases or {})
 
+    @staticmethod
+    def _tag_summary_item(ts: TagSummary) -> StoredSummary:
+        """A tag summary shaped as a retrievable summary, keeping its sources."""
+        return StoredSummary(
+            ref=f"tag-summary-{ts.tag}",
+            primary_tag=ts.tag,
+            tags=[ts.tag],
+            summary=ts.summary,
+            summary_tokens=ts.summary_tokens,
+            metadata=SegmentMetadata(
+                code_refs=list(getattr(ts, "code_refs", []) or []),
+                canonical_turn_ids=list(getattr(ts, "source_canonical_turn_ids", None) or []),
+            ),
+            created_at=ts.updated_at,
+            start_timestamp=ts.created_at,
+            end_timestamp=ts.updated_at,
+        )
+
+    def _select_topics(
+        self,
+        lookup_text: str,
+        ranked_tags: list[str],
+        max_results: int,
+        provider: object | None,
+        memo_key: str,
+    ) -> tuple[list[str], bool, dict[str, TagSummary]]:
+        """The topics to retrieve, and whether Jev chose them.
+
+        A turn's continuation calls resend the same request, so a Jev choice
+        is kept in the shared retrieval memo next to the scores it was made
+        from.
+        """
+        from .judgment import select_topics
+
+        loaded: dict[str, TagSummary] = {}
+
+        def load(tags: list[str]) -> dict[str, str]:
+            for tag in tags:
+                if tag in loaded:
+                    continue
+                try:
+                    ts = self.store.get_tag_summary(tag, conversation_id=self._conversation_id or "")
+                except Exception:
+                    ts = None
+                if ts is not None and (ts.summary or "").strip():
+                    loaded[tag] = ts
+            return {tag: loaded[tag].summary for tag in tags if tag in loaded}
+
+        topics_key = f"{memo_key}:topics" if memo_key else ""
+        can_memo = bool(topics_key and provider is not None and self._conversation_id)
+        if can_memo:
+            cached = provider.load_retrieval_memo(self._conversation_id, topics_key)
+            tags = cached.get("tags") if isinstance(cached, dict) else None
+            if isinstance(tags, list) and tags and all(isinstance(t, str) for t in tags):
+                load(tags)
+                return tags, True, loaded
+        tags, chosen_by_jev = select_topics(
+            lookup_text, ranked_tags, load,
+            max_results=max_results, runtime=self.judgment_runtime,
+        )
+        if chosen_by_jev and can_memo:
+            provider.save_retrieval_memo(self._conversation_id, topics_key, {"tags": tags})
+        return tags, chosen_by_jev, loaded
+
     def _load_all_tag_summaries(self, token_budget: int) -> tuple[list[StoredSummary], int]:
         """Load all tag summaries within *token_budget*.
 
@@ -338,20 +403,7 @@ class ContextRetriever:
         for ts in tag_summaries:
             if total_tokens + ts.summary_tokens > token_budget:
                 break
-            selected.append(StoredSummary(
-                ref=f"tag-summary-{ts.tag}",
-                primary_tag=ts.tag,
-                tags=[ts.tag],
-                summary=ts.summary,
-                summary_tokens=ts.summary_tokens,
-                metadata=SegmentMetadata(
-                    code_refs=list(getattr(ts, "code_refs", []) or []),
-                    canonical_turn_ids=list(getattr(ts, "source_canonical_turn_ids", None) or []),
-                ),
-                created_at=ts.updated_at,
-                start_timestamp=ts.created_at,
-                end_timestamp=ts.updated_at,
-            ))
+            selected.append(self._tag_summary_item(ts))
             total_tokens += ts.summary_tokens
         return selected, total_tokens
 
@@ -681,8 +733,14 @@ class ContextRetriever:
         # it bounds the rendered sections by the same budget selected here.
         retrieval_metadata["tag_token_budget"] = token_budget
 
-        top_tags = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)[:strategy.max_results]
+        ranked_tags = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)
+        _topic_stage = time.monotonic()
+        top_tags, jev_topics, topic_summaries = self._select_topics(
+            lookup_text, ranked_tags, strategy.max_results, _provider, _memo_key,
+        )
+        _note("select_topics", _topic_stage)
         retrieval_metadata["top_tags"] = list(top_tags)
+        retrieval_metadata["topics_chosen_by_jev"] = jev_topics
 
         # Fetch summaries for all top-scored tags at once, then rank by RRF score
         _summary_fetch_stage = time.monotonic()
@@ -718,6 +776,14 @@ class ContextRetriever:
         all_summaries.sort(key=_summary_sort_key, reverse=True)
         from .judgment import rerank_summaries as _rerank_summaries
         all_summaries = _rerank_summaries(lookup_text, all_summaries, runtime=self.judgment_runtime)
+        if jev_topics:
+            # The chosen topics' own summaries lead, in the order they were
+            # judged relevant; a topic can hold the answer without having
+            # segments of its own.
+            all_summaries = [
+                self._tag_summary_item(topic_summaries[tag])
+                for tag in top_tags if tag in topic_summaries
+            ] + all_summaries
 
         selected: list[StoredSummary] = []
         selected_refs: set[str] = set()

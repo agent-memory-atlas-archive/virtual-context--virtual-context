@@ -505,6 +505,63 @@ def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | 
     )
 
 
+def select_topics(
+    query: str,
+    ranked_tags: list[str],
+    load_summaries: Callable[[list[str]], dict[str, str]],
+    *,
+    max_results: int,
+    runtime: JudgmentRuntime | None = None,
+) -> tuple[list[str], bool]:
+    """Choose which topics to retrieve for *query* from the fused ranking.
+
+    Returns ``(tags, chosen_by_jev)``. Legacy takes the top ``max_results``
+    tags. Jev scores the stored summary of each tag in the top
+    ``topic_pool_size`` and keeps those at or above ``topic_min_probability``,
+    most likely first (ties keep the fused order), capped at ``max_results``.
+    When no tag qualifies, the legacy choice stands.
+    """
+    rt = runtime if runtime is not None else current()
+
+    def legacy() -> tuple[list[str], bool]:
+        return list(ranked_tags[:max_results]), False
+
+    if not rt.enabled_for("topic_select") or len(ranked_tags) < 2:
+        return legacy()
+    cfg = rt.config
+    pool = list(ranked_tags[:max(cfg.topic_pool_size, max_results)])
+
+    def jev(client: JevClient) -> JevOutcome | None:
+        texts = load_summaries(pool)
+        candidates = [(tag, texts[tag]) for tag in pool if texts.get(tag)]
+        if len(candidates) < 2:
+            return JevOutcome.fallback("no_candidates")
+        outcome = jev_rerank(client, query, candidates, max_state_bytes=cfg.rerank_max_state_bytes)
+        if outcome is None or outcome.fallback_reason:
+            return outcome
+        probs = outcome.value
+        position = {tag: index for index, tag in enumerate(pool)}
+        chosen = sorted(
+            (tag for tag in probs if probs[tag] >= cfg.topic_min_probability),
+            key=lambda tag: (-probs[tag], position[tag]),
+        )[:max_results]
+        if not chosen:
+            return JevOutcome.fallback("none_relevant", response=outcome.response)
+        detail = {
+            "pool": len(candidates),
+            "chosen": len(chosen),
+            "p_top": round(probs[chosen[0]], 3),
+            "overlap": len(set(chosen) & set(ranked_tags[:max_results])),
+        }
+        return JevOutcome(value=(chosen, True), detail=detail, response=outcome.response)
+
+    return decide(
+        "topic_select", legacy, jev, runtime=rt,
+        agree=lambda a, b: a[0][:3] == b[0][:3],
+        describe=lambda value: ",".join(value[0][:5]),
+    )
+
+
 # --- seam S5: actor-card admission -------------------------------------------
 
 COVERAGE_CRITERIA: dict[str, str] = {

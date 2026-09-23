@@ -3234,7 +3234,7 @@ JUDGMENT_MODES: tuple[str, ...] = ("legacy", "shadow", "jev")
 JUDGMENT_SEAMS: tuple[str, ...] = (
     "rerank", "query_intent", "temporal_intent", "safety_critical", "admission",
     "tag_reuse", "supersession", "tag_consolidation", "fact_curation", "tag_split",
-    "summary_grounding",
+    "summary_grounding", "topic_select",
 )
 
 
@@ -3261,6 +3261,8 @@ class JudgmentConfig:
     tag_reuse_candidates: int = 12
     curation_min_probability: float = 0.3
     grounding_max_state_bytes: int = 120_000
+    topic_pool_size: int = 30
+    topic_min_probability: float = 0.5
     seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 

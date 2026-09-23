@@ -190,6 +190,10 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         grounding_max_state_bytes=int(
             raw.get("grounding_max_state_bytes", defaults.grounding_max_state_bytes)
         ),
+        topic_pool_size=int(raw.get("topic_pool_size", defaults.topic_pool_size)),
+        topic_min_probability=float(
+            raw.get("topic_min_probability", defaults.topic_min_probability)
+        ),
     )
 
 
