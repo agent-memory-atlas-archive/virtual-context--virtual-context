@@ -468,6 +468,17 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-032 — Every ingest recomputed groups and anchors over the whole conversation
+
+- **Symptom**: Each call of a routed tool loop spent ~1.7s in ingest with zero rows written:
+  `regroup_ms=1279`, `anchors_ms=381` on a 6,969-row conversation.
+- **Root cause**: `_ingest_prepared_turns_locked` ran `recompute_canonical_turn_groups` and
+  `_refresh_persisted_anchors` unconditionally, although both are functions of the stored rows and a
+  resend of already-stored history changes neither.
+- **Fix**: both passes run only when the call wrote rows; every writing call still runs them.
+- **Tests**:
+  - `test_noop_ingest_skips_whole_conversation_passes.py`
+
 ### PROXY-031 — Retrieval context depended on which worker served the call
 
 - **Symptom**: Three calls of one routed message ran on workers 19, 15 and 20; each logged
@@ -790,6 +801,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_noop_ingest_skips_whole_conversation_passes.py` | PROXY-032 |
 | `test_retrieval_context_is_worker_independent.py` | PROXY-031 |
 | `test_context_hint_no_inline_rebuild.py` | PROXY-030 |
 | `test_budget_enforcement_order.py` | PROXY-029 |

@@ -2083,8 +2083,13 @@ class IngestReconciler:
         if phase_timings is not None:
             phase_timings["save_batch_ms"] = (time.perf_counter() - _t_save_batch) * 1000.0
         _t_regroup = time.perf_counter()
+        # Grouping and anchors are functions of the stored rows. A call that
+        # wrote no rows changed neither, and every call that does write
+        # recomputes both, so a no-op resend (every call of a tool loop)
+        # skips two whole-conversation passes.
+        _rows_changed = turns_written > 0
         recompute_groups = getattr(self._store, "recompute_canonical_turn_groups", None)
-        if callable(recompute_groups):
+        if _rows_changed and callable(recompute_groups):
             try:
                 recompute_groups(conversation_id)
             except Exception:
@@ -2096,19 +2101,21 @@ class IngestReconciler:
         if phase_timings is not None:
             phase_timings["regroup_ms"] = (time.perf_counter() - _t_regroup) * 1000.0
         _t_anchor = time.perf_counter()
-        _anchor_rows = -1
-        try:
-            # ``existing`` is the sequence this call started from: overlap
-            # rows are fast-skipped rather than rewritten, and the rows
-            # written above are new, so it still describes exactly what was
-            # persisted before this batch.
-            _anchor_rows = self._refresh_persisted_anchors(conversation_id)
-        except Exception:
-            logger.warning(
-                "CANONICAL_TURN_ANCHOR_REFRESH_FAILED: conv=%s",
-                conversation_id[:12],
-                exc_info=True,
-            )
+        _anchor_rows = 0
+        if _rows_changed:
+            _anchor_rows = -1
+            try:
+                # ``existing`` is the sequence this call started from: overlap
+                # rows are fast-skipped rather than rewritten, and the rows
+                # written above are new, so it still describes exactly what was
+                # persisted before this batch.
+                _anchor_rows = self._refresh_persisted_anchors(conversation_id)
+            except Exception:
+                logger.warning(
+                    "CANONICAL_TURN_ANCHOR_REFRESH_FAILED: conv=%s",
+                    conversation_id[:12],
+                    exc_info=True,
+                )
         if phase_timings is not None:
             phase_timings["anchors_ms"] = (time.perf_counter() - _t_anchor) * 1000.0
             phase_timings["anchor_rows_written"] = float(_anchor_rows)
