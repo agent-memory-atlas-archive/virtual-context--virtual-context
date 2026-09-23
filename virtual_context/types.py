@@ -3263,6 +3263,10 @@ class JudgmentConfig:
     grounding_max_state_bytes: int = 120_000
     topic_pool_size: int = 30
     topic_min_probability: float = 0.5
+    # Where the topic_select pool comes from: "fused" (the multi-signal
+    # ranking) or "embedding" (query similarity to tag-summary embeddings,
+    # which skips the other signals).
+    topic_pool_source: str = "fused"
     seams: dict[str, str] = field(default_factory=dict)  # per-seam mode overrides
 
 

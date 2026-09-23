@@ -342,6 +342,53 @@ class ContextRetriever:
             end_timestamp=ts.updated_at,
         )
 
+    def _judgment_runtime(self):
+        if self.judgment_runtime is not None:
+            return self.judgment_runtime
+        from .judgment import current
+        return current()
+
+    def _embedding_pool_enabled(self) -> bool:
+        from .judgment import JudgmentMode
+
+        rt = self._judgment_runtime()
+        # Shadow keeps the fused ranking so its comparison stays meaningful.
+        return (
+            rt.enabled_for("topic_select")
+            and rt.mode_for("topic_select") is JudgmentMode.JEV
+            and getattr(rt.config, "topic_pool_source", "fused") == "embedding"
+        )
+
+    def _embedding_pool(self, query_embedding: list[float]) -> dict[str, float] | None:
+        """The ``topic_pool_size`` topics most similar to the query, by cosine similarity."""
+        import numpy as np
+
+        loaded = None
+        provider = self._session_state_provider
+        if (
+            provider is not None and self._conversation_id
+            and hasattr(provider, "load_tag_summary_embedding_matrix")
+        ):
+            loaded = provider.load_tag_summary_embedding_matrix(self._conversation_id)
+        if loaded is None:
+            stored = self.store.load_tag_summary_embeddings(conversation_id=self._conversation_id) or {}
+            tags = [tag for tag, values in stored.items() if values]
+            if not tags:
+                return None
+            rows = np.asarray([stored[tag] for tag in tags], dtype=np.float32)
+            norms = np.linalg.norm(rows, axis=1)
+            keep = norms > 0.0
+            loaded = ([t for t, ok in zip(tags, keep.tolist()) if ok], rows[keep] / norms[keep][:, None])
+        tags, matrix = loaded
+        query = np.asarray(query_embedding, dtype=np.float32)
+        norm = float(np.linalg.norm(query))
+        if not tags or norm == 0.0:
+            return None
+        similarities = matrix @ (query / norm)
+        size = max(1, int(self._judgment_runtime().config.topic_pool_size))
+        top = np.argsort(similarities)[::-1][:size]
+        return {tags[i]: float(similarities[i]) for i in top}
+
     def _select_topics(
         self,
         lookup_text: str,
@@ -655,9 +702,15 @@ class ContextRetriever:
             )
         stored_embeddings = None
         query_embedding_context = None
-        if _memo is None and query_embedding is not None:
+        # A judged topic choice can draw its pool from query-to-summary
+        # similarity alone; the other signals and the context vector are then
+        # not computed.
+        _pool_scores = None
+        if _memo is None and query_embedding is not None and self._embedding_pool_enabled():
+            _pool_scores = self._embedding_pool(query_embedding)
+        if _memo is None and query_embedding is not None and _pool_scores is None:
             stored_embeddings = self._load_tag_summary_embedding_snapshot()
-        if _memo is None and query_embedding is not None:
+        if _memo is None and query_embedding is not None and _pool_scores is None:
             query_embedding_context, embed_mode, ctx_embed_ms = (
                 self._build_context_query_embedding(lookup_text, context_turns)
             )
@@ -677,20 +730,23 @@ class ContextRetriever:
             strategy = StrategyConfig()
 
         if _memo is None:
-            scores, breakdowns = score_candidates(
-                query_tags=query_tags,
-                related_tags=related_query_tags,
-                query_text=lookup_text,
-                query_embedding=query_embedding,
-                store=self.store,
-                idf_weights=idf_weights,
-                conversation_id=self._conversation_id,
-                config=self.config.scoring,
-                tag_stats=tag_stats,
-                stored_embeddings=stored_embeddings,
-                query_embedding_context=query_embedding_context,
-                top_k=strategy.max_results,
-            )
+            if _pool_scores is not None:
+                scores, breakdowns = _pool_scores, {}
+            else:
+                scores, breakdowns = score_candidates(
+                    query_tags=query_tags,
+                    related_tags=related_query_tags,
+                    query_text=lookup_text,
+                    query_embedding=query_embedding,
+                    store=self.store,
+                    idf_weights=idf_weights,
+                    conversation_id=self._conversation_id,
+                    config=self.config.scoring,
+                    tag_stats=tag_stats,
+                    stored_embeddings=stored_embeddings,
+                    query_embedding_context=query_embedding_context,
+                    top_k=strategy.max_results,
+                )
             if _memo_key and _provider is not None:
                 _provider.save_retrieval_memo(self._conversation_id, _memo_key, {
                     "tag_result": {

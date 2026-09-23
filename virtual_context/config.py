@@ -194,7 +194,14 @@ def _parse_judgment(raw: dict[str, Any]) -> JudgmentConfig:
         topic_min_probability=float(
             raw.get("topic_min_probability", defaults.topic_min_probability)
         ),
+        topic_pool_source=_topic_pool_source(raw.get("topic_pool_source", defaults.topic_pool_source)),
     )
+
+
+def _topic_pool_source(value: Any) -> str:
+    if value not in ("fused", "embedding"):
+        raise ValueError(f"judgment.topic_pool_source must be 'fused' or 'embedding'; got {value!r}")
+    return value
 
 
 def _build_config(raw: dict[str, Any], *, validate: bool = True) -> VirtualContextConfig:

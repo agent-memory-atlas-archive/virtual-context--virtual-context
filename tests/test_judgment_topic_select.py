@@ -97,3 +97,33 @@ def test_chosen_topic_summaries_lead_the_retrieved_items():
     assert item.ref == "tag-summary-hcg-dosing"
     assert "23 months" in item.summary
     assert item.metadata.canonical_turn_ids == ["ct-hcg-dosing"]
+
+
+def _pool_retriever(mode, source, stored):
+    class _Store:
+        def load_tag_summary_embeddings(self, conversation_id=None):
+            return stored
+
+    retriever = ContextRetriever.__new__(ContextRetriever)
+    retriever.store = _Store()
+    retriever._conversation_id = "conv"
+    retriever._session_state_provider = None
+    rt, _ = _runtime(mode, {}, topic_pool_size=2, topic_pool_source=source)
+    retriever.judgment_runtime = rt
+    return retriever
+
+
+def test_embedding_pool_is_the_most_similar_topics():
+    stored = {"far": [0.0, 1.0], "near": [1.0, 0.1], "mid": [1.0, 1.0]}
+    retriever = _pool_retriever("jev", "embedding", stored)
+    assert retriever._embedding_pool_enabled() is True
+    pool = retriever._embedding_pool([1.0, 0.0])
+    assert list(pool) == ["near", "mid"]
+    assert pool["near"] > pool["mid"]
+
+
+@pytest.mark.parametrize(("mode", "source"), [("legacy", "embedding"), ("jev", "fused"), ("shadow", "embedding")])
+def test_embedding_pool_needs_live_topic_selection_from_embeddings(mode, source):
+    """Legacy and shadow keep the fused pool; so does a live choice from the fused source."""
+    retriever = _pool_retriever(mode, source, {"a": [1.0, 0.0]})
+    assert retriever._embedding_pool_enabled() is False
