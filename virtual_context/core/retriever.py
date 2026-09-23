@@ -412,11 +412,42 @@ class ContextRetriever:
         """The segments whose chunks are most similar to the query, best first."""
         rt = self._judgment_runtime()
         size = int(getattr(rt.config, "segment_pool_size", 0) or 0)
+        if size <= 0 or query_embedding is None or not self._conversation_id:
+            return []
+        native = getattr(self.store, "search_segment_chunks_by_embedding", None)
+        if getattr(self.config, "vector_search_enabled", False) and callable(native):
+            chosen = self._native_segment_refs(native, query_embedding, size)
+        else:
+            chosen = self._matrix_segment_refs(query_embedding, size)
+        segments: list[StoredSummary] = []
+        for ref in chosen:
+            try:
+                segment = self.store.get_segment(ref, conversation_id=self._conversation_id)
+            except Exception:
+                segment = None
+            if segment is not None and (segment.summary or "").strip():
+                segments.append(self._segment_item(segment))
+        return segments
+
+    def _native_segment_refs(self, search, query_embedding: list[float], size: int) -> list[str]:
+        """Distinct segments in the order the database ranks their chunks."""
+        chosen: list[str] = []
+        after = None
+        while len(chosen) < size:
+            page = search(query_embedding, conversation_id=self._conversation_id, limit=200, after=after)
+            if not page:
+                break
+            for row in page:
+                if row["segment_ref"] not in chosen:
+                    chosen.append(row["segment_ref"])
+                    if len(chosen) >= size:
+                        break
+            after = page[-1]["cursor"]
+        return chosen
+
+    def _matrix_segment_refs(self, query_embedding: list[float], size: int) -> list[str]:
         provider = self._session_state_provider
-        if (
-            size <= 0 or query_embedding is None or provider is None or not self._conversation_id
-            or not hasattr(provider, "load_segment_chunk_matrix")
-        ):
+        if provider is None or not hasattr(provider, "load_segment_chunk_matrix"):
             return []
         import numpy as np
 
@@ -436,15 +467,7 @@ class ContextRetriever:
                 chosen.append(ref)
                 if len(chosen) >= size:
                     break
-        segments: list[StoredSummary] = []
-        for ref in chosen:
-            try:
-                segment = self.store.get_segment(ref, conversation_id=self._conversation_id)
-            except Exception:
-                segment = None
-            if segment is not None and (segment.summary or "").strip():
-                segments.append(self._segment_item(segment))
-        return segments
+        return chosen
 
     @staticmethod
     def _segment_item(segment: StoredSegment) -> StoredSummary:

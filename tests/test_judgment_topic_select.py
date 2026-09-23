@@ -8,7 +8,7 @@ import pytest
 from virtual_context.core import judgment
 from virtual_context.core.judgment import build_runtime, select_topics
 from virtual_context.core.retriever import ContextRetriever
-from virtual_context.types import JudgmentConfig, TagSummary
+from virtual_context.types import JudgmentConfig, RetrieverConfig, TagSummary
 
 
 @pytest.fixture(autouse=True)
@@ -170,5 +170,36 @@ def test_segment_candidates_come_from_the_chunk_matrix_best_first():
     retriever.store = _Store()
     retriever._conversation_id = "conv"
     retriever._session_state_provider = _Provider()
+    retriever.config = RetrieverConfig()
     retriever.judgment_runtime, _ = _runtime("jev", {}, segment_pool_size=2)
     assert [s.ref for s in retriever._segment_candidates([1.0, 0.0])] == ["a", "b"]
+
+
+def test_segment_candidates_come_from_database_ranking_when_vector_search_is_on():
+    from virtual_context.types import StoredSegment
+
+    class _Store:
+        def __init__(self):
+            self.calls = []
+
+        def search_segment_chunks_by_embedding(self, query, *, conversation_id, limit, after):
+            self.calls.append(after)
+            pages = [[{"segment_ref": "a", "cursor": 1}, {"segment_ref": "a", "cursor": 2}],
+                     [{"segment_ref": "c", "cursor": 3}, {"segment_ref": "b", "cursor": 4}]]
+            return pages[0] if after is None else pages[1] if after == 2 else []
+
+        def get_segment(self, ref, conversation_id=None):
+            return StoredSegment(ref=ref, summary=f"segment {ref}", summary_tokens=3)
+
+    class _NoMatrix:
+        def load_segment_chunk_matrix(self, conversation_id):
+            raise AssertionError("per-worker chunk matrix was built")
+
+    retriever = ContextRetriever.__new__(ContextRetriever)
+    retriever.store = _Store()
+    retriever._conversation_id = "conv"
+    retriever._session_state_provider = _NoMatrix()
+    retriever.config = RetrieverConfig(vector_search_enabled=True)
+    retriever.judgment_runtime, _ = _runtime("jev", {}, segment_pool_size=2)
+    assert [s.ref for s in retriever._segment_candidates([1.0, 0.0])] == ["a", "c"]
+    assert retriever.store.calls == [None, 2]
