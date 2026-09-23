@@ -468,6 +468,33 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-038 — Embeddings held as Python lists filled worker memory
+
+- **Symptom**: A worker serving a conversation with about 7,500 tags held roughly 460 MB of embeddings
+  (tag-name vectors for inbound tagging and the tag-summary snapshot), and every snapshot read cloned the
+  whole snapshot, pushing the host under its memory floor.
+- **Root cause**: vectors were stored as lists of Python floats (about 32 bytes per value) in the
+  process-wide tag vector cache, the inbound and stored-turn taggers, and the snapshot cache, and the
+  snapshot was copied on every read.
+- **Fix**: vectors are held as shared read-only float32 arrays, packed snapshots decode straight into one
+  float32 matrix whose rows are the per-tag vectors, and snapshot reads copy only the mapping.
+- **Tests**:
+  - `test_embedding_memory_shape.py`
+
+### PROXY-038 — Embeddings held as Python lists filled worker memory
+
+- **Symptom**: The first retrieval for a conversation with about 7,500 tags grew a worker by well over a
+  gigabyte (tag-name vectors for inbound tagging, the tag-summary snapshot and segment chunk vectors),
+  and every snapshot read cloned the snapshot, pushing the host under its memory floor.
+- **Root cause**: vectors were stored in Redis as float64 or JSON and held in process as lists of Python
+  floats (about 32 bytes per value) in several copies, and every read decoded or cloned them again.
+- **Fix**: Redis holds float32 vectors (older float64 and JSON values are read and rewritten), vectors
+  decode to read-only float32 views without intermediate copies, snapshot reads share the vectors, the
+  segment chunk matrix is shared through Redis per snapshot version, and taggers keep one copy of each
+  vector plus a similarity matrix reused until the candidate tags change.
+- **Tests**:
+  - `test_embedding_memory_shape.py`
+
 ### PROXY-037 — Workers kept serving the tag-summary embeddings they loaded first
 
 - **Symptom**: After compaction saved new tag summaries from one worker, the other workers' embedding
@@ -869,6 +896,8 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_embedding_memory_shape.py` | PROXY-038 |
+| `test_embedding_memory_shape.py` | PROXY-038 |
 | `test_tag_summary_embedding_snapshot_freshness.py` | PROXY-037 |
 | `test_completion_audience_stamp.py` | PROXY-036 |
 | `test_out_of_band_route_audience.py` | PROXY-034 |

@@ -327,6 +327,45 @@ class SessionStateProvider:
                     _PROCESS_TAG_VECTOR_CACHE[model_name] = cache
         return cache
 
+    @staticmethod
+    def _vector32(values) -> object:
+        """A read-only float32 array: 4 bytes per value instead of a Python float's 32."""
+        import numpy as np
+
+        vector = np.array(values, dtype=np.float32)
+        vector.setflags(write=False)
+        return vector
+
+    @classmethod
+    def _decode_vector_matrix(cls, raw: object, *, with_header: bool = False):
+        """A packed map as (tags, float32 rows) without building Python lists.
+
+        Float32 values decode to a read-only view onto the Redis bytes.
+        """
+        import numpy as np
+
+        if not isinstance(raw, (bytes, bytearray)):
+            return None
+        marker = bytes(raw[:4])
+        if marker not in (cls._VECTOR_MARKER, cls._LEGACY_VECTOR_MARKER):
+            return None
+        blob = bytes(raw)
+        cut = blob.index(b"\n", 4)
+        header = json.loads(blob[4:cut].decode("utf-8"))
+        tags = [str(tag) for tag in header.get("tags", [])]
+        dims = [int(dim) for dim in header.get("dims", [])]
+        if not tags or len(set(dims)) != 1 or dims[0] <= 0:
+            return None
+        dtype = np.float32 if marker == cls._VECTOR_MARKER else np.float64
+        flat = np.frombuffer(blob, dtype=dtype, offset=cut + 1)
+        if flat.size != len(tags) * dims[0]:
+            return None
+        matrix = flat.reshape(len(tags), dims[0])
+        if dtype is not np.float32:
+            matrix = matrix.astype(np.float32)
+            matrix.setflags(write=False)
+        return (tags, matrix, header) if with_header else (tags, matrix)
+
     def _remember_runtime_tag_embedding(
         self,
         model_name: str,
@@ -338,8 +377,9 @@ class SessionStateProvider:
         # inserting provider's resolved bound; deployments configure one
         # value per process.
         cache = self._runtime_tag_cache(model_name)
+        vector = embedding if getattr(embedding, "dtype", None) is not None and str(embedding.dtype) == "float32" else self._vector32(embedding)
         with _PROCESS_TAG_VECTOR_LOCK:
-            cache[tag] = list(embedding)
+            cache[tag] = vector
             cache.move_to_end(tag)
             while len(cache) > self._tag_embedding_runtime_max_per_model:
                 cache.popitem(last=False)
@@ -364,24 +404,48 @@ class SessionStateProvider:
     ) -> dict[str, list[float]]:
         return {tag: list(values) for tag, values in embeddings.items()}
 
-    # Vectors live in Redis as float64 bytes behind a short marker. JSON float
-    # lists are still read so values written before this encoding keep working.
-    _VECTOR_MARKER = b"VCF1"
+    # Vectors live in Redis as float32 bytes behind a short marker. Values
+    # written as float64 (``VCF1``) or JSON lists are still read, and are
+    # rewritten as float32 when a worker loads them.
+    _VECTOR_MARKER = b"VCF4"
+    _LEGACY_VECTOR_MARKER = b"VCF1"
 
     @classmethod
-    def _encode_vector(cls, values: list[float]) -> bytes:
-        return cls._VECTOR_MARKER + array("d", [float(v) for v in values]).tobytes()
+    def _encode_vector(cls, values) -> bytes:
+        import numpy as np
+
+        return cls._VECTOR_MARKER + np.asarray(values, dtype=np.float32).tobytes()
 
     @classmethod
     def _is_packed(cls, raw: object) -> bool:
+        """Packed in the current float32 format."""
         return isinstance(raw, (bytes, bytearray)) and bytes(raw[:4]) == cls._VECTOR_MARKER
 
     @classmethod
+    def _decode_vector32(cls, raw: object):
+        """A packed value as a read-only float32 array; ``None`` when it is not packed.
+
+        A float32 value is a view onto the Redis bytes, with no copy.
+        """
+        import numpy as np
+
+        if not isinstance(raw, (bytes, bytearray)):
+            return None
+        marker = bytes(raw[:4])
+        if marker == cls._VECTOR_MARKER:
+            vector = np.frombuffer(bytes(raw), dtype=np.float32, offset=4)
+        elif marker == cls._LEGACY_VECTOR_MARKER:
+            vector = np.frombuffer(bytes(raw), dtype=np.float64, offset=4).astype(np.float32)
+            vector.setflags(write=False)
+        else:
+            return None
+        return vector
+
+    @classmethod
     def _decode_vector(cls, raw: object) -> list[float] | None:
-        if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._VECTOR_MARKER:
-            vec = array("d")
-            vec.frombytes(bytes(raw[4:]))
-            return vec.tolist()
+        packed = cls._decode_vector32(raw)
+        if packed is not None:
+            return packed.tolist()
         if isinstance(raw, (bytes, bytearray)):
             raw = raw.decode("utf-8")
         if isinstance(raw, str):
@@ -390,19 +454,32 @@ class SessionStateProvider:
         return None
 
     @classmethod
-    def _encode_vector_map(cls, embeddings: dict[str, list[float]]) -> bytes:
+    def _encode_vector_map(cls, embeddings: dict[str, list[float]], **extra) -> bytes:
+        import numpy as np
+
         tags = list(embeddings)
         dims = [len(embeddings[tag]) for tag in tags]
-        header = json.dumps({"tags": tags, "dims": dims}, default=str).encode("utf-8")
-        flat = array("d")
-        for tag in tags:
-            flat.extend(float(v) for v in embeddings[tag])
-        return cls._VECTOR_MARKER + header + b"\n" + flat.tobytes()
+        header = json.dumps({"tags": tags, "dims": dims, **extra}, default=str).encode("utf-8")
+        flat = b"".join(np.asarray(embeddings[tag], dtype=np.float32).tobytes() for tag in tags)
+        return cls._VECTOR_MARKER + header + b"\n" + flat
 
     @classmethod
     def _decode_vector_map(cls, raw: object) -> dict[str, list[float]] | None:
         """Decode a whole-snapshot value; returns None when it is not a map."""
         if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._VECTOR_MARKER:
+            import numpy as np
+
+            blob = bytes(raw)
+            cut = blob.index(b"\n", 4)
+            header = json.loads(blob[4:cut].decode("utf-8"))
+            flat = np.frombuffer(blob, dtype=np.float32, offset=cut + 1)
+            out32: dict[str, list[float]] = {}
+            pos = 0
+            for tag, dim in zip(header.get("tags", []), header.get("dims", [])):
+                out32[str(tag)] = flat[pos:pos + int(dim)].tolist()
+                pos += int(dim)
+            return out32
+        if isinstance(raw, (bytes, bytearray)) and raw[:4] == cls._LEGACY_VECTOR_MARKER:
             blob = bytes(raw)
             cut = blob.index(b"\n", 4)
             header = json.loads(blob[4:cut].decode("utf-8"))
@@ -1003,7 +1080,7 @@ class SessionStateProvider:
                     missing.append(tag)
                     continue
                 runtime_cache.move_to_end(tag)
-                loaded[tag] = list(cached)
+                loaded[tag] = cached
         if not missing:
             return loaded
 
@@ -1019,12 +1096,17 @@ class SessionStateProvider:
             for tag, raw in zip(missing, raw_values):
                 if raw is None:
                     continue
-                value = self._decode_vector(raw)
-                if isinstance(value, list):
-                    loaded[tag] = value
-                    self._remember_runtime_tag_embedding(model_name, tag, value)
-                    if not self._is_packed(raw):
-                        legacy[tag] = value
+                vector = self._decode_vector32(raw)
+                if vector is None:
+                    value = self._decode_vector(raw)
+                    if not isinstance(value, list):
+                        continue
+                    vector = self._vector32(value)
+                self._remember_runtime_tag_embedding(model_name, tag, vector)
+                loaded[tag] = self._runtime_tag_cache(model_name).get(tag, vector)
+                if not self._is_packed(raw):
+                    # Rewrite once so the next cold load reads packed float32.
+                    legacy[tag] = vector
             if legacy:
                 # Rewrite once so the next cold load reads packed floats.
                 self.save_tag_embeddings(model_name, legacy)
@@ -1067,31 +1149,58 @@ class SessionStateProvider:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _snapshot_entry(version: int, tags: list[str], matrix):
+        """(version, tag -> row view, (searchable tags, their rows)) for one snapshot."""
+        import numpy as np
+
+        mapping = {tag: matrix[i] for i, tag in enumerate(tags)}
+        norms = np.linalg.norm(matrix, axis=1) if len(tags) else np.zeros(0)
+        keep = norms > 0.0
+        if bool(keep.all()):
+            searchable = (list(tags), matrix)
+        else:
+            searchable = ([t for t, ok in zip(tags, keep.tolist()) if ok], matrix[keep])
+        return (version, mapping, searchable)
+
     def _fresh_tag_summary_embedding_entry(
         self,
         conversation_id: str,
-    ) -> tuple[int, dict[str, list[float]], tuple[list[str], object] | None] | None:
+    ) -> tuple[int, dict[str, object], tuple[list[str], object]] | None:
         """This process's copy of the snapshot, reloaded when another worker saved a newer one."""
         version = self._tag_summary_embedding_version(conversation_id)
         cached = self._tag_summary_embedding_snapshot_runtime_cache.get(conversation_id)
         if cached is not None and (version is None or cached[0] == version):
             return cached
         try:
-            raw = self._redis.get(self._tag_summary_embedding_snapshot_key(conversation_id))
+            key = self._tag_summary_embedding_snapshot_key(conversation_id)
+            raw = self._redis.get(key)
             if raw is None:
                 return None
-            # Binary snapshots were normalized when written; only legacy JSON
+            # Packed snapshots were normalized when written; only legacy JSON
             # values are normalized on the way in.
-            normalized = self._decode_vector_map(raw)
-            if normalized is None:
-                return None
-            entry = (version or 0, normalized, None)
+            packed = self._decode_vector_matrix(raw)
+            if packed is not None:
+                entry = self._snapshot_entry(version or 0, *packed)
+            else:
+                normalized = self._decode_vector_map(raw)
+                if normalized is None:
+                    return None
+                import numpy as np
+
+                tags = [tag for tag, values in normalized.items() if len(values)]
+                if len({len(normalized[t]) for t in tags}) <= 1:
+                    matrix = np.asarray([normalized[t] for t in tags], dtype=np.float32).reshape(len(tags), -1)
+                    matrix.setflags(write=False)
+                    entry = self._snapshot_entry(version or 0, tags, matrix)
+                else:
+                    entry = (version or 0, {t: self._vector32(normalized[t]) for t in tags}, ([], None))
             self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = entry
             if not self._is_packed(raw):
-                ttl = self._redis.ttl(self._tag_summary_embedding_snapshot_key(conversation_id))
+                ttl = self._redis.ttl(key)
                 self._redis.set(
-                    self._tag_summary_embedding_snapshot_key(conversation_id),
-                    self._encode_vector_map(normalized),
+                    key,
+                    self._encode_vector_map(entry[1]),
                     ex=ttl if isinstance(ttl, int) and ttl > 0 else self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
                 )
             return entry
@@ -1106,10 +1215,11 @@ class SessionStateProvider:
     def load_tag_summary_embedding_snapshot(
         self,
         conversation_id: str,
-    ) -> dict[str, list[float]] | None:
+    ) -> dict[str, object] | None:
         """Load cached normalized tag-summary embeddings for a conversation."""
         entry = self._fresh_tag_summary_embedding_entry(conversation_id)
-        return self._clone_embedding_map(entry[1]) if entry is not None else None
+        # The vectors are read-only and shared; only the mapping is copied.
+        return dict(entry[1]) if entry is not None else None
 
     def load_tag_summary_embedding_matrix(
         self,
@@ -1117,22 +1227,12 @@ class SessionStateProvider:
     ) -> tuple[list[str], object] | None:
         """Tags and their unit-length embeddings as one float32 matrix, built once per snapshot."""
         entry = self._fresh_tag_summary_embedding_entry(conversation_id)
-        if entry is None:
+        if entry is None or not entry[2][0]:
             return None
-        version, normalized, matrix = entry
-        if matrix is None:
-            import numpy as np
+        return entry[2]
 
-            tags = [tag for tag, values in normalized.items() if values]
-            if not tags:
-                return None
-            rows = np.asarray([normalized[tag] for tag in tags], dtype=np.float32)
-            norms = np.linalg.norm(rows, axis=1)
-            keep = norms > 0.0
-            tags = [tag for tag, ok in zip(tags, keep.tolist()) if ok]
-            matrix = (tags, rows[keep] / norms[keep][:, None])
-            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (version, normalized, matrix)
-        return matrix
+    def _segment_chunk_matrix_key(self, conversation_id: str) -> str:
+        return f"vc:segment_chunk_matrix:{conversation_id}"
 
     def load_segment_chunk_matrix(
         self,
@@ -1141,31 +1241,58 @@ class SessionStateProvider:
         """Segment chunk embeddings as one unit-length float32 matrix.
 
         Row ``i`` belongs to segment ``refs[i]``. Compaction stores chunk
-        embeddings before it saves the tag-summary snapshot, so the matrix is
-        rebuilt from the store whenever that snapshot's version moves.
+        embeddings before it saves the tag-summary snapshot, so the matrix
+        follows that snapshot's version. The first worker to need a version
+        builds it from the store and shares it through Redis.
         """
-        getter = getattr(self._store, "get_segment_chunk_embedding_page", None)
-        if not callable(getter):
-            return None
         version = self._tag_summary_embedding_version(conversation_id)
         cached = self._segment_chunk_matrix_runtime_cache.get(conversation_id)
         if cached is not None and (version is None or cached[0] == version):
             return cached[1], cached[2]
+        key = self._segment_chunk_matrix_key(conversation_id)
+        try:
+            shared = self._decode_vector_matrix(self._redis.get(key), with_header=True)
+        except Exception:
+            shared = None
+        if shared is not None and shared[2].get("version") == (version or 0):
+            refs, matrix, _ = shared
+            self._segment_chunk_matrix_runtime_cache[conversation_id] = (version or 0, refs, matrix)
+            return refs, matrix
+        built = self._build_segment_chunk_matrix(conversation_id)
+        if built is None:
+            return None
+        refs, matrix = built
+        blob = (
+            self._VECTOR_MARKER
+            + json.dumps({"tags": refs, "dims": [int(matrix.shape[1])] * len(refs), "version": version or 0}).encode("utf-8")
+            + b"\n" + matrix.tobytes()
+        )
+        try:
+            self._redis.set(key, blob, ex=self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS)
+        except Exception:
+            logger.warning("Segment chunk matrix save failed for %s", conversation_id[:12], exc_info=True)
+        self._segment_chunk_matrix_runtime_cache[conversation_id] = (version or 0, refs, matrix)
+        return refs, matrix
+
+    def _build_segment_chunk_matrix(self, conversation_id: str) -> tuple[list[str], object] | None:
+        getter = getattr(self._store, "get_segment_chunk_embedding_page", None)
+        if not callable(getter):
+            return None
         import numpy as np
 
         refs: list[str] = []
-        rows: list[list[float]] = []
+        blocks: list[object] = []
         after = None
         try:
             while True:
                 page = getter(conversation_id=conversation_id, limit=200, after=after)
                 if not page:
                     break
-                for row in page:
-                    embedding = row.get("embedding")
-                    if embedding:
-                        refs.append(str(row["segment_ref"]))
-                        rows.append(embedding)
+                rows = [row for row in page if row.get("embedding") is not None and len(row["embedding"])]
+                if rows:
+                    refs.extend(str(row["segment_ref"]) for row in rows)
+                    # One float32 block per page keeps the JSON lists short-lived.
+                    blocks.append(np.asarray([row["embedding"] for row in rows], dtype=np.float32))
                 cursor = page[-1].get("cursor")
                 if cursor is None or (after is not None and tuple(cursor) <= after):
                     break
@@ -1173,14 +1300,14 @@ class SessionStateProvider:
         except Exception:
             logger.warning("Segment chunk embeddings unavailable for %s", conversation_id[:12], exc_info=True)
             return None
-        if not rows:
+        if not blocks:
             return None
-        matrix = np.asarray(rows, dtype=np.float32)
+        matrix = np.concatenate(blocks) if len(blocks) > 1 else blocks[0]
         norms = np.linalg.norm(matrix, axis=1)
         keep = norms > 0.0
         refs = [ref for ref, ok in zip(refs, keep.tolist()) if ok]
         matrix = matrix[keep] / norms[keep][:, None]
-        self._segment_chunk_matrix_runtime_cache[conversation_id] = (version or 0, refs, matrix)
+        matrix.setflags(write=False)
         return refs, matrix
 
     def save_tag_summary_embedding_snapshot(
@@ -1192,10 +1319,12 @@ class SessionStateProvider:
     ) -> None:
         """Save normalized tag-summary embeddings for retrieval scoring."""
         try:
+            import numpy as np
+
             normalized = {
                 str(tag): self._normalize_embedding(list(values))
                 for tag, values in embeddings_by_tag.items()
-                if isinstance(values, list)
+                if values is not None and len(values)
             }
             self._redis.set(
                 self._tag_summary_embedding_snapshot_key(conversation_id),
@@ -1203,9 +1332,15 @@ class SessionStateProvider:
                 ex=ttl_seconds or self._TAG_SUMMARY_EMBEDDING_SNAPSHOT_TTL_SECONDS,
             )
             version = int(self._redis.incr(self._tag_summary_embedding_version_key(conversation_id)))
-            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = (
-                version, self._clone_embedding_map(normalized), None,
-            )
+            tags = list(normalized)
+            if len({len(normalized[t]) for t in tags}) <= 1:
+                matrix = np.asarray([normalized[t] for t in tags], dtype=np.float32).reshape(len(tags), -1)
+                matrix.setflags(write=False)
+                entry = self._snapshot_entry(version, tags, matrix)
+            else:
+                # Vectors of different lengths cannot share one matrix.
+                entry = (version, {t: self._vector32(normalized[t]) for t in tags}, ([], None))
+            self._tag_summary_embedding_snapshot_runtime_cache[conversation_id] = entry
         except Exception:
             logger.warning(
                 "Redis tag-summary embedding snapshot save failed for %s",
@@ -1223,7 +1358,7 @@ class SessionStateProvider:
         embeddings = self._store.load_tag_summary_embeddings(conversation_id=conversation_id)
         self.save_tag_summary_embedding_snapshot(conversation_id, embeddings)
         entry = self._tag_summary_embedding_snapshot_runtime_cache.get(conversation_id)
-        return self._clone_embedding_map(entry[1] if entry is not None else {})
+        return dict(entry[1]) if entry is not None else {}
 
     def delete_tag_summary_embedding_snapshot(self, conversation_id: str) -> None:
         self._tag_summary_embedding_snapshot_runtime_cache.pop(conversation_id, None)

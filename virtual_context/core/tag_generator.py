@@ -523,7 +523,7 @@ class LLMTagGenerator:
                 self._note_breakdown(breakdown, "select_store_tags_cache_load", _load_stage)
             for tag, embedding in cached.items():
                 if embedding is not None:
-                    self._store_tag_embeddings[tag] = list(embedding)
+                    self._store_tag_embeddings[tag] = embedding
             shared_hits = sum(1 for tag in missing if tag in self._store_tag_embeddings)
             missing = [tag for tag in missing if tag not in self._store_tag_embeddings]
 
@@ -534,8 +534,12 @@ class LLMTagGenerator:
             if breakdown is not None:
                 self._note_breakdown(breakdown, "select_store_tags_embed_missing", _embed_stage)
             saved: dict[str, list[float]] = {}
+            import numpy as np
+
             for tag, embedding in zip(missing, embeddings):
-                self._store_tag_embeddings[tag] = embedding
+                vector = np.array(embedding, dtype=np.float32)
+                vector.setflags(write=False)
+                self._store_tag_embeddings[tag] = vector
                 saved[tag] = embedding
             embedded_missing = len(saved)
             if saved and self._save_cached_embeddings is not None:

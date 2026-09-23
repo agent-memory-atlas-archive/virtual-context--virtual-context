@@ -37,7 +37,7 @@ def test_vectors_survive_across_provider_instances():
 
     provider_b, redis_b = _provider()
     loaded = provider_b.load_tag_embeddings("model-x", ["database", "api"])
-    assert loaded == {"database": [0.1, 0.2], "api": [0.3, 0.4]}
+    assert {k: [round(float(x), 6) for x in v] for k, v in loaded.items()} == {"database": [0.1, 0.2], "api": [0.3, 0.4]}
     redis_b.mget.assert_not_called()
     redis_b.get.assert_not_called()
 
@@ -76,4 +76,4 @@ def test_concurrent_inserts_stay_consistent():
 
     cache = provider._runtime_tag_cache("model-x")
     assert len(cache) == 6 * 200
-    assert cache["tag-3-77"] == [3.0, 77.0]
+    assert [float(x) for x in cache["tag-3-77"]] == [3.0, 77.0]

@@ -174,7 +174,7 @@ def compute_embedding_candidates(
             candidate_tags: list[str] = []
             embedding_rows: list[list[float]] = []
             for tag, emb in stored.items():
-                if not emb:
+                if emb is None or len(emb) == 0:
                     continue
                 candidate_tags.append(tag)
                 embedding_rows.append(emb)

@@ -42,6 +42,9 @@ class EmbeddingTagGenerator:
         self.model_name = model_name
         self.similarity_threshold = similarity_threshold
         self._tag_embeddings: dict[str, list[float]] = {}
+        # (candidate tags, their count, float32 matrix), rebuilt only when the
+        # candidate set changes.
+        self._similarity_matrix: tuple[tuple[str, ...], int, object] | None = None
         self._tag_vocabulary: dict[str, int] = {}
         self._load_cached_embeddings = load_cached_embeddings
         self._save_cached_embeddings = save_cached_embeddings
@@ -86,15 +89,22 @@ class EmbeddingTagGenerator:
         breakdown[stage] = round(breakdown.get(stage, 0.0) + elapsed, 1)
 
     @staticmethod
-    def _normalize_embedding(embedding: list[float]) -> list[float]:
-        if not embedding:
+    def _normalize_embedding(embedding) -> list[float]:
+        """Unit-length copy; a read-only float32 array when numpy is available."""
+        if embedding is None or len(embedding) == 0:
             return []
         if np is not None:
             arr = np.asarray(embedding, dtype=np.float32)
             norm = float(np.linalg.norm(arr))
-            if norm == 0.0:
-                return arr.tolist()
-            return (arr / norm).tolist()
+            if (
+                arr is embedding and not arr.flags.writeable
+                and (norm == 0.0 or abs(norm - 1.0) < 1e-4)
+            ):
+                # Already a shared unit-length float32 vector; keep that copy.
+                return arr
+            out = arr / norm if norm != 0.0 else arr.copy()
+            out.setflags(write=False)
+            return out
         norm = math.sqrt(sum(value * value for value in embedding))
         if norm == 0.0:
             return list(embedding)
@@ -121,7 +131,7 @@ class EmbeddingTagGenerator:
                 self._note_breakdown(breakdown, "shared_cache_load", _load_stage)
             for tag, embedding in cached.items():
                 if embedding is not None:
-                    self._tag_embeddings[tag] = self._normalize_embedding(list(embedding))
+                    self._tag_embeddings[tag] = self._normalize_embedding(embedding)
             shared_hits = sum(1 for tag in missing if tag in self._tag_embeddings)
             missing = [tag for tag in missing if tag not in self._tag_embeddings]
 
@@ -138,7 +148,7 @@ class EmbeddingTagGenerator:
                 self._note_breakdown(breakdown, "embed_missing_tags", _embed_stage)
             saved: dict[str, list[float]] = {}
             for tag, embedding in zip(missing, embeddings):
-                normalized = self._normalize_embedding(list(embedding))
+                normalized = self._normalize_embedding(embedding)
                 self._tag_embeddings[tag] = normalized
                 saved[tag] = normalized
             embedded_missing = len(saved)
@@ -229,10 +239,14 @@ class EmbeddingTagGenerator:
             query_norm = float(np.linalg.norm(query_vec))
             if query_norm > 0.0:
                 query_vec = query_vec / query_norm
-                embedding_matrix = np.asarray(
-                    [self._tag_embeddings[tag] for tag in candidate_tags],
-                    dtype=np.float32,
-                )
+                key = tuple(candidate_tags)
+                if self._similarity_matrix is None or self._similarity_matrix[0] != key:
+                    self._similarity_matrix = (
+                        key,
+                        len(key),
+                        np.asarray([self._tag_embeddings[tag] for tag in candidate_tags], dtype=np.float32),
+                    )
+                embedding_matrix = self._similarity_matrix[2]
                 similarities = embedding_matrix @ query_vec
                 matching = np.flatnonzero(similarities >= self.similarity_threshold)
                 if matching.size:
