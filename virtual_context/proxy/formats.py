@@ -617,6 +617,17 @@ def extract_ingestible_messages(
             )
         )
 
+    # Mid-turn on a fresh-thread request: the model's interim notes between
+    # tool rounds are not the message's reply. The turn is stored once, when
+    # it finishes, with those notes folded into the final answer.
+    from .turn_progress import turn_progress
+
+    if ingestible and turn_progress(body, fmt).in_progress:
+        last_user = max((i for i, m in enumerate(ingestible) if m.role == "user"), default=-1)
+        kept = [m for i, m in enumerate(ingestible) if i <= last_user or m.role != "assistant"]
+        stats["skipped_in_progress_assistant_count"] = len(ingestible) - len(kept)
+        ingestible = kept
+
     if current_user_metadata:
         active_user = next(
             (message for message in reversed(ingestible) if message.role == "user"),

@@ -498,13 +498,34 @@ class ContinuationSession:
         self.assert_live()
         return (await asyncio.to_thread(admit_provider_payload, body, self.context.upstream_limit, get_format(self.context.api_format)))[0]
 
-    def persist_completed(self, text, raw_content, *, passthrough=False):
+    def persist_completed(self, text, raw_content, *, passthrough=False, ends_with_tool_calls=False):
         """One completion owner for both transports; incomplete streams never enter."""
         if self.completed:
             return
         self.assert_live()
         self.completed = True
         self.state.engine._engine_state.last_request_time = time.time()
+        from .formats import get_format
+        from .turn_progress import turn_progress
+
+        try:
+            progress = turn_progress(json.loads(self.context.source_body_json), get_format(self.context.api_format))
+        except Exception:
+            progress = None
+        if progress is not None and progress.fresh_thread:
+            if ends_with_tool_calls:
+                # The model handed control back for tools: the turn continues
+                # in the next request and is stored once, when it finishes.
+                return
+            # Notes VC already carries from its own resumed rounds are the same
+            # text the host resent; fold only the ones it does not carry.
+            def _flat(value: str) -> str:
+                return " ".join(value.split())
+
+            carried = _flat(" ".join(self.completed_prefix))
+            interim = [note for note in progress.interim_texts if _flat(note) not in carried]
+            if interim:
+                text = "\n\n".join([*interim, *([text] if text else [])])
         if self.deferred or (not text and not self.completed_prefix):
             return
         if self.completed_prefix:

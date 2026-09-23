@@ -468,6 +468,20 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-033 — A multi-round tool message was stored once per round
+
+- **Symptom**: Each routed Vast message that used tools produced two stored turns: the question plus the
+  first round's interim note ("Checking the bridge and camera paths live.") and the question again plus
+  the final answer; the extra pair also changed retrieval's recent context between rounds.
+- **Root cause**: every round's response was persisted as a finished turn, and ingest paired the user
+  message with the interim note the host resent inside the tool loop.
+- **Fix**: for fresh-thread requests (one real user message), responses that end in tool calls are not
+  persisted, interim notes are not ingested as the reply, and the final response stores the message once
+  with the interim notes folded into the answer. Requests that resend the whole conversation keep their
+  existing behavior.
+- **Tests**:
+  - `test_one_turn_per_message.py`
+
 ### PROXY-032 — Every ingest recomputed groups and anchors over the whole conversation
 
 - **Symptom**: Each call of a routed tool loop spent ~1.7s in ingest with zero rows written:
@@ -801,6 +815,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_one_turn_per_message.py` | PROXY-033 |
 | `test_noop_ingest_skips_whole_conversation_passes.py` | PROXY-032 |
 | `test_retrieval_context_is_worker_independent.py` | PROXY-031 |
 | `test_context_hint_no_inline_rebuild.py` | PROXY-030 |

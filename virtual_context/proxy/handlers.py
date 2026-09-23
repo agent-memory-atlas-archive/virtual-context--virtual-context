@@ -940,7 +940,11 @@ async def _handle_streaming(
                 completion_live = True
                 if session:
                     try:
-                        session.persist_completed(assistant_text, np_content_blocks or None, passthrough=passthrough)
+                        from .turn_progress import stream_ends_with_tool_calls
+                        session.persist_completed(
+                            assistant_text, np_content_blocks or None, passthrough=passthrough,
+                            ends_with_tool_calls=stream_ends_with_tool_calls(raw_events, api_format),
+                        )
                     except ContinuationError:
                         # Provider bytes have already reached the client.
                         # A deletion/epoch change suppresses this side effect
@@ -1083,7 +1087,11 @@ async def _handle_non_streaming(
     assistant_text = session.public_text(response_body) if session and intercept_vc_tools else _extract_assistant_text(response_body, api_format)
     if session and resp.status_code < 300:
         try:
-            session.persist_completed(assistant_text, _extract_assistant_raw_content(response_body, api_format), passthrough=passthrough)
+            from .turn_progress import response_ends_with_tool_calls
+            session.persist_completed(
+                assistant_text, _extract_assistant_raw_content(response_body, api_format), passthrough=passthrough,
+                ends_with_tool_calls=response_ends_with_tool_calls(response_body, api_format),
+            )
             await session.close(consume=True)
         except BaseException:
             await session.close()
