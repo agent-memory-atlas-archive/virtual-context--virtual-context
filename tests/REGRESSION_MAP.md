@@ -5,6 +5,18 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-081 — Segments whose summary held the answer were missed by chunk matching
+
+- **Symptom**: A question answered by one segment's summary ("average muscle 81.7% and fat 14.0% on
+  Aug 12") never reached the judged candidates: its segment ranked 72nd by chunk similarity, outside
+  the 30 candidates.
+- **Root cause**: segment chunks were embedded from the raw turn text only, which buries figures in
+  conversation, while the summary that states them compactly had no embedding.
+- **Fix**: `embed_and_store_chunks` appends the segment summary as the segment's last chunk, and
+  `backfill_segment_summary_chunks` rewrites the chunks of segments stored before that.
+- **Tests**:
+  - `test_segment_summary_chunk.py`
+
 ### BUG-080 — A compaction left running on an idle conversation was taken over forever
 
 - **Symptom**: The stale-lease sweeper logged SWEEPER_TAKEOVER_SPAWN for the same compaction operation
@@ -910,6 +922,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_segment_summary_chunk.py` | BUG-081 |
 | `test_orphaned_compaction_operation.py` | BUG-080 |
 | `test_orphaned_compaction_operation_postgres.py` | BUG-080 |
 | `test_embedding_memory_shape.py` | PROXY-038 |

@@ -464,6 +464,11 @@ class SemanticSearchManager:
                 )
                 return
         chunks = chunk_segment_text(stored.full_text)
+        summary = (stored.summary or "").strip()
+        if summary:
+            # The summary states compactly what the raw turns bury, so it is
+            # embedded as the segment's last chunk and matched like any other.
+            chunks.append(summary)
         if not chunks:
             return
         try:
