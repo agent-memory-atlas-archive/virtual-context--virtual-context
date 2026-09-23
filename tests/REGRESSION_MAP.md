@@ -9,7 +9,7 @@ Use `pytest -m regression` to run all regression tests.
 
 - **Symptom**: after a derived-data reset (which deletes engine state), compaction's segmenter found every turn missing from the turn-tag index (3,515 of 3,515) and called the tagging model again for each, ignoring the tags stored on the canonical rows.
 - **Root cause**: engine start-up rebuilt the turn-tag index from canonical rows only while restoring a saved engine state; with none saved, the index stayed empty.
-- **Fix**: outside provider mode, an engine that starts with an empty index rebuilds it from the conversation's tagged canonical rows. Provider mode keeps restoring through the injected session state.
+- **Fix**: outside provider mode, an engine that starts with an empty index rebuilds it from the conversation's tagged canonical rows, and after any start-up restore the segmenter and retriever (built before the restore replaces the index) are pointed at the restored index. Provider mode keeps restoring through the injected session state.
 - **Tests**:
   - `test_tag_index_restore_without_state.py`
 

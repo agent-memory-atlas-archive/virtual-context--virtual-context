@@ -1698,6 +1698,12 @@ class VirtualContextEngine:
         # Restore paging working set (old snapshots may have empty list)
         ws_entries = getattr(self, "_restored_working_set", [])
         self._paging.working_set = {ws.tag: ws for ws in ws_entries}
+        # The segmenter and retriever are built before the restore, which
+        # replaces the turn-tag index; point them at the one now in use.
+        if hasattr(self, "_segmenter") and hasattr(self._segmenter, "_turn_tag_index"):
+            self._segmenter._turn_tag_index = self._turn_tag_index
+        if hasattr(self, "_retriever"):
+            self._retriever._turn_tag_index = self._turn_tag_index
 
     def _bootstrap_vocabulary(self) -> None:
         """Load historical tag frequencies into the tagger's vocabulary.
