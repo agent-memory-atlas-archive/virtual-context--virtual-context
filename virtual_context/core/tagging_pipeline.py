@@ -286,6 +286,27 @@ class TaggingPipeline:
             derived_id, derived_label = get_origin_channel(message.metadata)
         return (derived_id or stored_id, derived_label or stored_label)
 
+    def _proved_route_audience(self, message: "Message | None") -> str:
+        """The message's raw route when the store proves it for this owner."""
+        from ..types import SOURCE_CONVERSATION_KEY
+
+        metadata = getattr(message, "metadata", None) if message else None
+        raw = metadata.get(SOURCE_CONVERSATION_KEY) if isinstance(metadata, dict) else None
+        resolver = getattr(self._store, "resolve_request_audience", None)
+        if not isinstance(raw, str) or not raw.strip() or not callable(resolver):
+            return ""
+        tenant_id = getattr(self.config, "tenant_id", "")
+        try:
+            proved = resolver(
+                tenant_id if isinstance(tenant_id, str) else "",
+                raw.strip(),
+                self.config.conversation_id,
+            )
+        except Exception:
+            logger.warning("completion audience resolution failed", exc_info=True)
+            return ""
+        return proved.strip() if isinstance(proved, str) else ""
+
     def _actor_source_key(self, message: "Message | None") -> str:
         """Raw caller key to derive an actor platform from, for one message.
 
@@ -485,6 +506,17 @@ class TaggingPipeline:
         user_actor_id = get_actor_id(
             user_msg.metadata, self._actor_source_key(user_msg),
         )
+        # The pair is one request and its response. The request's raw route
+        # is proved through the tenant-scoped resolver exactly as the request
+        # path proves it; an unproved route leaves both rows ineligible. A
+        # proved pair's assistant half was produced in the user half's channel.
+        audience = self._proved_route_audience(user_msg)
+        user_reply_edge = IngestReconciler._derive_reply_edge(
+            user_msg, self._actor_source_key(user_msg), audience,
+        )
+        if audience and not asst_channel_id:
+            asst_channel_id = user_channel_id
+            asst_channel_label = asst_channel_label or user_channel_label
         result = IngestReconciler(self._store, self._semantic).ingest_single(
             conversation_id=self.config.conversation_id,
             user_content=user_msg.content,
@@ -500,6 +532,7 @@ class TaggingPipeline:
             assistant_origin_channel_id=asst_channel_id,
             assistant_origin_channel_label=asst_channel_label,
             user_sender_actor_id=user_actor_id,
+            user_reply_edge=user_reply_edge,
             fact_signals=list(entry.fact_signals or []),
             code_refs=list(entry.code_refs or []),
             expected_lifecycle_epoch=epoch,

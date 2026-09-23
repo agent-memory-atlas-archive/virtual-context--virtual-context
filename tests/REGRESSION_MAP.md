@@ -468,6 +468,18 @@ Use `pytest -m regression` to run all regression tests.
 - **Tests**:
   - `test_engine_integration.py::test_primary_tag_guarantee_ephemeral_gets_tag_summary`
 
+### PROXY-036 — A completed proxy turn was stored without its proved audience
+
+- **Symptom**: A routed turn's rows were stored with attribution version 0 and an assistant row with no
+  channel, so every summary later built from the turn would be withheld.
+- **Root cause**: the turn-complete path appends the pair through `ingest_single` without a reply edge,
+  so no audience was recorded, and the assistant half takes a channel only from its own metadata, which
+  a provider response never carries.
+- **Fix**: the path proves the message's raw route through `resolve_request_audience`, passes the
+  derived edge, and gives a proved pair's assistant half the user half's channel.
+- **Tests**:
+  - `test_completion_audience_stamp.py`
+
 ### PROXY-035 — Summaries of a multi-channel guild were withheld under per-channel scope
 
 - **Symptom**: Every tag and segment summary for a guild conversation rendered as "[summary withheld:
@@ -844,6 +856,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_completion_audience_stamp.py` | PROXY-036 |
 | `test_out_of_band_route_audience.py` | PROXY-034 |
 | `test_one_turn_per_message.py` | PROXY-033 |
 | `test_noop_ingest_skips_whole_conversation_passes.py` | PROXY-032 |
