@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-093 — LLM provider calls inherited the judgment client's 3 s timeout
+
+- **Symptom**: actor card rebuilds failed with `LLM HTTP error ... qwen/qwen3-235b-a22b-2507 3024ms error=The read operation timed out` and `RuntimeError: actor card curation failed`; 65 such timeouts in one day, every one at 3,020 to 3,030 ms, and no card was rebuilt for over ten hours.
+- **Root cause**: providers and the Jev judgment client share one process-wide httpx client, created with the timeout of whichever caller came first. Jev's `timeout_s` is 3.0 and it passes that per request, but providers relied on the client default, so in a worker where a judgment call came first every provider call was capped at 3 s.
+- **Fix**: `BaseProvider.complete` passes `httpx.Timeout(self._timeout, pool=10.0)` on each request.
+- **Tests**:
+  - `test_provider_request_timeout.py`
+
 ### BUG-092 — Tombstone checks parsed every conversation's full session state
 
 - **Symptom**: each tenant membership refresh read 39.9 MB from Redis and parsed 188 session states for one tenant; the two largest states took 140 ms and 105 ms to parse with 50 MB and 35 MB peak allocation, repeated per scoped store every 30 s.
@@ -1014,6 +1022,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_live_turn_restore.py` | BUG-090 |
 | `test_speaker_rows_lean.py` | BUG-091 |
 | `test_session_tombstone_probe.py` | BUG-092 |
+| `test_provider_request_timeout.py` | BUG-093 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

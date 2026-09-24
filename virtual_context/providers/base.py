@@ -107,7 +107,12 @@ class BaseProvider(ABC):
             logger.debug("LLM attempt %d/%d: provider=%s model=%s",
                           attempt + 1, MAX_RETRIES, self._provider_name(), model)
             try:
-                resp = client.post(url, headers=headers, json=payload)
+                # The client is shared with callers that use other timeouts,
+                # so each request carries this provider's own.
+                resp = client.post(
+                    url, headers=headers, json=payload,
+                    timeout=httpx.Timeout(self._timeout, pool=10.0),
+                )
                 elapsed_ms = (time.time() - t0) * 1000
                 data = resp.json()
 
