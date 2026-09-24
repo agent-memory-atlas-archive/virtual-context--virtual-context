@@ -637,6 +637,45 @@ class SessionStateProvider:
         _raw, state = self.load_authoritative_snapshot(conversation_id)
         return state
 
+    _DELETED_TAILS = (
+        (b'"deleted": true}', True),
+        (b'"deleted": false}', False),
+        (b'"deleted":true}', True),
+        (b'"deleted":false}', False),
+    )
+
+    def is_deleted_authoritative(self, conversation_id: str) -> bool:
+        """Return the Redis tombstone flag without loading the state.
+
+        ``SessionState.to_json`` writes ``deleted`` as the last top-level
+        key, so the stored value ends in the flag (with default or compact
+        separators) and only its tail is read.
+        A value with any other layout, or a missing key, is decided by the
+        full authoritative load. Redis failures raise, as in
+        :meth:`load_authoritative_snapshot`.
+        """
+        width = max(len(tail) for tail, _flag in self._DELETED_TAILS)
+        try:
+            tail = self._redis.getrange(
+                self._key(conversation_id), -width, -1,
+            )
+        except Exception:
+            self._degraded = True
+            logger.warning(
+                "Authoritative Redis tombstone read failed for %s",
+                conversation_id[:12],
+                exc_info=True,
+            )
+            raise
+        self._degraded = False
+        if isinstance(tail, str):
+            tail = tail.encode("utf-8")
+        for suffix, deleted in self._DELETED_TAILS:
+            if tail and tail.endswith(suffix):
+                return deleted
+        _raw, state = self.load_authoritative_snapshot(conversation_id)
+        return bool(state is not None and state.deleted)
+
     def load_authoritative_snapshot(
         self,
         conversation_id: str,

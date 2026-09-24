@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-092 — Tombstone checks parsed every conversation's full session state
+
+- **Symptom**: each tenant membership refresh read 39.9 MB from Redis and parsed 188 session states for one tenant; the two largest states took 140 ms and 105 ms to parse with 50 MB and 35 MB peak allocation, repeated per scoped store every 30 s.
+- **Root cause**: the lifecycle tombstone check loaded the authoritative `SessionState` to read its `deleted` flag.
+- **Fix**: `SessionStateProvider.is_deleted_authoritative` reads only the stored value's tail, since `to_json` (and marker repair) write `deleted` as the last top-level key; any other layout or a missing key falls back to the full authoritative load, and Redis errors raise. Of 3,978 stored states, 3,927 ended in the default-separator flag and 51 in the compact form; the tail matched the full parse for every default-separator state under 2 MB.
+- **Tests**:
+  - `test_session_tombstone_probe.py`
+
 ### BUG-091 — Speaker roster scans loaded every content column
 
 - **Symptom**: building the speaker roster took 49 to 261 ms of prompt assembly per request, and listing tool definitions for a large conversation often exceeded 8 s. Through a tunnel, the roster scan for a 7,087-row conversation took 2.6 to 3.7 s.
@@ -1005,6 +1013,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_headless.py` | BUG-001 |
 | `test_live_turn_restore.py` | BUG-090 |
 | `test_speaker_rows_lean.py` | BUG-091 |
+| `test_session_tombstone_probe.py` | BUG-092 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
