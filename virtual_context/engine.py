@@ -1752,7 +1752,13 @@ class VirtualContextEngine:
         """
         # The provider's save is a compare-and-swap on this version; the
         # snapshot extracted later must carry it or every save is rejected.
-        self._session_state_version = int(getattr(state, "version", 0) or 0)
+        incoming_version = int(getattr(state, "version", 0) or 0)
+        if incoming_version and incoming_version <= self._session_state_version:
+            # This engine loaded or wrote that version itself, so what it holds
+            # is at least as new, including work not yet saved. Replacing it
+            # would also swap objects under any background thread using them.
+            return
+        self._session_state_version = incoming_version
         # Engine state markers (including tool_tag_counter for fallback continuity)
         self._engine_state.tool_tag_counter = state.tool_tag_counter
         self._engine_state.compacted_prefix_messages = state.compacted_prefix_messages

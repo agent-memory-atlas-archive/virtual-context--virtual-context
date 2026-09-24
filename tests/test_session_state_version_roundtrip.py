@@ -65,3 +65,19 @@ def test_a_save_from_a_worker_behind_a_newer_save_is_still_rejected(tmp_path):
     b.hydrate_from_session_state(provider.load(CONV))
     a.note_session_state_saved(provider.save(CONV, a.extract_session_state()))
     assert provider.save(CONV, b.extract_session_state()) is None
+
+
+@pytest.mark.regression("BUG-089")
+def test_hydrating_a_version_the_engine_already_holds_keeps_its_newer_work(tmp_path):
+    provider = SessionStateProvider(redis_client=fakeredis.FakeRedis(decode_responses=False), store=None)
+    provider.save(CONV, SessionState(last_indexed_turn=10))
+    engine = _engine(tmp_path, provider)
+    engine.hydrate_from_session_state(provider.load(CONV))
+    engine._engine_state.last_indexed_turn = 15  # background work not yet saved
+    engine.hydrate_from_session_state(provider.load(CONV))
+    assert engine._engine_state.last_indexed_turn == 15
+
+    other = SessionState(last_indexed_turn=30, version=provider.load(CONV).version)
+    provider.save(CONV, other)  # another worker saves a newer version
+    engine.hydrate_from_session_state(provider.load(CONV))
+    assert engine._engine_state.last_indexed_turn == 30

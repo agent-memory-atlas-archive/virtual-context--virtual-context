@@ -2261,6 +2261,9 @@ def test_double_hydrate_with_different_state_is_observable(engine_factory, tmp_p
 
     state_a = _populated_target_session_state(last_completed_turn=100)
     state_b = _populated_target_session_state(last_completed_turn=499)
+    # A different saved state always carries a newer version; hydrating the
+    # version the engine already holds is a no-op.
+    state_b.version = state_a.version + 1
 
     engine.hydrate_from_session_state(state_a)
     # ``last_completed_turn`` is loaded directly from SessionState without
