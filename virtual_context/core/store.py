@@ -362,6 +362,22 @@ class ContextStore(ABC):
         """
         return []
 
+    def find_canonical_source_message_ids(
+        self,
+        conversation_id: str,
+        message_ids: list[str],
+    ) -> set[str]:
+        """Which of ``message_ids`` are already a stored row's source id.
+
+        Backends override this with an indexed lookup; the default scans the
+        recent canonical rows.
+        """
+        wanted = {str(m) for m in message_ids if m}
+        if not wanted:
+            return set()
+        rows = self.get_recent_canonical_turns(conversation_id, limit=2000)
+        return {row.source_message_id for row in rows if row.source_message_id in wanted}
+
     def get_recent_speaker_rows(
         self,
         conversation_id: str,

@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-094 — A turn answered around the engine was never stored on a protected Discord route
+
+- **Symptom**: a Discord turn answered while the engine was unreachable (the host fell back to a direct model call) had no canonical row afterwards, although the next request's replayed history contained it and the model could still quote it.
+- **Root cause**: on source-attested Discord group routes only the current attested turn is admitted; a prepare without a claim returns `source_attestation_required_noop`, so replayed history is context only and a turn that never reached the engine could not be written by any later request. On the Codex harness the history also arrives as one `<conversation_context>` block that ingestion did not split.
+- **Fix**: `_catch_up_host_history` selects replayed user turns whose host `message-speaker` tag names both a Discord actor and a message id, that come after the newest message the window shares with storage, and whose message id is not stored (`find_canonical_source_message_ids`); each is appended with its replies, its own speaker, the current message's channel and the proved audience, before the current turn is admitted. Untagged, lookalike or id-less turns are never admitted, and nothing is admitted without a stored anchor in the window.
+- **Tests**:
+  - `test_history_catchup.py`
+
 ### BUG-093 — LLM provider calls inherited the judgment client's 3 s timeout
 
 - **Symptom**: actor card rebuilds failed with `LLM HTTP error ... qwen/qwen3-235b-a22b-2507 3024ms error=The read operation timed out` and `RuntimeError: actor card curation failed`; 65 such timeouts in one day, every one at 3,020 to 3,030 ms, and no card was rebuilt for over ten hours.
@@ -1023,6 +1031,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_speaker_rows_lean.py` | BUG-091 |
 | `test_session_tombstone_probe.py` | BUG-092 |
 | `test_provider_request_timeout.py` | BUG-093 |
+| `test_history_catchup.py` | BUG-094 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

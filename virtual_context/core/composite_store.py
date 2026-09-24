@@ -548,6 +548,16 @@ class CompositeStore:
             return []
         return getter(conversation_id, limit=limit)
 
+    def find_canonical_source_message_ids(
+        self,
+        conversation_id: str,
+        message_ids: list[str],
+    ) -> set[str]:
+        finder = getattr(self._segments, "find_canonical_source_message_ids", None)
+        if not callable(finder):
+            return set()
+        return finder(conversation_id, message_ids)
+
     def get_recent_speaker_rows(
         self,
         conversation_id: str,

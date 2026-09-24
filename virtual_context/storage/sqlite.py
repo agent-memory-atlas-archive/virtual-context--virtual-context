@@ -11699,6 +11699,27 @@ CREATE TABLE IF NOT EXISTS request_captures (
             protected_recent_turns=protected_recent_turns, limit=limit,
         )
 
+    def find_canonical_source_message_ids(
+        self,
+        conversation_id: str,
+        message_ids: list[str],
+    ) -> set[str]:
+        wanted = sorted({str(m) for m in message_ids if m})
+        if not wanted:
+            return set()
+        conn = self._get_conn()
+        found: set[str] = set()
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            rows = conn.execute(
+                "SELECT DISTINCT source_message_id FROM canonical_turns "
+                "WHERE conversation_id = ? AND source_message_id IN ("
+                + ",".join("?" * len(chunk)) + ")",
+                (conversation_id, *chunk),
+            ).fetchall()
+            found.update(row[0] for row in rows)
+        return found
+
     def get_recent_canonical_turns(
         self,
         conversation_id: str,

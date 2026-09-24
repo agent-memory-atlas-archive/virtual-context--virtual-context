@@ -12596,6 +12596,22 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 limit=int(limit),
             )
 
+    def find_canonical_source_message_ids(
+        self,
+        conversation_id: str,
+        message_ids: list[str],
+    ) -> set[str]:
+        wanted = sorted({str(m) for m in message_ids if m})
+        if not wanted:
+            return set()
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT source_message_id FROM canonical_turns
+                    WHERE conversation_id = %s AND source_message_id = ANY(%s)""",
+                (conversation_id, wanted),
+            ).fetchall()
+        return {row["source_message_id"] for row in rows}
+
     def get_recent_speaker_rows(
         self,
         conversation_id: str,

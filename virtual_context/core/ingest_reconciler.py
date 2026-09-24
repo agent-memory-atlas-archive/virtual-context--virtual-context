@@ -1108,6 +1108,17 @@ class IngestReconciler:
         source_attestation_required = requires_current_source_attestation(
             source_conversation_key
         )
+        if source_attestation_required:
+            self._catch_up_host_history(
+                conversation_id,
+                body=body,
+                fmt=fmt,
+                entries=entries,
+                active_user=active_user,
+                current_user_metadata=current_user_metadata,
+                audience_conversation_id=source_audience_conversation_id,
+                expected_lifecycle_epoch=expected_lifecycle_epoch,
+            )
         if source_attestation_required and not current_source_claim:
             # A prepare that carries no claim (the proxy route never does) is
             # context only; the attested completion admits the turn, and an
@@ -1277,6 +1288,118 @@ class IngestReconciler:
                 _profiles_ms, _wall_ms - _merge_ms - _profiles_ms,
             )
         return result
+
+    def _catch_up_host_history(
+        self,
+        conversation_id: str,
+        *,
+        body: dict,
+        fmt: Any,
+        entries: list,
+        active_user: Any,
+        current_user_metadata: dict | None,
+        audience_conversation_id: str,
+        expected_lifecycle_epoch: int,
+    ) -> int:
+        """Append replayed turns the route never admitted; see history_catchup.
+
+        Runs on protected group routes only, before the current turn's own
+        admission, so caught-up turns land ahead of it. Rows take their speaker
+        and platform message id from the host tag, the channel from the
+        current message (a session replays one channel), and the proved
+        audience; replies carry the audience only.
+        """
+        from .history_catchup import select_missed_turns
+        from ..proxy.formats import extract_ingestible_messages
+        from ..proxy.host_replay import expand_host_replay
+
+        audience = (audience_conversation_id or "").strip()
+        channel_id, channel_label = _ordered_channel(
+            getattr(active_user, "metadata", None)
+        )
+        if not channel_id:
+            channel_id, channel_label = _ordered_channel(current_user_metadata)
+        if not audience or not channel_id:
+            return 0
+        messages = entries
+        expanded, inserted = expand_host_replay(body)
+        if inserted:
+            messages, _stats = extract_ingestible_messages(
+                expanded, fmt, mode="ingest",
+                current_user_metadata=current_user_metadata,
+            )
+        last_user = max(
+            (index for index, message in enumerate(messages) if message.role == "user"),
+            default=None,
+        )
+        if last_user is None:
+            return 0
+        def _text(message: Any) -> str:
+            for value in (message.raw_content, message.content):
+                if isinstance(value, str) and value:
+                    return value
+                if isinstance(value, list):
+                    joined = "".join(
+                        str(part.get("text", "")) for part in value
+                        if isinstance(part, dict)
+                    )
+                    if joined:
+                        return joined
+            return ""
+
+        history = [
+            (message.role, _text(message)) for message in messages[:last_user]
+        ]
+        finder = getattr(self._store, "find_canonical_source_message_ids", None)
+        if not callable(finder):
+            return 0
+        missed = select_missed_turns(
+            history, lambda ids: finder(conversation_id, ids),
+        )
+        if not missed:
+            return 0
+        rows: list[CanonicalTurnRow] = []
+        for turn in missed:
+            speaker = turn.speaker
+            edge = _audience_only_edge(audience)
+            edge["source_message_id"] = speaker.message_id
+            rows.append(self._prepare_message_row(
+                conversation_id,
+                role="user",
+                content=speaker.body,
+                raw_content=speaker.body,
+                sender=speaker.name,
+                origin_channel_id=channel_id,
+                origin_channel_label=channel_label,
+                sender_actor_id=speaker.actor_id,
+                source_claim=None,
+                **edge,
+            ))
+            for reply in turn.replies:
+                rows.append(self._prepare_message_row(
+                    conversation_id,
+                    role="assistant",
+                    content=reply,
+                    raw_content=reply,
+                    sender="",
+                    origin_channel_id=channel_id,
+                    origin_channel_label=channel_label,
+                    sender_actor_id="",
+                    source_claim=None,
+                    **_audience_only_edge(audience),
+                ))
+        self.ingest_prepared_turns(
+            conversation_id,
+            prepared_turns=rows,
+            raw_turn_count=len(rows),
+            expected_lifecycle_epoch=expected_lifecycle_epoch,
+        )
+        logger.info(
+            "HOST_HISTORY_CATCHUP conv=%s turns=%d rows=%d message_ids=%s",
+            conversation_id[:64], len(missed), len(rows),
+            ",".join(turn.speaker.message_id for turn in missed)[:400],
+        )
+        return len(missed)
 
     @staticmethod
     def _derive_reply_edge(
