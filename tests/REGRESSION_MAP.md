@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-090 — Loading a conversation restored everything twice
+
+- **Symptom**: a worker's memory rose by roughly 300 to 700 MB per large conversation it loaded, and several such loads tripped the host memory watchdog. Measured off-box, five large conversations took a process to 839 MB while only 111 MB was live.
+- **Root cause**: provider-mode engines start with an empty turn index, so conversation creation always ran the durable restore (parsing the saved engine-state snapshot and loading every canonical row) before hydration from the shared session state replaced all of it. The discarded load set each worker's memory high-water mark.
+- **Fix**: when the shared session state exists, creation restores only the live and pending turns from uncompacted canonical rows (`restore_live_turns_from_canonical_rows`, gated on `SessionStateProvider.has_state`); the full restore remains the fallback. The same five conversations then take 389 MB.
+- **Tests**:
+  - `test_live_turn_restore.py`
+
 ### BUG-089 — Shared session state froze after a conversation's first save
 
 - **Symptom**: `Save rejected for <conv> — stale version 0 < N` on every session save; the shared state stayed at its first checkpoint (for one conversation, 1,596 indexed turns while 3,532 were stored), so each request re-hydrated that checkpoint and replayed every turn stored after it, with a large memory spike per request.
@@ -987,6 +995,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_live_turn_restore.py` | BUG-090 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

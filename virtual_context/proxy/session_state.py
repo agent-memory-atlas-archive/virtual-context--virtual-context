@@ -597,6 +597,13 @@ class SessionStateProvider:
             return None
         return data.get(marker_name)
 
+    def has_state(self, conversation_id: str) -> bool:
+        """Whether Redis holds session state (live or tombstoned) for the conversation."""
+        try:
+            return bool(self._redis.exists(self._key(conversation_id)))
+        except Exception:
+            return False
+
     def load(self, conversation_id: str) -> SessionState | None:
         """Load session state from Redis. Returns None if not found.
         Returns SessionState(deleted=True) if tombstoned.

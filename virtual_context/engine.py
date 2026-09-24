@@ -1511,6 +1511,43 @@ class VirtualContextEngine:
         )
         return True
 
+    def restore_live_turns_from_canonical_rows(self, conversation_id: str) -> bool:
+        """Restore only the live and pending turns from uncompacted canonical rows.
+
+        For an engine whose turn index and markers come from the shared
+        session state: the full restore loads every canonical row to rebuild
+        what that state replaces. Returns False, restoring nothing, when a
+        row lacks its turn group number (turn numbers would then be positional
+        and wrong for a partial set) or the rows cannot be read.
+        """
+        getter = getattr(self._store, "get_uncompacted_canonical_turns", None)
+        if not callable(getter):
+            return False
+        try:
+            rows = list(getter(conversation_id))
+        except Exception:
+            logger.warning("Failed to load live canonical turns for %s", conversation_id[:12], exc_info=True)
+            return False
+        if any(getattr(row, "turn_group_number", None) is None for row in rows):
+            return False
+        paired_rows = self._group_canonical_rows_into_pairs(rows)
+        self._restored_conversation_history = [
+            (turn_number, *self._pair_payload_from_rows(pair_rows)[:2])
+            for turn_number, pair_rows in paired_rows
+            if pair_rows and all(getattr(row, "tagged_at", None) for row in pair_rows)
+        ]
+        self._restored_pending_turns = [
+            (turn_number, *self._pair_payload_from_rows(pair_rows))
+            for turn_number, pair_rows in paired_rows
+            if not pair_rows or not all(getattr(row, "tagged_at", None) for row in pair_rows)
+        ]
+        logger.info(
+            "Canonical live restore loaded %d live and %d pending turns for conversation %s",
+            len(self._restored_conversation_history), len(self._restored_pending_turns),
+            conversation_id[:12],
+        )
+        return True
+
     def _load_persisted_state(
         self,
         saved: EngineStateSnapshot | None = None,
