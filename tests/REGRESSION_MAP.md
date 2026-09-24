@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-089 — Shared session state froze after a conversation's first save
+
+- **Symptom**: `Save rejected for <conv> — stale version 0 < N` on every session save; the shared state stayed at its first checkpoint (for one conversation, 1,596 indexed turns while 3,532 were stored), so each request re-hydrated that checkpoint and replayed every turn stored after it, with a large memory spike per request.
+- **Root cause**: `SessionStateProvider.save` is a compare-and-swap on `version`, but `extract_session_state` no longer carried the version the engine had loaded, so every snapshot saved as version 0 and was rejected once the stored version reached 1.
+- **Fix**: `hydrate_from_session_state` records the loaded version, `extract_session_state` carries it, and `note_session_state_saved` records the version a successful save wrote.
+- **Tests**:
+  - `test_session_state_version_roundtrip.py`
+
 ### BUG-088 — A conversation without saved engine state was re-tagged from scratch
 
 - **Symptom**: after a derived-data reset (which deletes engine state), compaction's segmenter found every turn missing from the turn-tag index (3,515 of 3,515) and called the tagging model again for each, ignoring the tags stored on the canonical rows.
@@ -979,6 +987,7 @@ Use `pytest -m regression` to run all regression tests.
 | Test File | Bugs Covered |
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
+| `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
 | `test_tag_select_seam.py` | BUG-086 |

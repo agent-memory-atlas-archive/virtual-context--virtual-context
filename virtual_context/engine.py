@@ -339,6 +339,8 @@ class VirtualContextEngine:
         # cloud's ``_hydrate_session_state`` honors this flag and no-ops
         # to avoid clobbering target-keyed state with source-keyed state.
         self._self_hydrated_from_provider = False
+        # Version of the shared session state this engine last loaded or saved.
+        self._session_state_version = 0
 
         if self._session_state_provider is None:
             # Self-managed restore (local proxy mode)
@@ -1748,6 +1750,9 @@ class VirtualContextEngine:
         search operate on the new objects. Follows the same pattern as
         ProxyState._rebind_engine_references().
         """
+        # The provider's save is a compare-and-swap on this version; the
+        # snapshot extracted later must carry it or every save is rejected.
+        self._session_state_version = int(getattr(state, "version", 0) or 0)
         # Engine state markers (including tool_tag_counter for fallback continuity)
         self._engine_state.tool_tag_counter = state.tool_tag_counter
         self._engine_state.compacted_prefix_messages = state.compacted_prefix_messages
@@ -1983,6 +1988,15 @@ class VirtualContextEngine:
                         self.config.conversation_id[:12], exc_info=True,
                     )
 
+    def note_session_state_saved(self, version: int | None) -> None:
+        """Record the version a successful provider save wrote.
+
+        A later save from this engine, before it hydrates again, then
+        compares against its own write instead of being rejected as stale.
+        """
+        if version is not None:
+            self._session_state_version = int(version)
+
     def extract_session_state(self):
         """Extract current checkpoint state for SessionStateProvider save.
 
@@ -2001,6 +2015,7 @@ class VirtualContextEngine:
             last_indexed_turn=self._engine_state.last_indexed_turn,
             checkpoint_version=self._engine_state.checkpoint_version,
             conversation_generation=self._engine_state.conversation_generation,
+            version=getattr(self, "_session_state_version", 0),
             split_processed_tags=set(self._engine_state.split_processed_tags),
             trailing_fingerprint=self._engine_state.trailing_fingerprint,
             provider=self._engine_state.provider,
