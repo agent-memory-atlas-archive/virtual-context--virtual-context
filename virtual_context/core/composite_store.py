@@ -548,6 +548,17 @@ class CompositeStore:
             return []
         return getter(conversation_id, limit=limit)
 
+    def get_recent_speaker_rows(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+    ) -> list[CanonicalTurnRow]:
+        getter = getattr(self._segments, "get_recent_speaker_rows", None)
+        if not callable(getter):
+            return self.get_recent_canonical_turns(conversation_id, limit=limit)
+        return getter(conversation_id, limit=limit)
+
     def get_recent_context_turns(
         self,
         conversation_id: str,

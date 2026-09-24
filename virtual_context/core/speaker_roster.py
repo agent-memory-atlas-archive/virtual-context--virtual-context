@@ -213,7 +213,10 @@ def build_speaker_roster(
         return _EMPTY_BUILD
 
     try:
-        rows = store.get_recent_canonical_turns(owner, limit=int(scan_limit))
+        scan = getattr(store, "get_recent_speaker_rows", None)
+        if not callable(scan):
+            scan = store.get_recent_canonical_turns
+        rows = scan(owner, limit=int(scan_limit))
     except Exception:
         logger.debug(
             "speaker roster membership scan failed; no roster emitted",

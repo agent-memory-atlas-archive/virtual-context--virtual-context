@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-091 — Speaker roster scans loaded every content column
+
+- **Symptom**: building the speaker roster took 49 to 261 ms of prompt assembly per request, and listing tool definitions for a large conversation often exceeded 8 s. Through a tunnel, the roster scan for a 7,087-row conversation took 2.6 to 3.7 s.
+- **Root cause**: `build_speaker_roster` and `resolve_speaker_labels` read the newest 400 logical turns through `get_recent_canonical_turns`, which returns raw and normalized content, tags and fact signals for up to 801 rows through the ordinal view, while the scans use only speaker, channel, audience and ordering fields.
+- **Fix**: `get_recent_speaker_rows` returns the same rows in the same order with content reduced to presence markers; Postgres selects only those columns from the base table (45 to 53 ms for the same conversation through the tunnel), and other backends fall back to the full rows.
+- **Tests**:
+  - `test_speaker_rows_lean.py`
+
 ### BUG-090 — Loading a conversation restored everything twice
 
 - **Symptom**: a worker's memory rose by roughly 300 to 700 MB per large conversation it loaded, and several such loads tripped the host memory watchdog. Measured off-box, five large conversations took a process to 839 MB while only 111 MB was live.
@@ -996,6 +1004,7 @@ Use `pytest -m regression` to run all regression tests.
 |-----------|-------------|
 | `test_headless.py` | BUG-001 |
 | `test_live_turn_restore.py` | BUG-090 |
+| `test_speaker_rows_lean.py` | BUG-091 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

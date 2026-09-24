@@ -12596,6 +12596,65 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 limit=int(limit),
             )
 
+    def get_recent_speaker_rows(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+    ) -> list[CanonicalTurnRow]:
+        """Speaker-scan rows without content columns.
+
+        Selects the same physical rows as ``get_recent_canonical_turns``
+        from the base table, since the turn ordinal is not needed, and
+        returns content as presence markers.
+        """
+        if limit <= 0:
+            return []
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                """SELECT canonical_turn_id, conversation_id, turn_group_number,
+                          sort_key, sender, sender_actor_id, origin_channel_id,
+                          audience_conversation_id, audience_attribution_version,
+                          CASE WHEN COALESCE(user_content, '') = '' THEN ''
+                               WHEN user_content ~ '\\S' THEN 'u'
+                               ELSE ' ' END AS user_marker,
+                          CASE WHEN COALESCE(assistant_content, '') = ''
+                               THEN '' ELSE 'a' END AS assistant_marker
+                     FROM canonical_turns
+                    WHERE conversation_id = %s
+                   ORDER BY sort_key DESC, created_at DESC,
+                            canonical_turn_id DESC
+                    LIMIT %s
+                """,
+                (conversation_id, int(limit) * 2 + 1),
+            ).fetchall()
+        return select_recent_logical_turn_rows(
+            [
+                CanonicalTurnRow(
+                    conversation_id=row["conversation_id"],
+                    canonical_turn_id=str(row["canonical_turn_id"]),
+                    turn_group_number=(
+                        int(row["turn_group_number"])
+                        if row["turn_group_number"] is not None else -1
+                    ),
+                    sort_key=float(row["sort_key"] or 0.0),
+                    user_content=row["user_marker"],
+                    assistant_content=row["assistant_marker"],
+                    sender=row["sender"] or "",
+                    sender_actor_id=row["sender_actor_id"] or "",
+                    origin_channel_id=row["origin_channel_id"] or "",
+                    audience_conversation_id=(
+                        row["audience_conversation_id"] or ""
+                    ),
+                    audience_attribution_version=int(
+                        row["audience_attribution_version"] or 0
+                    ),
+                )
+                for row in rows
+            ],
+            limit=int(limit),
+        )
+
     def has_any_alias(self, conversation_id: str) -> bool:
         """Tier 1 cross-channel-mirror lookup.
 

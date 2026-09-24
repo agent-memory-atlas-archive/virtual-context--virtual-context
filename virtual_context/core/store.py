@@ -362,6 +362,21 @@ class ContextStore(ABC):
         """
         return []
 
+    def get_recent_speaker_rows(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+    ) -> list[CanonicalTurnRow]:
+        """Rows of ``get_recent_canonical_turns`` for speaker scans.
+
+        Same rows in the same order. Backends may populate only the speaker,
+        channel, audience and ordering fields, reducing ``user_content`` and
+        ``assistant_content`` to presence markers (empty, whitespace or
+        non-whitespace) instead of loading every content column.
+        """
+        return self.get_recent_canonical_turns(conversation_id, limit=limit)
+
     def get_recent_context_turns(
         self,
         conversation_id: str,
