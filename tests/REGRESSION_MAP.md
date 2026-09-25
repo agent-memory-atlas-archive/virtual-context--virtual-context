@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-102 — Attached images were sized by base64 length in the protected zone
+
+- **Symptom**: on a tool loop with an attached screenshot the proxy logged `PROTECTED_INTRUSION` at 94-109% of a 200K budget and `PROTECTED_INTRUSION_DEEP` stubbed the loop's own outputs, while the provider billed about 90K input tokens for the same requests; `SANITY_BLOATED_PROTECTED` reported the same inflated size.
+- **Root cause**: `stub_tool_outputs_by_position`, `stub_media_by_position` and the sanity log sized protected messages as serialized bytes / 4, so an image's base64 counted about 180K tokens; the Responses estimator also counted list-shaped tool outputs (such as an image returned by a tool) as raw JSON.
+- **Fix**: all three use the format's media-aware `estimate_message_tokens`, and the Responses estimator sizes tool-output content parts like message content, images by the media estimate.
+- **Tests**:
+  - `test_protected_zone_media_size.py`
+
 ### BUG-101 — The second call of a tool loop undid the first call's reshaping
 
 - **Symptom**: after a cold `FLUSH_GATE` call that logged `CHAIN-COLLAPSE` and offered `vc_restore_tool`, the next call of the same turn logged `WARM ... mutations HELD`, sent the chain uncollapsed with a different tool list, and reported zero cached input tokens.
@@ -1096,6 +1104,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |
+| `test_protected_zone_media_size.py` | BUG-102 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

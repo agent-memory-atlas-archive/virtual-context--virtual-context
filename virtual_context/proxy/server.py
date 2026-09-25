@@ -2261,12 +2261,7 @@ async def prepare_payload(
 
             # 3. Protected zone size
             _prot_msgs = min(12, len(_sanity_msgs))
-            _prot_bytes = sum(
-                len(m.get("content", "")) if isinstance(m.get("content", ""), str)
-                else len(json.dumps(m.get("content", [])))
-                for m in _sanity_msgs[-_prot_msgs:]
-            )
-            _prot_t = _prot_bytes // 4
+            _prot_t = sum(fmt.estimate_message_tokens(m) for m in _sanity_msgs[-_prot_msgs:])
             _prot_pct = (_prot_t / _budget * 100) if _budget else 0
             if _prot_pct > 50:
                 logger.warning(

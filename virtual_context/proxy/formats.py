@@ -3775,6 +3775,8 @@ class OpenAIResponsesFormat(PayloadFormat):
             output = msg.get("output", "")
             if isinstance(output, str):
                 return max(1, self._count(output))
+            if isinstance(output, list):
+                return self._content_parts_tokens(output)
             return max(1, self._count(json.dumps(output, default=str)))
         if item_type == "additional_tools":
             tools = msg.get("tools")
@@ -3791,20 +3793,25 @@ class OpenAIResponsesFormat(PayloadFormat):
             return max(1, self._count(json.dumps(msg, default=str)))
 
         content = msg.get("content", "")
-        text_tokens = 0
         if isinstance(content, str):
-            text_tokens = self._count(content)
-        elif isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") in ("input_text", "output_text", "text"):
-                    text_tokens += self._count(block.get("text", ""))
-                elif block.get("type") == "input_image":
-                    media = self._extract_media_from_block(block)
-                    if media is not None:
-                        text_tokens += _estimate_media_tokens(media)
-        return max(1, text_tokens)
+            return max(1, self._count(content))
+        if isinstance(content, list):
+            return self._content_parts_tokens(content)
+        return 1
+
+    def _content_parts_tokens(self, parts: list) -> int:
+        """Text parts by their text, images by the media estimate, never by base64 length."""
+        total = 0
+        for block in parts:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") in ("input_text", "output_text", "text"):
+                total += self._count(block.get("text", ""))
+            elif block.get("type") == "input_image":
+                media = self._extract_media_from_block(block)
+                if media is not None:
+                    total += _estimate_media_tokens(media)
+        return max(1, total)
 
     def estimate_tools_tokens(self, body: dict) -> int:
         tools = body.get("tools", [])

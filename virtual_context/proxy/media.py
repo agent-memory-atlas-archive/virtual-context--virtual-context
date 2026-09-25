@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 import os
 from io import BytesIO
@@ -172,11 +171,10 @@ def stub_media_by_position(
 
     if _intrusion_threshold > 0 and _context_budget > 0 and protected_recent_turns > 2:
         # Estimate protected zone size
-        _prot_bytes = sum(
-            len(json.dumps(messages[mi], default=str))
+        _prot_tokens = sum(
+            fmt.estimate_message_tokens(messages[mi])
             for mi in soft_protected_indices
         )
-        _prot_tokens = _prot_bytes // 4
         _prot_ratio = _prot_tokens / _context_budget if _context_budget else 0
 
         if _prot_ratio > _intrusion_threshold:

@@ -1527,11 +1527,12 @@ def stub_tool_outputs_by_position(
 
     if _intrusion_threshold > 0 and _context_budget > 0:
         # Estimate protected zone token size
-        _prot_bytes = 0
+        # Media-aware: an attached image counts what the model is billed for
+        # it, not the length of its base64.
+        _prot_tokens = 0
         for ti in range(protected_start, total_turns):
             for idx in turns[ti].indices:
-                _prot_bytes += len(json.dumps(messages[idx], default=str))
-        _prot_tokens = _prot_bytes // 4
+                _prot_tokens += fmt.estimate_message_tokens(messages[idx])
         _prot_ratio = _prot_tokens / _context_budget if _context_budget else 0
 
         if _prot_ratio > _intrusion_threshold:
