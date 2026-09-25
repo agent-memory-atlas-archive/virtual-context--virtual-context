@@ -1059,21 +1059,16 @@ def drop_compacted_turns(
     if not turn_groups:
         return body, 0
 
-    # Separate trailing user-only group (current question) from history.
+    # The trailing group is the turn in progress unless the request ends on an
+    # assistant message: the current question alone on a turn's first call,
+    # the question plus its tool calls and outputs on a continuation. Either
+    # way it is not history, so every call of a turn protects the same window.
     messages = fmt.get_messages(body)
     last_group = turn_groups[-1]
     last_idx = last_group.indices[-1] if last_group.indices else -1
     last_msg = messages[last_idx] if 0 <= last_idx < len(messages) else {}
-    if last_msg.get("role") in ("user", "human"):
-        all_user = all(
-            messages[i].get("role") in ("user", "human")
-            for i in last_group.indices
-            if 0 <= i < len(messages)
-        )
-        if all_user:
-            history_turns = turn_groups[:-1]
-        else:
-            history_turns = turn_groups
+    if last_msg.get("role") not in ("assistant", "model"):
+        history_turns = turn_groups[:-1]
     else:
         history_turns = turn_groups
 

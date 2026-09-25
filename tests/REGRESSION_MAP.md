@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-103 — A tool loop's second call dropped one more history turn than its first
+
+- **Symptom**: on every tool-loop turn the first call logged `DROP-COMPACTED: removed N` and every continuation `removed N+1`; the second call's cached input stopped at the start of the replayed history.
+- **Root cause**: `drop_compacted_turns` excluded the trailing group from history only when it held nothing but user messages; a continuation's trailing group also holds the loop's tool items, so it counted as history and the protected window moved back one turn.
+- **Fix**: the trailing group is treated as the turn in progress whenever the request does not end on an assistant message, so every call of a turn protects the same window.
+- **Tests**:
+  - `test_drop_compacted_in_tool_loop.py`
+
 ### BUG-102 — Attached images were sized by base64 length in the protected zone
 
 - **Symptom**: on a tool loop with an attached screenshot the proxy logged `PROTECTED_INTRUSION` at 94-109% of a 200K budget and `PROTECTED_INTRUSION_DEEP` stubbed the loop's own outputs, while the provider billed about 90K input tokens for the same requests; `SANITY_BLOATED_PROTECTED` reported the same inflated size.
@@ -1105,6 +1113,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |
 | `test_protected_zone_media_size.py` | BUG-102 |
+| `test_drop_compacted_in_tool_loop.py` | BUG-103 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
