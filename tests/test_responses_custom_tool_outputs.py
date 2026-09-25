@@ -176,3 +176,25 @@ def test_an_in_loop_stub_keeps_a_preview_of_the_output():
     assert 'vc_restore_tool(ref="' in outputs["c1"]
     assert "c1 line one" in outputs["c1"]
     assert len(outputs["c1"]) < 600
+
+
+@pytest.mark.regression("BUG-099")
+@pytest.mark.parametrize("context_budget,expected", [
+    (5000, []),
+    (3500, ["c1", "c0", "c2"]),
+])
+def test_a_running_loop_is_stubbed_only_past_the_hard_ceiling(context_budget, expected):
+    import hashlib
+
+    body = _workout_loop_body()
+    fmt = detect_format(body)
+    by_ref = {
+        f"tool_{hashlib.sha256(o.content.encode()).hexdigest()[:12]}": o.call_id
+        for o in fmt.iter_tool_outputs(body)
+    }
+    _body, _count, refs = stub_tool_outputs_by_position(
+        body, fmt, protected_recent_turns=6, turn_tag_index=TurnTagIndex(), store=_Store(),
+        conversation_id="conv", protected_intrusion_threshold=0.6, context_budget=context_budget,
+        deep_intrusion_trigger=1.0,
+    )
+    assert [by_ref[r] for r in refs] == expected

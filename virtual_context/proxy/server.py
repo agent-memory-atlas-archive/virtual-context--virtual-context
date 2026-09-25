@@ -1898,6 +1898,7 @@ async def prepare_payload(
                     conversation_id=state.engine.config.conversation_id,
                     protected_intrusion_threshold=0.6,
                     context_budget=state.engine.config.monitor.context_window,
+                    deep_intrusion_trigger=state.engine.config.monitor.hard_threshold,
                 )
                 _note_prep("protected_tool_stub", _protected_stub_stage)
                 if _prot_stub_count:
@@ -1915,6 +1916,7 @@ async def prepare_payload(
                     conversation_id=state.engine.config.conversation_id,
                     protected_intrusion_threshold=0.6,
                     context_budget=state.engine.config.monitor.context_window,
+                    deep_intrusion_trigger=state.engine.config.monitor.hard_threshold,
                 )
                 _note_prep("tool_stub_outputs", _tool_stub_stage)
                 if _stub_count:
@@ -2151,6 +2153,7 @@ async def prepare_payload(
                             conversation_id=state.engine.config.conversation_id,
                             protected_intrusion_threshold=0.6,
                             context_budget=state.engine.config.monitor.context_window,
+                            deep_intrusion_trigger=state.engine.config.monitor.hard_threshold,
                         )
                         if _sv_stub:
                             _tool_stubs_present = True
@@ -2165,6 +2168,7 @@ async def prepare_payload(
                             conversation_id=state.engine.config.conversation_id,
                             protected_intrusion_threshold=0.6,
                             context_budget=state.engine.config.monitor.context_window,
+                            deep_intrusion_trigger=state.engine.config.monitor.hard_threshold,
                         )
                         if _sv_stub:
                             _tool_stubs_present = True

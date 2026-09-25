@@ -1477,7 +1477,11 @@ def stub_tool_outputs_by_position(
     of ``context_budget``, stubbing reaches into the protected window: first
     the protected turns before the newest two, then, if the zone is still
     over the threshold, the newest turns themselves from oldest output to
-    newest.  The last ``keep_recent_outputs`` tool outputs of the payload
+    newest.  That reach into the newest turns only starts once the zone
+    exceeds ``deep_intrusion_trigger`` of the budget (default: the intrusion
+    threshold) and then stubs it back down to the intrusion threshold, so a
+    running tool loop is left alone until it nears its hard ceiling and is
+    not re-stubbed on every call after.  The last ``keep_recent_outputs`` tool outputs of the payload
     are always sent verbatim, so a tool loop that lives inside one turn
     keeps the results the model is about to act on while its consumed
     outputs shrink to restorable stubs.
@@ -1517,6 +1521,7 @@ def stub_tool_outputs_by_position(
     _intrusion_threshold = kwargs.get("protected_intrusion_threshold", 0.0)
     _context_budget = kwargs.get("context_budget", 0)
     _keep_recent = max(0, int(kwargs.get("keep_recent_outputs", 2)))
+    _deep_trigger = float(kwargs.get("deep_intrusion_trigger", _intrusion_threshold) or 0.0)
     intrusion_active = False
     _prot_tokens = 0
 
@@ -1650,7 +1655,11 @@ def stub_tool_outputs_by_position(
             continue
         _prot_tokens -= _stub(output, turn_idx)
 
-    if intrusion_active and _context_budget > 0:
+    if (
+        intrusion_active
+        and _context_budget > 0
+        and _prot_tokens / _context_budget > max(_deep_trigger, _intrusion_threshold)
+    ):
         _deep_count = 0
         eligible = newest_zone[:-_keep_recent] if _keep_recent else newest_zone
         latest_call = newest_zone[-1][0].call_id if newest_zone else ""

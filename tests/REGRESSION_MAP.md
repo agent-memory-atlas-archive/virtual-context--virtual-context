@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-099 — A running tool loop was stubbed on nearly every call
+
+- **Symptom**: once a tool loop's protected zone passed 60% of `context_window`, every following model call logged `PROTECTED_INTRUSION_DEEP` or `SAFETY-VALVE TOOL-STUB`, the loop's own outputs were replaced with stubs call after call, and the model re-read the same file in small slices; the loop took several times more calls than the same task without stubbing.
+- **Root cause**: the pass that reaches into the newest turns used the same 60% trigger as turn-start trimming and stopped as soon as the zone dipped under it, so a growing loop crossed the trigger again on the next call.
+- **Fix**: `stub_tool_outputs_by_position` takes `deep_intrusion_trigger`; the proxy passes `monitor.hard_threshold`, so the newest turns are only stubbed once the zone exceeds the hard ceiling, and then back down to the intrusion threshold.
+- **Tests**:
+  - `test_responses_custom_tool_outputs.py::test_a_running_loop_is_stubbed_only_past_the_hard_ceiling`
+
 ### BUG-098 — Stubbing inside a tool loop took the outputs the model was still using
 
 - **Symptom**: on a proxied tool loop over the protected-zone threshold, `PROTECTED_INTRUSION_DEEP` stubbed the newest turn's outputs strictly oldest first, including the file the latest call was still working on, and each stub carried only the command; the model re-ran reads it had already made.
@@ -1068,7 +1076,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
 | `test_restore_tool_after_safety_valve.py` | BUG-097 |
-| `test_responses_custom_tool_outputs.py` | BUG-098 |
+| `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
