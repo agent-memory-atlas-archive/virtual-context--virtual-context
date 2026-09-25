@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-104 — Recent turns reached the model twice when the host replayed its history
+
+- **Symptom**: on proxied Discord turns every request logged `PROTECTED_WINDOW_GATE ... merged_rows=6`, and the outbound payload carried the three most recent turns twice: once from the host's history block (with the host speaker tag) and once as stored rows.
+- **Root cause**: `_merge_protected_window` matched stored rows to payload messages only by ids in envelope metadata; turns replayed from the host's session history name their platform message id only in the host speaker tag, so no stored row ever matched them.
+- **Fix**: user messages whose content starts with a host speaker tag index that tag's `message_id` as a source message id for the merge's dedupe; member-typed lookalikes are escaped and do not parse.
+- **Tests**:
+  - `test_protected_window_host_speaker_dedup.py`
+
 ### BUG-103 — A tool loop's second call dropped one more history turn than its first
 
 - **Symptom**: on every tool-loop turn the first call logged `DROP-COMPACTED: removed N` and every continuation `removed N+1`; the second call's cached input stopped at the start of the replayed history.
@@ -1114,6 +1122,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_flush_gate_turn_memo.py` | BUG-101 |
 | `test_protected_zone_media_size.py` | BUG-102 |
 | `test_drop_compacted_in_tool_loop.py` | BUG-103 |
+| `test_protected_window_host_speaker_dedup.py` | BUG-104 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
