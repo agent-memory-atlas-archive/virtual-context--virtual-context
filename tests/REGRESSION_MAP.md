@@ -7,9 +7,9 @@ Use `pytest -m regression` to run all regression tests.
 
 ### BUG-104 — Recent turns reached the model twice when the host replayed its history
 
-- **Symptom**: on proxied Discord turns every request logged `PROTECTED_WINDOW_GATE ... merged_rows=6`, and the outbound payload carried the three most recent turns twice: once from the host's history block (with the host speaker tag) and once as stored rows.
-- **Root cause**: `_merge_protected_window` matched stored rows to payload messages only by ids in envelope metadata; turns replayed from the host's session history name their platform message id only in the host speaker tag, so no stored row ever matched them.
-- **Fix**: user messages whose content starts with a host speaker tag index that tag's `message_id` as a source message id for the merge's dedupe; member-typed lookalikes are escaped and do not parse.
+- **Symptom**: on proxied Discord turns every request logged `RECENT_CONVERSATION_RENDER requester_rows=3` and the outbound payload carried the three most recent turns twice: once expanded from the host's history block (with the host speaker tag) and once as injected stored rows.
+- **Root cause**: the engine's history omits the host's history block, so recent-conversation continuity selected those turns as missing; the proxy expanded the block into real turns and then injected the stored copies beside them without checking the payload.
+- **Fix**: `host_replay.without_host_replayed_groups` drops every stored group whose user message's source message id already appears in a host speaker tag in the outbound body, before injection; member-typed lookalike tags are escaped and do not parse.
 - **Tests**:
   - `test_protected_window_host_speaker_dedup.py`
 

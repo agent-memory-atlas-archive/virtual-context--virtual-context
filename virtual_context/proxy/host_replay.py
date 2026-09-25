@@ -123,3 +123,36 @@ def expand_host_replay(body: dict) -> tuple[dict, int]:
     out = dict(body)
     out["input"] = list(items[:target]) + expanded + [current] + list(items[target + 1:])
     return out, len(expanded)
+
+
+def without_host_replayed_groups(replay_messages: list, body: dict, fmt) -> list:
+    """Stored turn groups minus those the host already replayed into ``body``.
+
+    A replayed user message names its platform message id in the host speaker
+    tag. A stored group whose user message has one of those ids is already in
+    the payload, so it is left out whole; other groups are kept whole.
+    """
+    if not replay_messages:
+        return replay_messages
+    from ..core.history_catchup import read_host_speaker
+
+    replayed = set()
+    for item in fmt.get_messages(body) or []:
+        if isinstance(item, dict) and item.get("role") == "user":
+            speaker = read_host_speaker(_item_text(item))
+            if speaker is not None:
+                replayed.add(speaker.message_id)
+    if not replayed:
+        return replay_messages
+
+    def _meta(message) -> dict:
+        metadata = getattr(message, "metadata", None)
+        return metadata if isinstance(metadata, dict) else {}
+
+    dropped = {
+        _meta(m).get("db_recent_group_key")
+        for m in replay_messages
+        if m.role == "user" and _meta(m).get("source_message_id") in replayed
+    }
+    dropped.discard(None)
+    return [m for m in replay_messages if _meta(m).get("db_recent_group_key") not in dropped]

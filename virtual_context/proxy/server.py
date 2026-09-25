@@ -1983,6 +1983,9 @@ async def prepare_payload(
         if assembled is not None
         else []
     )
+    if _replay_messages:
+        from .host_replay import without_host_replayed_groups
+        _replay_messages = without_host_replayed_groups(_replay_messages, body, fmt)
     # Native requester continuity is injected only into this outbound copy.
     # ``body`` and ``_pre_filter_body`` remain the client-owned shapes used by
     # canonical ingestion, so replayed rows cannot be re-admitted.

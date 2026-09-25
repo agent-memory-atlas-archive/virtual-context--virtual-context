@@ -313,16 +313,7 @@ def _merge_protected_window(
         if isinstance(value, str) and value:
             index.setdefault(value, set()).add(payload_index)
 
-    from .history_catchup import read_host_speaker
-
     for payload_index, message in enumerate(payload_history):
-        # A turn the host replays from its own session history names its
-        # platform message id in the host speaker tag. The host renders that
-        # history into this request, so the turn is model-visible here.
-        if (getattr(message, "role", "") or "").lower() == "user":
-            speaker = read_host_speaker(getattr(message, "content", "") or "")
-            if speaker is not None:
-                _index_value(payload_source_message_indexes, speaker.message_id, payload_index)
         metadata = message.metadata or {}
         if isinstance(metadata, dict):
             # A unified guild engine retains history contributed by every

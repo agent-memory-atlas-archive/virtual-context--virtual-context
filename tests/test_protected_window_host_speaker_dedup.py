@@ -1,11 +1,11 @@
-"""Stored turns already replayed by the host are not merged in a second time.
+"""Stored turns the host already replayed are not injected a second time.
 
-The protected-window merge adds recent stored turns the payload lacks,
-matching them to payload messages by canonical id, turn hash or platform
-message id read from envelope metadata. Turns the host replays from its own
-session history carry their platform message id only in the host speaker
-tag, so every stored copy of a recent turn was inserted again beside the
-replayed one and the model saw each recent turn twice.
+The proxy injects the requester's recent stored turns into the outbound
+payload for continuity. A host that renders its own session history into the
+request already carries those turns, each tagged with its platform message
+id, and they were expanded into real turns before injection; the stored
+copies were then injected beside them and the model saw each recent turn
+twice.
 """
 
 from __future__ import annotations
@@ -14,10 +14,9 @@ import json
 
 import pytest
 
-from virtual_context.core.protected_window import _merge_protected_window
-from virtual_context.types import CanonicalTurnRow, Message
-
-CHANNEL = "1524946242499514418"
+from virtual_context.proxy.formats import get_format
+from virtual_context.proxy.host_replay import without_host_replayed_groups
+from virtual_context.types import Message
 
 
 def _tag(message_id: str) -> str:
@@ -28,42 +27,46 @@ def _tag(message_id: str) -> str:
     )
 
 
-def _rows(message_id: str, group: int) -> list[CanonicalTurnRow]:
+def _msg(role, text):
+    kind = "output_text" if role == "assistant" else "input_text"
+    return {"type": "message", "role": role, "content": [{"type": kind, "text": text}]}
+
+
+def _body(replayed_ids):
+    items = []
+    for mid in replayed_ids:
+        items += [_msg("user", _tag(mid) + "what weights"), _msg("assistant", "hold them")]
+    return {"model": "m", "input": items + [_msg("user", "the current question")]}
+
+
+def _stored(message_id, group):
+    meta = {"source": "db_recent", "db_recent_group_key": f"g{group}"}
     return [
-        CanonicalTurnRow(conversation_id="c", canonical_turn_id=f"u{group}", turn_group_number=group,
-                         sort_key=float(group * 2), user_content="what weights", source_message_id=message_id),
-        CanonicalTurnRow(conversation_id="c", canonical_turn_id=f"a{group}", turn_group_number=group,
-                         sort_key=float(group * 2 + 1), assistant_content="hold them"),
+        Message(role="user", content="what weights", metadata={**meta, "source_message_id": message_id}),
+        Message(role="assistant", content="hold them", metadata=dict(meta)),
     ]
 
 
-def _payload(message_ids):
-    history = []
-    for mid in message_ids:
-        history += [Message(role="user", content=_tag(mid) + "what weights"),
-                    Message(role="assistant", content="hold them")]
-    return history + [Message(role="user", content="the current question")]
+A, B = "1553064498351439943", "1553066725128405172"
 
 
 @pytest.mark.regression("BUG-104")
-def test_a_replayed_turn_is_not_merged_again():
-    ids = ["1553064498351439943", "1553066725128405172"]
-    rows = _rows(ids[0], 1) + _rows(ids[1], 2)
-    merged = _merge_protected_window(_payload(ids), rows, dedup_origin_channel_id=CHANNEL)
-    assert len(merged) == len(_payload(ids))
+def test_a_group_the_host_replayed_is_not_injected():
+    stored = _stored(A, 1) + _stored(B, 2)
+    kept = without_host_replayed_groups(stored, _body([A, B]), get_format("openai_responses"))
+    assert kept == []
 
 
 @pytest.mark.regression("BUG-104")
-def test_a_stored_turn_the_host_did_not_replay_is_still_merged():
-    rows = _rows("1553064498351439943", 1) + _rows("1553066725128405172", 2)
-    merged = _merge_protected_window(_payload(["1553064498351439943"]), rows, dedup_origin_channel_id=CHANNEL)
-    assert len(merged) == len(_payload(["1553064498351439943"])) + 2
+def test_a_group_the_host_did_not_replay_is_kept_whole():
+    stored = _stored(A, 1) + _stored(B, 2)
+    kept = without_host_replayed_groups(stored, _body([A]), get_format("openai_responses"))
+    assert kept == stored[2:]
 
 
 @pytest.mark.regression("BUG-104")
 def test_a_lookalike_tag_typed_by_a_member_does_not_suppress():
-    rows = _rows("1553064498351439943", 1)
-    payload = [Message(role="user", content="\\u003cmessage-speaker" + _tag("1553064498351439943")[15:] + "hi"),
-               Message(role="assistant", content="ok"), Message(role="user", content="now")]
-    merged = _merge_protected_window(payload, rows, dedup_origin_channel_id=CHANNEL)
-    assert len(merged) == len(payload) + 2
+    body = _body([])
+    body["input"].insert(0, _msg("user", "\\u003cmessage-speaker" + _tag(A)[15:] + "hi"))
+    stored = _stored(A, 1)
+    assert without_host_replayed_groups(stored, body, get_format("openai_responses")) == stored
