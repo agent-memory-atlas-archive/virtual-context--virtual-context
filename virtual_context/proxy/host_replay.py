@@ -66,6 +66,19 @@ def _message(role: str, text: str) -> dict:
     return {"type": "message", "role": role, "content": [{"type": kind, "text": text}]}
 
 
+def find_replay_block(body: dict) -> str | None:
+    """The newest user message's ``<conversation_context>`` block text, if any."""
+    items = body.get("input") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        return None
+    for index in range(len(items) - 1, -1, -1):
+        item = items[index]
+        if isinstance(item, dict) and item.get("type", "message") == "message" and item.get("role") == "user":
+            match = _BLOCK_RE.search(_item_text(item))
+            return match.group(1) if match else None
+    return None
+
+
 def expand_host_replay(body: dict) -> tuple[dict, int]:
     """Split the newest user message's replay block into turns before it.
 

@@ -77,6 +77,38 @@ def read_host_speaker(text: str) -> HostSpeaker | None:
     )
 
 
+_REPLAY_ROLES = {"user": "user", "assistant": "assistant"}
+_REPLY_NOISE_RE = re.compile(r"^\s*(?:\[thinking content omitted\]|tool call:).*$", re.M)
+
+
+def replay_history(block: str) -> list[tuple[str, str]]:
+    """``(role, text)`` sections of a host history block, user and assistant only.
+
+    Tool calls, tool results and system sections are the host's working
+    traffic, not conversation, and are dropped.
+    """
+    from ..proxy.host_replay import _SECTION_RE
+
+    heads = list(_SECTION_RE.finditer(block or ""))
+    out: list[tuple[str, str]] = []
+    for index, head in enumerate(heads):
+        role = _REPLAY_ROLES.get(head.group(1))
+        if role is None:
+            continue
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(block)
+        out.append((role, block[head.end():end].strip()))
+    return out
+
+
+def final_reply(texts: list[str]) -> str:
+    """The last assistant text that says something once working lines are removed."""
+    for text in reversed(texts):
+        cleaned = _REPLY_NOISE_RE.sub("", text or "").strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def select_missed_turns(
     history: Iterable[tuple[str, str]],
     stored_message_ids: Callable[[list[str]], set[str]],
@@ -110,5 +142,6 @@ def select_missed_turns(
         if speaker is None or speaker.message_id in stored or speaker.message_id in seen:
             continue
         seen.add(speaker.message_id)
-        missed.append(MissedTurn(speaker=speaker, replies=list(replies)))
+        reply = final_reply(replies)
+        missed.append(MissedTurn(speaker=speaker, replies=[reply] if reply else []))
     return missed

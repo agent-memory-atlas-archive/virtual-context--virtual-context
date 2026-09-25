@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -1321,13 +1322,20 @@ class IngestReconciler:
             channel_id, channel_label = _ordered_channel(current_user_metadata)
         if not audience or not channel_id:
             return 0
+        from .history_catchup import replay_history
+        from ..proxy.host_replay import find_replay_block
+
         messages = entries
+        replayed: list[tuple[str, str]] | None = None
         expanded, inserted = expand_host_replay(body)
         if inserted:
             messages, _stats = extract_ingestible_messages(
                 expanded, fmt, mode="ingest",
                 current_user_metadata=current_user_metadata,
             )
+            block = find_replay_block(body)
+            if block is not None:
+                replayed = replay_history(block)
         last_user = max(
             (index for index, message in enumerate(messages) if message.role == "user"),
             default=None,
@@ -1347,7 +1355,7 @@ class IngestReconciler:
                         return joined
             return ""
 
-        history = [
+        history = replayed if replayed is not None else [
             (message.role, _text(message)) for message in messages[:last_user]
         ]
         finder = getattr(self._store, "find_canonical_source_message_ids", None)
@@ -1356,6 +1364,20 @@ class IngestReconciler:
         missed = select_missed_turns(
             history, lambda ids: finder(conversation_id, ids),
         )
+        if missed:
+            # A turn may already be stored without its platform identity (for
+            # example a completion that could not attest it); its exact text
+            # on a recent row with no source id is that same message.
+            recent = self._store.get_recent_canonical_turns(conversation_id, limit=50)
+            unattributed = {
+                (row.user_content or "").strip() for row in recent
+                if (row.user_content or "").strip()
+                and not (row.source_message_id or "").strip()
+            }
+            missed = [
+                turn for turn in missed
+                if turn.speaker.body.strip() not in unattributed
+            ]
         if not missed:
             return 0
         rows: list[CanonicalTurnRow] = []

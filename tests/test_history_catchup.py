@@ -187,3 +187,32 @@ def test_postgres_finds_stored_source_message_ids():
         with pg_test_conn() as conn:
             conn.execute("DELETE FROM canonical_turns WHERE conversation_id = %s", (conv,))
         store.close()
+
+
+@pytest.mark.regression("BUG-094")
+def test_a_caught_up_reply_is_the_final_answer_without_tool_traffic(tmp_path: Path):
+    store, rec = _seeded(tmp_path)
+    block = (
+        "<conversation_context>\n"
+        f"[user]\n{_tag(ACTOR_A, ANCHOR_ID)}existing question\n"
+        "[assistant]\nexisting answer\n"
+        f"[user]\n{_tag(ACTOR_B, MISSED_ID)}missed question\n"
+        "[assistant]\n[thinking content omitted]\ntool call: exec [input omitted]\n"
+        "[toolResult]\nlots of tool output\n"
+        "[assistant]\n[thinking content omitted]\nthe final answer\n"
+        "</conversation_context>\n\nthe current question"
+    )
+    body = {"model": "m", "input": [{"type": "message", "role": "user",
+                                      "content": [{"type": "input_text", "text": block}]}]}
+    _prepare(rec, body)
+    assert _texts(store)[2:] == ["missed question", "the final answer"]
+
+
+@pytest.mark.regression("BUG-094")
+def test_a_turn_already_stored_without_identity_is_not_duplicated(tmp_path: Path):
+    store, rec = _seeded(tmp_path)
+    store.save_canonical_turn("c", 2, "missed question", "", primary_tag="t", tags=["t"])
+    store.save_canonical_turn("c", 3, "", "a reply recorded differently", primary_tag="t", tags=["t"])
+    before = _texts(store)
+    _prepare(rec, _window(_tag(ACTOR_B, MISSED_ID)))
+    assert _texts(store) == before
