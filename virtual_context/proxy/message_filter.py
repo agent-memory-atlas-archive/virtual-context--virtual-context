@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from bisect import bisect_left
 from collections.abc import Callable
@@ -1585,7 +1586,7 @@ def stub_tool_outputs_by_position(
     stub_count = 0
     stub_refs: list[str] = []
 
-    def _stub(output, turn_idx: int) -> int:
+    def _stub(output, turn_idx: int, preview: bool = False) -> int:
         """Store one output and replace it in place; returns tokens freed."""
         nonlocal stub_count
         call_info = tool_call_map.get(output.call_id, {})
@@ -1617,10 +1618,15 @@ def stub_tool_outputs_by_position(
                     store.link_turn_tool_output(conversation_id, canonical_turn, ref)
                 except Exception:
                     pass  # non-critical
+        preview_part = ""
+        if preview:
+            head = " ".join(content_text[:_STUB_PREVIEW_CHARS].split()).replace('"', "'")
+            preview_part = f' | preview="{head}..."'
         stub_text = (
             f"[tool output ref={ref}"
             f" | tool={tool_name or 'unknown'}"
             f' args="{args_summary}"'
+            f"{preview_part}"
             f' | call vc_restore_tool(ref="{ref}")]'
         )
         fmt.replace_tool_output_content(body, output, stub_text)
@@ -1647,10 +1653,14 @@ def stub_tool_outputs_by_position(
     if intrusion_active and _context_budget > 0:
         _deep_count = 0
         eligible = newest_zone[:-_keep_recent] if _keep_recent else newest_zone
+        latest_call = newest_zone[-1][0].call_id if newest_zone else ""
+        eligible = _order_for_deep_stubbing(
+            eligible, [o for o, _ in outputs], tool_call_map, latest_call,
+        )
         for output, turn_idx in eligible:
             if _prot_tokens / _context_budget <= _intrusion_threshold:
                 break
-            freed = _stub(output, turn_idx)
+            freed = _stub(output, turn_idx, preview=True)
             if freed:
                 _deep_count += 1
                 _prot_tokens -= freed
@@ -1662,6 +1672,54 @@ def stub_tool_outputs_by_position(
             )
 
     return body, stub_count, stub_refs
+
+
+_STUB_PREVIEW_CHARS = 240
+_RESOURCE_RE = re.compile(r"[\w.~@-]*(?:/[\w.~@-]+)+|[\w~@-][\w.~@-]*\.[A-Za-z]\w{0,7}\b")
+
+
+def _call_resources(call_info: dict) -> set[str]:
+    """File-like names a tool call's arguments point at, by final path component."""
+    args = call_info.get("arguments")
+    if not isinstance(args, str):
+        try:
+            args = json.dumps(args, default=str)
+        except (TypeError, ValueError):
+            return set()
+    names = set()
+    for token in _RESOURCE_RE.findall(args or ""):
+        name = token.rstrip("/.").rsplit("/", 1)[-1]
+        if len(name) >= 3:
+            names.add(name)
+    return names
+
+
+def _order_for_deep_stubbing(eligible: list, all_outputs: list, tool_call_map: dict, latest_call: str) -> list:
+    """Stub order inside the newest turns: superseded, then unrelated, then in use.
+
+    An output is superseded when a later call, other than the one whose
+    result the model is acting on now, touched the same resource. Outputs
+    about a resource the latest call touches are the ones the model is most
+    likely still reading, so they go last. Oldest first within each group.
+    """
+    resources = {o.call_id: _call_resources(tool_call_map.get(o.call_id, {})) for o in all_outputs}
+    latest = resources.get(latest_call, set())
+    position = {o.call_id: i for i, o in enumerate(all_outputs)}
+
+    def rank(item):
+        output, _turn = item
+        mine = resources.get(output.call_id, set())
+        here = position.get(output.call_id, -1)
+        superseded = bool(mine) and any(
+            mine & resources.get(o.call_id, set())
+            for o in all_outputs
+            if position[o.call_id] > here and o.call_id != latest_call
+        )
+        if superseded:
+            return 0
+        return 2 if mine & latest else 1
+
+    return sorted(eligible, key=rank)
 
 
 def _extract_tool_metadata_from_chain(

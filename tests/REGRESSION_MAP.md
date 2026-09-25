@@ -5,6 +5,15 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-098 — Stubbing inside a tool loop took the outputs the model was still using
+
+- **Symptom**: on a proxied tool loop over the protected-zone threshold, `PROTECTED_INTRUSION_DEEP` stubbed the newest turn's outputs strictly oldest first, including the file the latest call was still working on, and each stub carried only the command; the model re-ran reads it had already made.
+- **Root cause**: the deep intrusion pass ordered candidates by position only and had no notion of which outputs a later read had replaced or which the current call was building on.
+- **Fix**: `_order_for_deep_stubbing` stubs superseded outputs first (a later call other than the latest touched the same file-like resource), then outputs unrelated to the latest call, then outputs about what the latest call touches, oldest first within each group; stubs made in that pass carry a short preview of the output.
+- **Tests**:
+  - `test_responses_custom_tool_outputs.py::test_in_loop_stubbing_takes_superseded_then_unrelated_outputs_first`
+  - `test_responses_custom_tool_outputs.py::test_an_in_loop_stub_keeps_a_preview_of_the_output`
+
 ### BUG-097 — Outputs stubbed by the safety valve came without the restore tool
 
 - **Symptom**: on proxied tool loops the model received stubbed tool outputs (`SAFETY-VALVE TOOL-STUB`, `PROTECTED_INTRUSION_DEEP`) while the injected catalogue listed no `vc_restore_tool`, and it re-ran the original commands instead.
@@ -1059,6 +1068,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
 | `test_restore_tool_after_safety_valve.py` | BUG-097 |
+| `test_responses_custom_tool_outputs.py` | BUG-098 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

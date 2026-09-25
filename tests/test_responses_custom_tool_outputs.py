@@ -1,6 +1,8 @@
 """Codex tool loops arrive as one Responses turn; VC must still see and shrink them."""
 from __future__ import annotations
 
+import pytest
+
 from virtual_context.core.turn_tag_index import TurnTagIndex
 from virtual_context.proxy.formats import detect_format
 from virtual_context.proxy.message_filter import stub_tool_outputs_by_position
@@ -127,3 +129,50 @@ def test_intrusion_stops_once_zone_fits():
     # stubbing proceeds oldest-first and leaves a contiguous verbatim tail
     flags = [o.content.startswith("[tool output ref=") for o in outputs]
     assert flags == sorted(flags, reverse=True)
+
+
+def _workout_loop_body(size: int = 4000) -> dict:
+    record = "workout-records/1449190067187879997.json"
+    calls = [
+        ("c0", "sed -n '1,240p' /root/.openclaw/agents/vast/agent/workshop-skills/workout-log-grading/SKILL.md"),
+        ("c1", f"jq 'keys' /root/.openclaw/workspace-vast/{record}"),
+        ("c2", f"sed -n '1,300p' {record}"),
+        ("c3", "cat notes/unrelated.md"),
+        ("c4", f"jq '.schedule' {record}"),
+    ]
+    items: list[dict] = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "grade this workout"}]},
+    ]
+    for call_id, command in calls:
+        items.append({"type": "function_call", "call_id": call_id, "name": "exec",
+                      "arguments": '{"command": "' + command.replace('"', '\\"') + '"}'})
+        items.append({"type": "function_call_output", "call_id": call_id,
+                      "output": f"{call_id} line one\n" + (f"{call_id} " * (size // 4))})
+    return {"model": "gpt-5.6-sol", "stream": True, "input": items}
+
+
+def _stub_order(body: dict, context_budget: int) -> tuple[list[str], dict]:
+    import hashlib
+
+    fmt = detect_format(body)
+    contents = {o.call_id: o.content for o in fmt.iter_tool_outputs(body)}
+    by_ref = {f"tool_{hashlib.sha256(c.encode()).hexdigest()[:12]}": cid for cid, c in contents.items()}
+    body, _count, refs = stub_tool_outputs_by_position(
+        body, fmt, protected_recent_turns=6, turn_tag_index=TurnTagIndex(), store=_Store(),
+        conversation_id="conv", protected_intrusion_threshold=0.6, context_budget=context_budget,
+    )
+    return [by_ref[r] for r in refs], {o.call_id: o.content for o in fmt.iter_tool_outputs(body)}
+
+
+@pytest.mark.regression("BUG-098")
+def test_in_loop_stubbing_takes_superseded_then_unrelated_outputs_first():
+    order, _outputs = _stub_order(_workout_loop_body(), context_budget=100)
+    assert order == ["c1", "c0", "c2"]
+
+
+@pytest.mark.regression("BUG-098")
+def test_an_in_loop_stub_keeps_a_preview_of_the_output():
+    _order, outputs = _stub_order(_workout_loop_body(), context_budget=100)
+    assert 'vc_restore_tool(ref="' in outputs["c1"]
+    assert "c1 line one" in outputs["c1"]
+    assert len(outputs["c1"]) < 600
