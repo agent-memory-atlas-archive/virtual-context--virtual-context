@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-101 — The second call of a tool loop undid the first call's reshaping
+
+- **Symptom**: after a cold `FLUSH_GATE` call that logged `CHAIN-COLLAPSE` and offered `vc_restore_tool`, the next call of the same turn logged `WARM ... mutations HELD`, sent the chain uncollapsed with a different tool list, and reported zero cached input tokens.
+- **Root cause**: the gate chose between reshaping (cold) and no reshaping (warm) per request; the turn's first call warmed the cache with a reshaped payload, so its continuations switched to the unreshaped shape the cache did not hold, and the advanced flushed boundary was not shared across workers.
+- **Fix**: `proxy/flush_gate.py` keeps the flushed boundary a turn's first call used, keyed by the user message and turn count in shared session state; a warm continuation of that turn replays the same reshaping with that boundary.
+- **Tests**:
+  - `test_flush_gate_turn_memo.py`
+
 ### BUG-100 — VC's context block was re-billed on every round of a Responses tool loop
 
 - **Symptom**: on a Codex tool loop each model call re-sent VC's context block (about 21K tokens, identical for every round of the turn) outside the cached prefix; rounds after the first reported cached input stopping at the previous round's tool traffic.
@@ -1087,6 +1095,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_restore_tool_after_safety_valve.py` | BUG-097 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
+| `test_flush_gate_turn_memo.py` | BUG-101 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

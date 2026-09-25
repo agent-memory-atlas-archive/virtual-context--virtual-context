@@ -1729,6 +1729,7 @@ async def prepare_payload(
     _note_prep("client_truncation_check", _truncation_stage)
 
     # ── Flush gate: decide whether to apply payload mutations this request ──
+    from .flush_gate import recall_turn_gate, remember_turn_gate, turn_gate_key
     _warm_defer = False
     # The prompt cache is per conversation, not per worker: the last time any
     # worker sent this conversation upstream decides whether it is warm.
@@ -1761,6 +1762,12 @@ async def prepare_payload(
             # warm to avoid flushing mutations on the very first request.
             _cache_age = (time.time() - _last_req) if _last_req > 0 else 0.0
             _should_flush_cold = _cache_age >= _flush_ttl
+            _gate_key = turn_gate_key(fmt.extract_user_message(body), _payload_turns) if state else ""
+            _turn_ft = None
+            if _gate_key and not _should_flush_cold:
+                _turn_ft = await asyncio.to_thread(
+                    recall_turn_gate, _cache_provider, _cache_conv_id, _gate_key,
+                )
 
             if _should_flush_cold:
                 # 5c. Cold-cache fast path — safe to mutate
@@ -1771,6 +1778,20 @@ async def prepare_payload(
                 if _has_engine and _ct > _ft:
                     state.engine._engine_state.flushed_prefix_messages = _ct
                     _ft = _ct
+                if _gate_key:
+                    await asyncio.to_thread(
+                        remember_turn_gate, _cache_provider, _cache_conv_id, _gate_key, flushed_prefix=_ft,
+                    )
+            elif _turn_ft is not None:
+                # A continuation of a turn whose first call reshaped the payload:
+                # reshape the same way so the cache that call wrote still matches.
+                state.engine._engine_state.flushed_prefix_messages = _turn_ft
+                _ft = _turn_ft
+                logger.info(
+                    "FLUSH_GATE: defer=True WARM continuation cache_age=%.1fs ct=%d ft=%d — "
+                    "mutations REPLAYED from the turn's first call",
+                    _cache_age, _ct, _ft,
+                )
             else:
                 # Warm means the provider still holds this prefix: any reshaping now
                 # (dropping compacted turns, collapsing chains, stubbing outputs) moves
