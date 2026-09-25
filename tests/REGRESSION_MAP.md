@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-095 — Assembly re-tokenized the whole facts block for every candidate fact
+
+- **Symptom**: `pool_fill` took about 1.2 s of every assembly on a large conversation (`ASSEMBLE_BREAKDOWN … pool_fill=1227.5ms` with ~400 facts), repeated on every model call of a proxied tool loop.
+- **Root cause**: each candidate fact was charged by tokenizing the whole prospective facts block, so a fill over n candidates tokenized a block of growing size n times.
+- **Fix**: `_fill_pool_measured` fills using the block wrapper plus the sum of the lines' own counts, which equals the whole-block count for a tokenizer that never merges across a line break, and confirms it with one whole-block count of the final block; any mismatch (for example a character estimate) repeats the fill with whole-block measurement, so the selection always equals the exact fill. On 520 real facts the fill went from 773 ms to 5 ms with the same selection and token total.
+- **Tests**:
+  - `test_pool_fill_measurement.py`
+
 ### BUG-094 — A turn answered around the engine was never stored on a protected Discord route
 
 - **Symptom**: a Discord turn answered while the engine was unreachable (the host fell back to a direct model call) had no canonical row afterwards, although the next request's replayed history contained it and the model could still quote it.
@@ -1032,6 +1040,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_session_tombstone_probe.py` | BUG-092 |
 | `test_provider_request_timeout.py` | BUG-093 |
 | `test_history_catchup.py` | BUG-094 |
+| `test_pool_fill_measurement.py` | BUG-095 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

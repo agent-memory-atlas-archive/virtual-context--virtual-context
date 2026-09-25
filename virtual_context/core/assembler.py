@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from dataclasses import dataclass
+
 from .render_escape import escape_host_attribution_markup
 from .rendered_memory import RenderedMemory, rendered_memory
 from .speaker_roster import (
@@ -182,6 +184,20 @@ def format_tag_section(
         f"{body}\n"
         f"</virtual-context>"
     )
+
+
+@dataclass(frozen=True)
+class PoolFill:
+    """What a pool fill admitted and what it charged."""
+
+    tag_sections: dict
+    tag_tokens: int
+    retrieved_tokens: int
+    tags_over_budget: int
+    facts_tokens: int
+    pool_used: int
+    selected_fact_indices: tuple
+    admitted_body: str
 
 
 class ContextAssembler:
@@ -1097,111 +1113,36 @@ class ContextAssembler:
 
         # Greedy fill with soft caps
         _stage = time.monotonic()
-        tag_tokens = 0
-        retrieved_tokens = 0
-        tags_over_budget = 0
-        facts_tokens = 0
-        pool_used = 0
-        tag_sections: dict[str, str] = {}
-        selected_fact_indices: list[int] = []
-        _admitted_body = ""
-
-        for score, kind, key, tokens in scored_items:
-            if kind == "tag":
-                if tag_tokens + tokens > tag_cap:
-                    logger.info("Tag '%s' SKIP (tag cap: %d+%d > %d)", key, tag_tokens, tokens, tag_cap)
-                    continue
-                _paged_in = bool(working_set and key in working_set)
-                # The top-scored retrieved section is always admitted: a budget
-                # scaled down under high utilization must not leave the model
-                # with no retrieved evidence at all. Only a section the retriever
-                # scored can take that guarantee; an alias ride-along carries no
-                # score and sorts on the default priority, above real scores.
-                _floor_eligible = (
-                    not retrieval_result.retrieval_scores
-                    or key in retrieval_result.retrieval_scores
-                )
-                if (
-                    not _paged_in
-                    and (retrieved_tokens or not _floor_eligible)
-                    and retrieved_tokens + tokens > retrieved_cap
-                ):
-                    tags_over_budget += 1
-                    logger.info("Tag '%s' SKIP (retrieval budget: %d+%d > %d rendered)",
-                                key, retrieved_tokens, tokens, retrieved_cap)
-                    continue
-                if pool_used + tokens > pool:
-                    logger.info("Tag '%s' SKIP (pool: need %dt, have %dt remaining of %dt)",
-                                key, tokens, pool - pool_used, pool)
-                    continue
-                tag_sections[key] = _built_sections[key]
-                tag_tokens += tokens
-                if not _paged_in:
-                    retrieved_tokens += tokens
-                pool_used += tokens
-                logger.info("Pool: '%s' INCLUDE (tag, score=%.2f, %dt, pool %d/%dt)",
-                            key, score, tokens, pool_used, pool)
-            else:  # fact
-                # Charge what the block will actually cost with this line in
-                # it. A sum of per-line counts is not that cost: it omits the
-                # newline the renderer joins on and the XML wrapper, and an
-                # estimator that divides characters truncates each line's
-                # remainder separately, so the shortfall grows with every line
-                # admitted. The block then ships over this cap and the excess
-                # is taken from whatever is budgeted after it. Measuring the
-                # assembled block is affordable because the block never grows
-                # past the cap.
-                _line = _fact_lines[int(key)]
-                # ``tokens`` is the line charged with its separator and never
-                # exceeds the line's true marginal cost in the block, so a
-                # candidate that already breaks the cap by that measure breaks
-                # it by the real one too. Skipping here keeps the measurement
-                # below off the path for candidates that cannot fit.
-                if facts_tokens + tokens > facts_cap:
-                    logger.debug("Fact #%s SKIP (facts cap: %d+%d > %d)", key, facts_tokens, tokens, facts_cap)
-                    continue
-                _prospective = self.token_counter(
-                    self._facts_block_from_body(_admitted_body, _line)
-                )
-                _marginal = _prospective - facts_tokens
-                if _prospective > facts_cap:
-                    logger.debug("Fact #%s SKIP (facts cap: %d > %d)", key, _prospective, facts_cap)
-                    continue
-                if pool_used + _marginal > pool:
-                    logger.debug("Fact #%s SKIP (pool: need %dt, have %dt remaining)", key, _marginal, pool - pool_used)
-                    continue
-                _admitted_body = _line if not _admitted_body else _admitted_body + "\n" + _line
-                selected_fact_indices.append(int(key))
-                facts_tokens = _prospective
-                pool_used += _marginal
-        _note("pool_fill", _stage)
-
-        # Dense-priority fill: after the legacy floor is selected, add
-        # dense-only facts by dense rank while budget allows. Never evicts a
-        # selected tag section or floor fact.
+        _dense_order = None
         if _dense_mode:
             _id_to_index = {f.id: i for i, f in enumerate(retrieval_result.facts)}
-            _selected_set = set(selected_fact_indices)
-            for _fid, _rank in sorted(_dense_rank_by_id.items(), key=lambda kv: kv[1]):
-                _i = _id_to_index.get(_fid)
-                if _i is None or _i in _selected_set:
-                    continue
-                _line = _fact_lines[_i]
-                if facts_tokens + _fact_tokens[_i] > facts_cap:
-                    continue
-                _prospective = self.token_counter(
-                    self._facts_block_from_body(_admitted_body, _line)
-                )
-                _marginal = _prospective - facts_tokens
-                if _prospective > facts_cap:
-                    continue
-                if pool_used + _marginal > pool:
-                    continue
-                _admitted_body = _line if not _admitted_body else _admitted_body + "\n" + _line
-                selected_fact_indices.append(_i)
-                _selected_set.add(_i)
-                facts_tokens = _prospective
-                pool_used += _marginal
+            _dense_order = [
+                _id_to_index[_fid]
+                for _fid, _rank in sorted(_dense_rank_by_id.items(), key=lambda kv: kv[1])
+                if _fid in _id_to_index
+            ]
+        _fill = self._fill_pool_measured(
+            scored_items,
+            tag_cap=tag_cap,
+            retrieved_cap=retrieved_cap,
+            pool=pool,
+            facts_cap=facts_cap,
+            working_set=working_set,
+            retrieval_scores=retrieval_result.retrieval_scores,
+            built_sections=_built_sections,
+            fact_lines=_fact_lines,
+            fact_tokens=_fact_tokens,
+            dense_order=_dense_order,
+        )
+        tag_sections = _fill.tag_sections
+        tag_tokens = _fill.tag_tokens
+        retrieved_tokens = _fill.retrieved_tokens
+        tags_over_budget = _fill.tags_over_budget
+        facts_tokens = _fill.facts_tokens
+        pool_used = _fill.pool_used
+        selected_fact_indices = list(_fill.selected_fact_indices)
+        _admitted_body = _fill.admitted_body
+        _note("pool_fill", _stage)
 
         logger.info("Pool allocation: tags=%dt (%d sections), facts=%dt (%d facts), total=%d/%dt",
                     tag_tokens, len(tag_sections), facts_tokens, len(selected_fact_indices),
@@ -1639,6 +1580,167 @@ class ContextAssembler:
             presented_tags=_presented_tags,
             assembly_breakdown=_breakdown,
         )
+
+    def _fill_pool(
+        self,
+        scored_items: list,
+        *,
+        tag_cap: int,
+        retrieved_cap: int,
+        pool: int,
+        facts_cap: int,
+        working_set,
+        retrieval_scores,
+        built_sections: dict,
+        fact_lines: dict,
+        fact_tokens: dict,
+        dense_order: list[int] | None,
+        exact: bool,
+    ) -> "PoolFill":
+        """Admit tag sections and fact lines into the pool by score.
+
+        ``exact`` measures each prospective facts block by tokenizing it
+        whole; otherwise a block is measured as its wrapper plus the sum of
+        its lines' counts, which equals the whole-block count for a
+        tokenizer that never merges across a line break. Callers use
+        :meth:`_fill_pool_measured`, which confirms that equality.
+        """
+        wrapper_tokens = 0 if exact else (
+            self.token_counter("<facts>\n") + self.token_counter("</facts>")
+        )
+        admitted_sum = 0
+
+        def measure(body: str, line: str, index: int) -> int:
+            if exact:
+                return self.token_counter(self._facts_block_from_body(body, line))
+            return wrapper_tokens + admitted_sum + fact_tokens[index]
+
+        tag_tokens = 0
+        retrieved_tokens = 0
+        tags_over_budget = 0
+        facts_tokens = 0
+        pool_used = 0
+        tag_sections: dict[str, str] = {}
+        selected_fact_indices: list[int] = []
+        _admitted_body = ""
+        for score, kind, key, tokens in scored_items:
+            if kind == "tag":
+                if tag_tokens + tokens > tag_cap:
+                    logger.info("Tag '%s' SKIP (tag cap: %d+%d > %d)", key, tag_tokens, tokens, tag_cap)
+                    continue
+                _paged_in = bool(working_set and key in working_set)
+                # The top-scored retrieved section is always admitted: a budget
+                # scaled down under high utilization must not leave the model
+                # with no retrieved evidence at all. Only a section the retriever
+                # scored can take that guarantee; an alias ride-along carries no
+                # score and sorts on the default priority, above real scores.
+                _floor_eligible = (
+                    not retrieval_scores
+                    or key in retrieval_scores
+                )
+                if (
+                    not _paged_in
+                    and (retrieved_tokens or not _floor_eligible)
+                    and retrieved_tokens + tokens > retrieved_cap
+                ):
+                    tags_over_budget += 1
+                    logger.info("Tag '%s' SKIP (retrieval budget: %d+%d > %d rendered)",
+                                key, retrieved_tokens, tokens, retrieved_cap)
+                    continue
+                if pool_used + tokens > pool:
+                    logger.info("Tag '%s' SKIP (pool: need %dt, have %dt remaining of %dt)",
+                                key, tokens, pool - pool_used, pool)
+                    continue
+                tag_sections[key] = built_sections[key]
+                tag_tokens += tokens
+                if not _paged_in:
+                    retrieved_tokens += tokens
+                pool_used += tokens
+                logger.info("Pool: '%s' INCLUDE (tag, score=%.2f, %dt, pool %d/%dt)",
+                            key, score, tokens, pool_used, pool)
+            else:  # fact
+                # Charge what the block will actually cost with this line in
+                # it. A sum of per-line counts is not that cost: it omits the
+                # newline the renderer joins on and the XML wrapper, and an
+                # estimator that divides characters truncates each line's
+                # remainder separately, so the shortfall grows with every line
+                # admitted. The block then ships over this cap and the excess
+                # is taken from whatever is budgeted after it. Measuring the
+                # assembled block is affordable because the block never grows
+                # past the cap.
+                _line = fact_lines[int(key)]
+                # ``tokens`` is the line charged with its separator and never
+                # exceeds the line's true marginal cost in the block, so a
+                # candidate that already breaks the cap by that measure breaks
+                # it by the real one too. Skipping here keeps the measurement
+                # below off the path for candidates that cannot fit.
+                if facts_tokens + tokens > facts_cap:
+                    logger.debug("Fact #%s SKIP (facts cap: %d+%d > %d)", key, facts_tokens, tokens, facts_cap)
+                    continue
+                _prospective = measure(_admitted_body, _line, int(key))
+                _marginal = _prospective - facts_tokens
+                if _prospective > facts_cap:
+                    logger.debug("Fact #%s SKIP (facts cap: %d > %d)", key, _prospective, facts_cap)
+                    continue
+                if pool_used + _marginal > pool:
+                    logger.debug("Fact #%s SKIP (pool: need %dt, have %dt remaining)", key, _marginal, pool - pool_used)
+                    continue
+                _admitted_body = _line if not _admitted_body else _admitted_body + "\n" + _line
+                admitted_sum += fact_tokens[int(key)]
+                selected_fact_indices.append(int(key))
+                facts_tokens = _prospective
+                pool_used += _marginal
+
+        # Dense-priority fill: after the legacy floor is selected, add
+        # dense-only facts by dense rank while budget allows. Never evicts a
+        # selected tag section or floor fact.
+        if dense_order is not None:
+            _selected_set = set(selected_fact_indices)
+            for _i in dense_order:
+                if _i in _selected_set:
+                    continue
+                _line = fact_lines[_i]
+                if facts_tokens + fact_tokens[_i] > facts_cap:
+                    continue
+                _prospective = measure(_admitted_body, _line, _i)
+                _marginal = _prospective - facts_tokens
+                if _prospective > facts_cap:
+                    continue
+                if pool_used + _marginal > pool:
+                    continue
+                _admitted_body = _line if not _admitted_body else _admitted_body + "\n" + _line
+                admitted_sum += fact_tokens[_i]
+                selected_fact_indices.append(_i)
+                _selected_set.add(_i)
+                facts_tokens = _prospective
+                pool_used += _marginal
+        return PoolFill(
+            tag_sections=tag_sections,
+            tag_tokens=tag_tokens,
+            retrieved_tokens=retrieved_tokens,
+            tags_over_budget=tags_over_budget,
+            facts_tokens=facts_tokens,
+            pool_used=pool_used,
+            selected_fact_indices=tuple(selected_fact_indices),
+            admitted_body=_admitted_body,
+        )
+
+    def _fill_pool_measured(self, scored_items: list, **kwargs) -> "PoolFill":
+        """Fill with summed line counts, falling back to whole-block counts.
+
+        The summed fill is confirmed by one whole-block count of its final
+        facts block; a tokenizer whose counts do not add up across lines (for
+        example a character estimate) fails that check and the fill is
+        repeated with whole-block measurement, so the result always matches
+        the exact fill.
+        """
+        fill = self._fill_pool(scored_items, exact=False, **kwargs)
+        if not fill.admitted_body:
+            return fill
+        whole = self.token_counter("<facts>\n" + fill.admitted_body + "\n</facts>")
+        if whole == fill.facts_tokens:
+            return fill
+        return self._fill_pool(scored_items, exact=True, **kwargs)
 
     @staticmethod
     def _facts_block_from_body(body: str, extra_line: str) -> str:
