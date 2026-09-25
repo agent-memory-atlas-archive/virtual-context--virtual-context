@@ -199,7 +199,12 @@ class RetrievalAssembler:
         """
         provider = getattr(self._retriever, "_session_state_provider", None)
         conversation_id = getattr(self._retriever, "_conversation_id", "") or ""
-        if provider is None or not conversation_id or not hasattr(provider, "load_retrieval_memo"):
+        if (
+            provider is None
+            or not conversation_id
+            or not callable(getattr(type(provider), "load_retrieval_memo", None))
+            or not all(callable(getattr(f, "format_for_prompt", None)) for f in facts)
+        ):
             return self._fact_curator.curate(facts, question=question)
         import hashlib
         import json as _json
