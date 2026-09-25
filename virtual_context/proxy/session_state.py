@@ -277,11 +277,17 @@ class SessionStateProvider:
         return f"vc:retrieval_memo:{conversation_id}:{memo_key}"
 
     def load_retrieval_memo(self, conversation_id: str, memo_key: str) -> dict | None:
-        """Tagging and scoring results for one retrieval input, shared across workers."""
+        """Tagging and scoring results for one retrieval input, shared across workers.
+
+        A read extends the entry's life, so a tool loop that keeps resending
+        the same turn keeps its memo for as long as the loop runs.
+        """
         try:
-            raw = self._redis.get(self._retrieval_memo_key(conversation_id, memo_key))
+            key = self._retrieval_memo_key(conversation_id, memo_key)
+            raw = self._redis.get(key)
             if raw is None:
                 return None
+            self._redis.expire(key, self._RETRIEVAL_MEMO_TTL_SECONDS)
             if isinstance(raw, (bytes, bytearray)):
                 raw = raw.decode("utf-8")
             value = json.loads(raw)

@@ -189,6 +189,42 @@ class RetrievalAssembler:
     # on_message_inbound
     # ------------------------------------------------------------------
 
+    def _curate_facts(self, facts: list, question: str) -> list:
+        """Curate *facts* for *question*, reusing an identical earlier decision.
+
+        Continuation calls of one turn resend the same question with the same
+        retrieved facts; the curation decision is kept in shared session
+        state keyed by exactly those inputs, so any change in the question or
+        the candidates is curated afresh.
+        """
+        provider = getattr(self._retriever, "_session_state_provider", None)
+        conversation_id = getattr(self._retriever, "_conversation_id", "") or ""
+        if provider is None or not conversation_id or not hasattr(provider, "load_retrieval_memo"):
+            return self._fact_curator.curate(facts, question=question)
+        import hashlib
+        import json as _json
+
+        lines = [f.format_for_prompt() for f in facts]
+        memo_key = "curation:" + hashlib.sha256(
+            _json.dumps([question, lines], ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:32]
+        memo = provider.load_retrieval_memo(conversation_id, memo_key)
+        kept = memo.get("kept") if isinstance(memo, dict) else None
+        if isinstance(kept, list) and all(
+            isinstance(i, int) and 0 <= i < len(facts) for i in kept
+        ):
+            logger.info(
+                "CURATION_MEMO hit conv=%s kept=%d/%d",
+                conversation_id[:12], len(kept), len(facts),
+            )
+            return [facts[i] for i in kept]
+        curated = self._fact_curator.curate(facts, question=question)
+        position = {id(fact): index for index, fact in enumerate(facts)}
+        indices = [position[id(fact)] for fact in curated if id(fact) in position]
+        if len(indices) == len(curated):
+            provider.save_retrieval_memo(conversation_id, memo_key, {"kept": indices})
+        return curated
+
     def on_message_inbound(
         self,
         message: str,
@@ -483,9 +519,8 @@ class RetrievalAssembler:
         # D2: Curate facts down to query-relevant subset before assembly
         if self._fact_curator and retrieval_result.facts:
             _curate_stage = time.monotonic()
-            retrieval_result.facts = self._fact_curator.curate(
-                retrieval_result.facts,
-                question=retrieval_query,
+            retrieval_result.facts = self._curate_facts(
+                retrieval_result.facts, retrieval_query,
             )
             _note("fact_curate_primary", _curate_stage)
 

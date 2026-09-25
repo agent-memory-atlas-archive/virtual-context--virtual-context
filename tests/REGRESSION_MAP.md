@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-096 — Fact curation re-ran on every model call of a tool loop
+
+- **Symptom**: every continuation call of a proxied tool loop spent about 0.8 s in `fact_curate_primary` (two Jev calls) although the question and the retrieved facts were unchanged; retrieval memo entries also expired after 300 s while loops ran up to 600 s.
+- **Root cause**: only retrieval was memoized per turn; curation was recomputed for identical inputs, and memo entries had a fixed expiry from their first write.
+- **Fix**: `RetrievalAssembler._curate_facts` keeps the kept-fact indices in shared session state keyed by a hash of the question and the ordered candidate fact lines, so any change is curated afresh; `load_retrieval_memo` extends an entry's expiry on every read.
+- **Tests**:
+  - `test_curation_memo.py`
+
 ### BUG-095 — Assembly re-tokenized the whole facts block for every candidate fact
 
 - **Symptom**: `pool_fill` took about 1.2 s of every assembly on a large conversation (`ASSEMBLE_BREAKDOWN … pool_fill=1227.5ms` with ~400 facts), repeated on every model call of a proxied tool loop.
@@ -1041,6 +1049,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_provider_request_timeout.py` | BUG-093 |
 | `test_history_catchup.py` | BUG-094 |
 | `test_pool_fill_measurement.py` | BUG-095 |
+| `test_curation_memo.py` | BUG-096 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
