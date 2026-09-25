@@ -5,6 +5,15 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-100 — VC's context block was re-billed on every round of a Responses tool loop
+
+- **Symptom**: on a Codex tool loop each model call re-sent VC's context block (about 21K tokens, identical for every round of the turn) outside the cached prefix; rounds after the first reported cached input stopping at the previous round's tool traffic.
+- **Root cause**: `responses_context.place_context_block` appended the block after every input item, so each round's new tool calls and outputs were inserted ahead of it and the block moved on every call.
+- **Fix**: the block is inserted right after the latest user message, so a turn's tool traffic follows it and an unchanged block stays in the cached prefix; history before the latest user message is still untouched.
+- **Tests**:
+  - `test_responses_context_in_tool_loop.py`
+  - `test_responses_context_placement.py::test_next_tool_round_keeps_the_previous_request_as_its_prefix`
+
 ### BUG-099 — A running tool loop was stubbed on nearly every call
 
 - **Symptom**: once a tool loop's protected zone passed 60% of `context_window`, every following model call logged `PROTECTED_INTRUSION_DEEP` or `SAFETY-VALVE TOOL-STUB`, the loop's own outputs were replaced with stubs call after call, and the model re-read the same file in small slices; the loop took several times more calls than the same task without stubbing.
@@ -1077,6 +1086,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_curation_memo.py` | BUG-096 |
 | `test_restore_tool_after_safety_valve.py` | BUG-097 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
+| `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

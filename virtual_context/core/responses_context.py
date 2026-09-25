@@ -1,12 +1,13 @@
 """Where VC's context block goes in a Responses-API request.
 
 Providers reuse a cached prompt only while its beginning is byte-identical.
-VC's context block changes from call to call, so it goes last: a developer
-item appended after every other input item, including the current turn's
-tool calls and outputs. Everything the host sent then stays an unchanged
-prefix, and each tool round of a turn extends the cached prefix of the
-previous one. Any earlier VC block, in the items or in ``instructions``, is
-removed first so blocks never stack.
+VC's context block changes from turn to turn, so it goes after the history:
+a developer item right after the latest user message. Everything the host
+sent before that message stays an unchanged prefix. The block is the same
+for every round of a turn's tool loop, so the loop's calls and outputs go
+after it and each round extends the cached prefix of the previous one,
+block included. Any earlier VC block, in the items or in ``instructions``,
+is removed first so blocks never stack.
 """
 
 from __future__ import annotations
@@ -75,7 +76,12 @@ def place_context_block(body: dict, prepend_text: str) -> None:
         else:
             body.pop("instructions", None)
     kept = [item for item in items if not _is_vc_item(item)]
-    kept.append({
+    at = next(
+        (i + 1 for i in range(len(kept) - 1, -1, -1)
+         if isinstance(kept[i], dict) and kept[i].get("role") == "user"),
+        len(kept),
+    )
+    kept.insert(at, {
         "type": "message",
         "role": "developer",
         "content": [{"type": "input_text", "text": block}],

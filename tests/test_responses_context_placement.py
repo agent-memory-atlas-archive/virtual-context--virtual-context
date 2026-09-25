@@ -1,4 +1,4 @@
-"""VC's context block goes last, so everything the host sent stays a cacheable prefix."""
+"""VC's context block follows the latest user message, so the history before it stays a cacheable prefix."""
 import pytest
 
 from virtual_context.core.provider_adapters import OpenAICodexAdapter
@@ -64,7 +64,7 @@ def test_block_left_in_instructions_by_an_older_request_is_moved_out():
 
 @pytest.mark.regression("PROXY-027")
 def test_next_tool_round_keeps_the_previous_request_as_its_prefix():
-    """A tool round appends items; only VC's block moves, so the earlier request stays a prefix."""
+    """A tool round appends items after VC's block, so the history before it stays a prefix."""
     fmt = get_format("openai_responses")
     round1 = fmt.inject_context(_codex_body(), "ctx round 1")
     host_round2 = _codex_body()
@@ -72,4 +72,5 @@ def test_next_tool_round_keeps_the_previous_request_as_its_prefix():
                              {"type": "custom_tool_call_output", "call_id": "c1", "output": "ok"}]
     round2 = fmt.inject_context(host_round2, "ctx round 2 (reordered)")
     assert round2["input"][:8] == round1["input"][:8]
-    assert _vc_positions(round2) == [10]
+    assert _vc_positions(round2) == [8]
+    assert [it["type"] for it in round2["input"][9:]] == ["custom_tool_call", "custom_tool_call_output"]
