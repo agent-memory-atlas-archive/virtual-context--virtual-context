@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-105 — The history filter kept an unanswered message and dropped a protected question
+
+- **Symptom**: after `Turn filter: 3/194 kept`, the outbound payload opened the kept history with an old unanswered user message followed by the reply to a newer question whose user message was gone.
+- **Root cause**: `filter_body_messages` keeps unpaired messages unconditionally; when one ended up directly before a kept turn's user message, role-alternation enforcement dropped the later message, which was the kept turn's question.
+- **Fix**: alternation enforcement replaces the earlier same-role message when it belongs to no kept turn and the later one opens a kept turn.
+- **Tests**:
+  - `test_filter_keeps_paired_over_unanswered.py`
+
 ### BUG-104 — Recent turns reached the model twice when the host replayed its history
 
 - **Symptom**: on proxied Discord turns every request logged `RECENT_CONVERSATION_RENDER requester_rows=3` and the outbound payload carried the three most recent turns twice: once expanded from the host's history block (with the host speaker tag) and once as injected stored rows.
@@ -1123,6 +1131,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_protected_zone_media_size.py` | BUG-102 |
 | `test_drop_compacted_in_tool_loop.py` | BUG-103 |
 | `test_protected_window_host_speaker_dedup.py` | BUG-104 |
+| `test_filter_keeps_paired_over_unanswered.py` | BUG-105 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

@@ -699,6 +699,7 @@ def filter_body_messages(
     # partners).  Uses an index set instead of mutating message dicts with sentinel
     # keys — avoids leaking temporary keys if an exception interrupts cleanup.
     _critical_kept: set[int] = set()
+    _paired_kept: set[int] = set()
     _prefix_len = len(prefix)
     _chat_kept_i = 0
     for kept_i in range(_prefix_len, len(kept)):
@@ -708,6 +709,8 @@ def filter_body_messages(
             _chat_kept_i += 1
         if _chat_kept_i < len(chat_msgs) and _chat_kept_i in _critical_indices:
             _critical_kept.add(kept_i)
+        if _chat_kept_i < len(chat_msgs) and _chat_kept_i in paired_indices:
+            _paired_kept.add(kept_i)
         _chat_kept_i += 1
 
     # PROXY-022: Enforce strict role alternation.
@@ -723,6 +726,7 @@ def filter_body_messages(
     # as-is and alternation starts at the first chat message.
     alternating: list[dict] = list(kept[:_prefix_len])
     _alt_critical: list[bool] = [False] * len(alternating)
+    _alt_paired: list[bool] = [False] * len(alternating)
     for kept_i, msg in enumerate(kept):
         if kept_i < _prefix_len:
             continue
@@ -730,6 +734,7 @@ def filter_body_messages(
         if role is None:
             alternating.append(msg)
             _alt_critical.append(kept_i in _critical_kept)
+            _alt_paired.append(kept_i in _paired_kept)
             continue
         if len(alternating) > _prefix_len and role == alternating[-1].get("role"):
             if kept_i in _critical_kept:
@@ -739,14 +744,25 @@ def filter_body_messages(
                 if not _alt_critical[-1]:
                     alternating[-1] = msg  # replace previous with current
                     _alt_critical[-1] = True
+                    _alt_paired[-1] = kept_i in _paired_kept
                 else:
                     alternating.append(msg)  # both critical — keep both
                     _alt_critical.append(True)
+                    _alt_paired.append(kept_i in _paired_kept)
+            elif kept_i in _paired_kept and not _alt_paired[-1] and not _alt_critical[-1]:
+                # The previous message was never answered and belongs to no
+                # kept turn; this one opens a kept turn whose reply follows.
+                # Dropping this one would leave that reply under the stale
+                # message, so the unanswered one goes instead.
+                alternating[-1] = msg
+                _alt_critical[-1] = False
+                _alt_paired[-1] = True
             else:
                 continue  # skip — would create consecutive same-role
         else:
             alternating.append(msg)
             _alt_critical.append(kept_i in _critical_kept)
+            _alt_paired.append(kept_i in _paired_kept)
     kept = alternating
 
     # PROXY-004c: Final safety net — verify no orphaned tool_result blocks.
