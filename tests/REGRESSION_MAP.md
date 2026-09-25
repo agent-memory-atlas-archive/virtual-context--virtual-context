@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-097 — Outputs stubbed by the safety valve came without the restore tool
+
+- **Symptom**: on proxied tool loops the model received stubbed tool outputs (`SAFETY-VALVE TOOL-STUB`, `PROTECTED_INTRUSION_DEEP`) while the injected catalogue listed no `vc_restore_tool`, and it re-ran the original commands instead.
+- **Root cause**: the proxy decided whether to offer the restore tool when it injected the VC catalogue, from stubs made up to that point; the safety valve runs later in the same request and its stubs never updated the catalogue.
+- **Fix**: `_add_restore_tool` offers `vc_restore_tool` once (never duplicating it and never modifying the caller's body), and the proxy calls it after the safety valve when the valve stubbed outputs the catalogue did not account for.
+- **Tests**:
+  - `test_restore_tool_after_safety_valve.py`
+
 ### BUG-096 — Fact curation re-ran on every model call of a tool loop
 
 - **Symptom**: every continuation call of a proxied tool loop spent about 0.8 s in `fact_curate_primary` (two Jev calls) although the question and the retrieved facts were unchanged; retrieval memo entries also expired after 300 s while loops ran up to 600 s.
@@ -1050,6 +1058,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_history_catchup.py` | BUG-094 |
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
+| `test_restore_tool_after_safety_valve.py` | BUG-097 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

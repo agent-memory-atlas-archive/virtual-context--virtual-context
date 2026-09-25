@@ -266,6 +266,34 @@ def _inject_vc_tools(
     )
 
 
+def _add_restore_tool(body: dict) -> dict:
+    """Offer ``vc_restore_tool`` in *body* if it is not already offered.
+
+    Stubbing can happen after the catalogue was injected (the safety valve
+    runs later in the same request); a stubbed output is only recoverable when
+    the restore tool is present.
+    """
+    tools = body.get("tools") or [] if isinstance(body, dict) else []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        names = [d.get("name") for d in tool.get("functionDeclarations") or []]
+        names.append(tool.get("name") or (tool.get("function") or {}).get("name"))
+        if "vc_restore_tool" in names:
+            return body
+    from ..core.tool_loop import vc_tool_definitions_for_runtime
+    defs = [
+        d for d in vc_tool_definitions_for_runtime(None, restore_available=True)
+        if d.get("name") == "vc_restore_tool"
+    ]
+    if not defs:
+        return body
+    # Some formats extend the existing tool list in place; inject into a copy
+    # so the caller's body is never modified.
+    import copy
+    return detect_format(body).inject_tools(copy.deepcopy(body), defs)
+
+
 def _build_continuation_request(
     original_body: dict,
     assistant_content: list[dict],

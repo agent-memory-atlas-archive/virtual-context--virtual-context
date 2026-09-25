@@ -1099,6 +1099,7 @@ async def prepare_payload(
 
     # Resolve upstream context window limit for this model
     from .helpers import (  # noqa: F811 — resolve patched helpers at request time
+        _add_restore_tool,
         _inject_context,
         _inject_vc_tools,
     )
@@ -1978,6 +1979,7 @@ async def prepare_payload(
 
     # Inject VC paging tools for autonomous mode (formats that support it)
     paging_enabled = False
+    _restore_offered = False
     if (
         state
         and fmt.supports_tool_interception
@@ -2014,6 +2016,7 @@ async def prepare_payload(
                 restore_available=_tool_stubs_present,
                 roster_snapshot=_schema_snapshot,
             )
+            _restore_offered = bool(_tool_stubs_present)
             _note_prep("inject_paging_tools", _paging_stage)
             paging_enabled = True
             _vc_names = [t["name"] for t in enriched_body.get("tools", []) if t.get("name", "").startswith("vc_")]
@@ -2168,6 +2171,13 @@ async def prepare_payload(
                             logger.info("SAFETY-VALVE TOOL-STUB: stubbed %d outputs", _sv_stub)
             except (TypeError, ValueError, AttributeError):
                 pass
+
+            # The catalogue was injected before the valve ran; a stub made
+            # here is only recoverable if the restore tool is offered too.
+            if paging_enabled and _tool_stubs_present and not _restore_offered:
+                enriched_body = _add_restore_tool(enriched_body)
+                _restore_offered = True
+                logger.info("SAFETY-VALVE: offered vc_restore_tool for outputs stubbed after tool injection")
 
             # Re-serialize to get new outbound size
             fmt.strip_vc_markers(enriched_body)
