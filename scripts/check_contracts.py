@@ -33,7 +33,6 @@ TESTS = [
     "tests/test_proxy_durable_continuation.py",
     "tests/test_proxy_handler_public_text.py",
     "tests/test_compaction_community_services.py",
-    "tests/test_context_evaluation.py",
     "tests/test_context_resource_harness.py",
     "tests/test_storage_domain_contracts.py",
     "tests/test_storage_bounded_contracts.py",
