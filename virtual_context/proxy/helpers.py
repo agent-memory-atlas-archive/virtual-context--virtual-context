@@ -8,7 +8,6 @@ and format delegation all live here.
 from __future__ import annotations
 
 import json as _json
-import gzip
 import io
 import httpx
 import logging

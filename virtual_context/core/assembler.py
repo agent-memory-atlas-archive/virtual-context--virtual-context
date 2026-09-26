@@ -1136,7 +1136,6 @@ class ContextAssembler:
         )
         tag_sections = _fill.tag_sections
         tag_tokens = _fill.tag_tokens
-        retrieved_tokens = _fill.retrieved_tokens
         tags_over_budget = _fill.tags_over_budget
         facts_tokens = _fill.facts_tokens
         pool_used = _fill.pool_used

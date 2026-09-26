@@ -983,7 +983,7 @@ def judge_fact_links(
     def describe(value: tuple[list[FactLink], list[str]]) -> str:
         links, superseded = value
         return (f"sup={','.join(superseded) or '-'}|links="
-                f"{';'.join(f'{l.target_fact_id}:{l.relation_type}' for l in links) or '-'}")
+                f"{';'.join(f'{link.target_fact_id}:{link.relation_type}' for link in links) or '-'}")
 
     return decide("supersession", legacy, jev, runtime=runtime,
                   agree=lambda a, b: set(a[1]) == set(b[1]), describe=describe)
