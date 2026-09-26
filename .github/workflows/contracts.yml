@@ -66,4 +66,5 @@ jobs:
       - name: Check context contracts
         env:
           TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken
+          VC_CONTRACT_CHECK_SECONDS: "300"
         run: .venv/bin/python scripts/check_contracts.py

@@ -57,7 +57,7 @@ def main() -> int:
         for name in ("DATABASE_URL", "VC_TEST_POSTGRES_URL"):
             env.pop(name, None)
         env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-        deadline = time.monotonic() + 85
+        deadline = time.monotonic() + float(os.environ.get("VC_CONTRACT_CHECK_SECONDS", "85"))
         commands = [
             [
                 sys.executable,
