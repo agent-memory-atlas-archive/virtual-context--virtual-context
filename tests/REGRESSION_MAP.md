@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-106 — Restoring a compacted turn produced a request the provider rejected
+
+- **Symptom**: after the model called `vc_restore_tool` on a `[Compacted turn N]` stub in a Responses request, the next upstream call failed with `400 Unknown parameter: 'input[3].idempotencyKey'` and the turn ended with no reply.
+- **Root cause**: chain snapshots are stored exactly as the host sent them, here chat-completions messages carrying host bookkeeping fields (`idempotencyKey`, `__openclaw`, `api`, `model`, `provider`), and `_restore_chain` spliced them unchanged into a request of a different wire format.
+- **Fix**: `proxy/chain_restore.conform_chain` rewrites the chain into the request's format (chat, Anthropic and Responses items into Responses items; same-format chains reduced to that format's fields), drops opaque reasoning and unpaired tool calls, and a chain that cannot be expressed in the request's format is returned to the model as text.
+- **Tests**:
+  - `test_chain_restore_format.py`
+
 ### BUG-105 — The history filter kept an unanswered message and dropped a protected question
 
 - **Symptom**: after `Turn filter: 3/194 kept`, the outbound payload opened the kept history with an old unanswered user message followed by the reply to a newer question whose user message was gone.
@@ -1132,6 +1140,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_drop_compacted_in_tool_loop.py` | BUG-103 |
 | `test_protected_window_host_speaker_dedup.py` | BUG-104 |
 | `test_filter_keeps_paired_over_unanswered.py` | BUG-105 |
+| `test_chain_restore_format.py` | BUG-106 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

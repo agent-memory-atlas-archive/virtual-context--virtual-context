@@ -491,6 +491,21 @@ class _ProxyToolRuntime:
                         else:
                             chain = chain[1:]
 
+        # The chain is stored as its host sent it, possibly in another wire
+        # format and with host-only fields; splice only what this request's
+        # format accepts, or hand the chain back as text.
+        from .chain_restore import chain_as_text, conform_chain
+        conformed = conform_chain(chain, self._api_format)
+        if not conformed:
+            logger.info("CHAIN-RESTORE: returned as text ref=%s format=%s", ref, self._api_format)
+            return (
+                "Restored as text: this compacted turn is stored in a format that cannot be "
+                "spliced into the current conversation, so its content follows here. It was "
+                "not visible before this restore; use it directly to answer.\n\n"
+                + chain_as_text(chain)
+            )
+        chain = conformed
+
         target = self._get_target_body()
         if not isinstance(target, dict):
             return {"error": "no mutable payload available for chain restore"}
