@@ -71,20 +71,6 @@ def _ensure_engine_imports() -> None:
         _is_stub_content_fn = _stub
 
 
-def stamp_fact_provenance(facts, *, segment_ref: str, conversation_id: str, turn_numbers) -> None:
-    """Record where each fact came from: its segment, conversation and turns.
-
-    A fact keeps turn numbers extraction already narrowed it to; otherwise it
-    gets the segment's turns, so every fact can be traced back to the
-    exchanges it was extracted from.
-    """
-    for fact in facts:
-        fact.segment_ref = segment_ref
-        fact.conversation_id = conversation_id
-        if not fact.turn_numbers:
-            fact.turn_numbers = list(turn_numbers or [])
-
-
 class CompactionPipeline:
     """Segmentation, compaction, storage, and tag summary building.
 
@@ -1964,12 +1950,9 @@ class CompactionPipeline:
                     for fact in [*_existing_facts_before, *result.facts]
                     if (fact.author_actor_id or "").strip()
                 })
-                stamp_fact_provenance(
-                    result.facts,
-                    segment_ref=_seg_ref,
-                    conversation_id=self._config.conversation_id,
-                    turn_numbers=segment_turn_numbers.get(seg.id, []),
-                )
+                for fact in result.facts:
+                    fact.segment_ref = _seg_ref
+                    fact.conversation_id = self._config.conversation_id
                 # C2R gate (fencing plan §7.2 #3): backlog-sweeper
                 # dispatches skip ``replace_facts_for_segment`` when
                 # the segment already has facts so the recovery
