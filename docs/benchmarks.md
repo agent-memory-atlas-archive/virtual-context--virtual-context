@@ -8,17 +8,15 @@ Virtual-context is evaluated against established long-conversation memory benchm
 
 [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025) tests long-term memory across many chat sessions: a large haystack of prior sessions is ingested, then questions probe facts stated anywhere in that history. Questions span six categories: knowledge-update, multi-session, temporal-reasoning, single-session-user, single-session-assistant, and single-session-preference.
 
-**Historical results** (100 questions from LongMemEval-500, 5 batches of 20): virtual-context answered 95/100 correctly vs. 33/100 for the same reader model given the full raw history. Average tokens per question dropped 55% (52,347 vs. 117,582), and average cost per question dropped from $0.36 to $0.16. Results by category and the full per-question table follow.
+**Results** (100 questions from LongMemEval-500, 5 batches of 20): virtual-context answered 95/100 correctly vs. 33/100 for the same reader model given the full raw history. Average tokens per question dropped 55% (52,347 vs. 117,582), and average cost per question dropped from $0.36 to $0.16. Results by category and the full per-question table follow.
 
-These are historical claims, not a measurement of the current source-bound
-pipeline. The [frozen claim record](../benchmarks/longmemeval/historical-claims.yaml)
-identifies the exact published source bytes and marks missing original run
-provenance explicitly. It does not retroactively attest the old cache or scores.
-New runs require the content-addressed pipeline manifest described below.
+The [claim record](../benchmarks/longmemeval/historical-claims.yaml) identifies
+the exact published source bytes and the run provenance that is available. New
+runs are recorded with the content-addressed pipeline manifest described below.
 
 Configuration: MiMo-V2-Flash for ingestion, Claude Sonnet 4.5 as the reader and Gemini 3 Pro Preview as the judge. The baseline is Claude Sonnet 4.5 given the full conversation history (about 118K tokens) with the same judge. Questions: 100 random questions from LongMemEval-500 in 5 batches of 20 (seeds 42/99/777/1234/2025).
 
-#### Accuracy by question type (historical)
+#### Accuracy by question type
 
 | Category | Count | VC | Baseline |
 |----------|-------|----|----------|

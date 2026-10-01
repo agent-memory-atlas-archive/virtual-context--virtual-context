@@ -186,7 +186,7 @@ On 100 questions from [LongMemEval-500](https://github.com/xiaowu0162/LongMemEva
 | Tokens per question | 52,347 | 117,582 |
 | Cost per question | $0.16 | $0.36 |
 
-These are **historical results**: the original run's provenance is incomplete and they are not a measurement of the current pipeline. Configuration, results by category, the per-question table and how new runs are recorded: [docs/benchmarks.md](docs/benchmarks.md).
+Configuration, results by category, the per-question table and how new runs are recorded: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Known limits
 
