@@ -381,14 +381,16 @@ def vc_tool_definitions() -> list[dict]:
         {
             "name": "vc_restore_tool",
             "description": (
-                "Restore compacted conversation history in place. Compacted turns "
-                "marked with [Compacted turn N | ... | vc_restore_tool(ref=...)] "
-                "contain the FULL original conversation including thinking blocks, "
-                "tool calls, tool outputs, and all details that the summary omits. "
-                "Call this when you need the exact original content — raw command "
-                "output, file contents, detailed reasoning, per-test results, etc. "
-                "The ref is in the stub text. Supports both chain_ refs (full turn "
-                "chain restore) and tool_ refs (single tool output restore)."
+                "Put back content the proxy replaced with a stub in this request. "
+                "A turn whose tool calls were collapsed appears as [Compacted turn "
+                "N | ...] with a chain_ ref; restoring it puts that turn's original "
+                "messages back in place, including thinking, tool calls and tool "
+                "outputs. A single tool output replaced by a stub carries a tool_ "
+                "ref; restoring it puts that output back in place. A recompressed "
+                "image carries a media_ ref; restoring it returns the original "
+                "image. Call this when you need the exact original content: raw "
+                "command output, file contents, detailed reasoning, per-test "
+                "results. The ref is in the stub text."
             ),
             "input_schema": {
                 "type": "object",
@@ -396,8 +398,8 @@ def vc_tool_definitions() -> list[dict]:
                     "ref": {
                         "type": "string",
                         "description": (
-                            "The ref from the compacted stub "
-                            "(e.g. chain_5_abc123 or tool_abc123def)"
+                            "The ref from the stub "
+                            "(e.g. chain_5_abc123, tool_abc123def or media_abc123)"
                         ),
                     },
                 },
