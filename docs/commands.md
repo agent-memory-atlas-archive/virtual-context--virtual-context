@@ -117,11 +117,19 @@ The topic is matched case-insensitively, and an alias resolves to its topic. If 
 
 Every change is kept in an audit trail: each untagged or removed turn records its text and tags before the change, who made it and when. A host replaying old history does not bring a removed turn back. To erase content entirely, delete the conversation.
 
-## Editing the record
+## Reviewing and editing the record
 
-`virtual-context admin record` edits a conversation's record directly. Each action changes the turns, writes the audit trail, then rebuilds the segments, facts and topic summaries derived from them:
+Memory is reviewed where it comes from. A virtual-context admin inspects the facts
+held for a conversation, each beside the turns it was extracted from, and corrects
+the record when something is wrong: edit a turn, remove one, or forget a topic. The
+facts and summaries derived from those turns are rebuilt to match. Review is
+available, not required: nothing waits in a pending queue, because a fact is a cached
+copy of the conversation and its trust state already says whether the conversation
+still supports it (see [fact lifecycle](fact-lifecycle.md#trust-state)).
 
 ```
+virtual-context admin record facts   <conversation_id> [<topic>]
+virtual-context admin record verify  <conversation_id>
 virtual-context admin record forget  <conversation_id> <topic>
 virtual-context admin record edit    <conversation_id> <turn_id> --user "<text>" [--assistant "<text>"]
 virtual-context admin record remove  <conversation_id> <turn_id>
@@ -130,7 +138,16 @@ virtual-context admin record status  <conversation_id> [<operation_id>]
 virtual-context admin record process <conversation_id> <operation_id>
 ```
 
-`--actor` and `--reason` are stored with each change. `edit` keeps the original text in the audit trail and drops any source attestation the turn carried, since the turn no longer matches its source. `remove` removes both halves of the exchange. `process` finishes a rebuild that was interrupted. Deciding who may run these is up to the deployment.
+`facts` lists current facts with their trust state and source turns; `verify`
+re-derives every fact's trust state from its source turns. `forget`, `edit` and
+`remove` change the turns, write the audit trail, retract the facts of the affected
+segments, then rebuild the segments, facts and topic summaries derived from them.
+`history` is the audit trail: for each edited, untagged or removed turn, its text
+and tags before the change, the text after it, who made it, when and why. `--actor`
+and `--reason` are stored with each change. `edit` drops any source attestation the
+turn carried, since the turn no longer matches its source. `remove` removes both
+halves of the exchange. `process` finishes a rebuild that was interrupted. Deciding
+who may run these is up to the deployment.
 
 ## VCMERGE and VCMERGESTATUS
 
@@ -194,7 +211,7 @@ Each imported conversation keeps its own conversation ID from the export, so sep
 
 | Subcommand | Purpose |
 |------------|---------|
-| `record` | Forget a topic, edit or remove a turn, with an audit trail (see [Editing the record](#editing-the-record)) |
+| `record` | Review facts beside their source turns; forget a topic, edit or remove a turn, with an audit trail (see [Reviewing and editing the record](#reviewing-and-editing-the-record)) |
 | `backfill-tag-summaries` | Materialize missing tag summaries |
 | `backfill-fact-embeddings` | Write embeddings for facts that predate embedding storage |
 | `backfill-senders` | Recover sender labels on canonical turns |

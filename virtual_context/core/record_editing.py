@@ -110,6 +110,56 @@ class RecordEditor:
             for tag in op.get("forgotten", []):
                 working_set.pop(tag, None)
 
+    # -- review ------------------------------------------------------------
+
+    def facts(self, topic: str | None = None, *, limit: int = 200) -> list[dict]:
+        """Current facts with their trust state and the source turns behind them.
+
+        This is what an admin reviews before deciding to edit or remove the
+        turn a fact came from.
+        """
+        tags = self.resolve_topic(topic) if topic else None
+        if topic and not tags:
+            return []
+        facts = self._store.query_facts(
+            conversation_id=self._conversation_id, tags=tags or None, limit=limit,
+        )
+        refs = {f.segment_ref for f in facts if f.segment_ref}
+        turn_ids: dict[str, list[str]] = {}
+        for ref in refs:
+            segment = self._store.get_segment(ref, conversation_id=self._conversation_id)
+            ids = getattr(getattr(segment, "metadata", None), "canonical_turn_ids", None) or []
+            turn_ids[ref] = [str(i) for i in ids]
+        rows = self._turn_rows(sorted({i for ids in turn_ids.values() for i in ids}))
+        by_id = {str(row.canonical_turn_id): row for row in rows}
+        return [
+            {
+                "fact_id": f.id,
+                "fact": f.what or f"{f.subject} {f.verb} {f.object}",
+                "trust_state": f.trust_state,
+                "topic": (f.tags or [""])[0],
+                "segment_ref": f.segment_ref,
+                "source_turns": [
+                    {
+                        "turn_id": turn_id,
+                        "user": by_id[turn_id].user_content,
+                        "assistant": by_id[turn_id].assistant_content,
+                    }
+                    for turn_id in turn_ids.get(f.segment_ref, []) if turn_id in by_id
+                ],
+            }
+            for f in facts
+        ]
+
+    def verify_facts(self) -> dict:
+        """Re-derive every current fact's trust state from its source turns."""
+        refs = {
+            f.segment_ref
+            for f in self._store.query_facts(conversation_id=self._conversation_id, limit=1_000_000)
+            if f.segment_ref and f.trust_state != "retracted"
+        }
+        return self._store.refresh_fact_trust(self._conversation_id, refs) if refs else {}
+
     # -- derived rebuild ---------------------------------------------------
 
     def status(self, operation_id: str | None = None) -> list[dict]:

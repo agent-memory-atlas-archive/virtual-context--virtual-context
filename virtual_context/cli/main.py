@@ -1474,11 +1474,13 @@ def _apply_storage_overrides(config, args) -> None:
 
 
 def cmd_admin_record(args):
-    """Edit a conversation's record: forget a topic, edit or remove a turn.
+    """Review and edit a conversation's record.
 
-    The record changes first and every change is audited; the segments,
-    facts and topic summaries derived from it are then rebuilt in this
-    process. ``status`` and ``history`` only read.
+    ``facts`` lists current facts with their trust state and source turns, and
+    ``verify`` re-derives trust states from the source turns. ``forget``,
+    ``edit`` and ``remove`` change the record, audit every change, then rebuild
+    the segments, facts and topic summaries derived from it in this process.
+    ``status`` and ``history`` only read.
     """
     from virtual_context.engine import VirtualContextEngine
 
@@ -1503,6 +1505,10 @@ def cmd_admin_record(args):
             result = editor.remove_turn(args.target, actor=args.actor, reason=args.reason)
         elif action == "status":
             result = {"operations": editor.status(args.target or None)}
+        elif action == "facts":
+            result = {"facts": editor.facts(args.target or None)}
+        elif action == "verify":
+            result = {"trust_states": editor.verify_facts()}
         elif action == "history":
             result = {"edits": engine._store.get_turn_edits(
                 engine.config.conversation_id, canonical_turn_id=args.target or None,
@@ -3069,12 +3075,13 @@ def main():
         help="Edit a conversation's record: forget a topic, edit or remove a turn",
     )
     record_parser.add_argument(
-        "record_action", choices=("forget", "edit", "remove", "status", "history", "process"),
+        "record_action",
+        choices=("facts", "verify", "forget", "edit", "remove", "status", "history", "process"),
     )
     record_parser.add_argument("conversation_id")
     record_parser.add_argument(
         "target", nargs="?", default="",
-        help="Topic (forget), canonical turn id (edit/remove/history) or operation id (status/process)",
+        help="Topic (facts/forget), canonical turn id (edit/remove/history) or operation id (status/process)",
     )
     record_parser.add_argument("--user", default=None, help="New user text (edit)")
     record_parser.add_argument("--assistant", default=None, help="New assistant text (edit)")
@@ -3800,7 +3807,7 @@ def main():
         else:
             print(
                 "Usage:\n"
-                "  virtual-context admin record forget|edit|remove|status|history|process <conversation_id> [target] [--user T] [--assistant T] [--actor A] [--reason R]\n"
+                "  virtual-context admin record facts|verify|forget|edit|remove|status|history|process <conversation_id> [target] [--user T] [--assistant T] [--actor A] [--reason R]\n"
                 "  virtual-context admin backfill-tag-summaries <conversation_id> [--tenant-id <id>] [--force-rebuild]\n"
                 "  virtual-context admin backfill-fact-embeddings <conversation_id> [--tenant-id <id>] [--since <ts>] [--until <ts>] [--force-rebuild]\n"
                 "  virtual-context admin backfill-senders [<conversation_id>] [--tenant-id <id>] [--all-convs-for-tenant] [--dry-run] [--limit N]\n"

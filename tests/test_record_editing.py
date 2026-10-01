@@ -178,3 +178,26 @@ def test_vcforget_changes_the_record_and_queues_the_rebuild(engine):
     assert text.startswith("Forgot 'docker': 1 turn(s) removed")
     assert engine.record_editor.status(queued[0])[0]["actor"] == "actor:discord:42"
     assert _handle_vcforget("nothing", state).startswith("Topic 'nothing' not found")
+
+
+def test_review_lists_facts_with_their_source_turns_and_verifies_them(engine):
+    _turn(engine, 0, ["python"], "I write Python daily")
+    _segment(engine, "seg-python", "python", ["python"], [0])
+    editor = engine.record_editor
+
+    listed = editor.facts("Python")
+    assert [(f["fact"], f["trust_state"]) for f in listed] == [("user said old python", "unverified")]
+    assert listed[0]["source_turns"][0]["user"] == "I write Python daily"
+    assert editor.facts("docker") == []
+
+    assert editor.verify_facts() == {"verified": 1, "unverified": 0}
+    assert editor.facts()[0]["trust_state"] == "verified"
+
+
+def test_verify_leaves_retracted_facts_retracted(engine):
+    _turn(engine, 0, ["python"], "I write Python daily")
+    _segment(engine, "seg-python", "python", ["python"], [0])
+    engine.record_editor.edit_turn(_id(0), user_content="I write Rust daily", actor="admin")
+    engine.record_editor.verify_facts()
+    states = {f.trust_state for f in engine._store.query_facts(conversation_id=CONV, limit=10)}
+    assert states == {"retracted"}

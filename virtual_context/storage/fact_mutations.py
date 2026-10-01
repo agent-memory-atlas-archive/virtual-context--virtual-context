@@ -180,7 +180,8 @@ class FactMutationMixin:
         """Set each current fact of these segments to what its sources prove.
 
         ``verified`` when the segment's source turns exist and re-prove the
-        fact, ``unverified`` otherwise. Returns the count per state.
+        fact, ``unverified`` otherwise. A retracted fact is left retracted:
+        only the rebuild that replaces it clears it. Returns the count per state.
         """
         refs = sorted({ref for ref in segment_refs if ref})
         if not refs:
@@ -190,7 +191,8 @@ class FactMutationMixin:
         with self._relational_connection(write=True, scope=f"vc-fact-trust:{conversation_id}") as conn:
             rows = conn.execute(
                 f"""SELECT * FROM facts WHERE conversation_id={p}
-                AND segment_ref IN ({','.join([p] * len(refs))}) AND superseded_by IS NULL""",
+                AND segment_ref IN ({','.join([p] * len(refs))}) AND superseded_by IS NULL
+                AND trust_state <> 'retracted'""",
                 [conversation_id, *refs],
             ).fetchall()
             for row in rows:
