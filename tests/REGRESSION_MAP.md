@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-107 — Facts never recorded the turns they came from
+
+- **Symptom**: every stored fact had an empty `turn_numbers` (0 of 91,393 in a production store), so a fact could be traced to its segment but not to the turns it was extracted from.
+- **Root cause**: the compaction pipeline computed each segment's exact turns (`segment_turn_numbers`) and stamped facts with only the segment ref and conversation id.
+- **Fix**: `stamp_fact_provenance` also gives each fact its segment's turns, keeping narrower turns extraction already set.
+- **Tests**:
+  - `test_fact_source_turns.py`
+
 ### BUG-106 — Restoring a compacted turn produced a request the provider rejected
 
 - **Symptom**: after the model called `vc_restore_tool` on a `[Compacted turn N]` stub in a Responses request, the next upstream call failed with `400 Unknown parameter: 'input[3].idempotencyKey'` and the turn ended with no reply.
@@ -1141,6 +1149,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_protected_window_host_speaker_dedup.py` | BUG-104 |
 | `test_filter_keeps_paired_over_unanswered.py` | BUG-105 |
 | `test_chain_restore_format.py` | BUG-106 |
+| `test_fact_source_turns.py` | BUG-107 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
