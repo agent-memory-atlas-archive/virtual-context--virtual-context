@@ -63,11 +63,13 @@ So a fact is not a final answer. It is a cached copy of something that was said,
 |---|---|
 | Why does the memory say this? | The turns it came from: the exact words, in their original order and context, one page-in away from the fact. |
 | Who said it, and how much weight does it carry? | The source turns: the speaker, the audience it was said to, the message it replied to, and whether anything said later contradicts it. Belief comes from the record, not from a score attached to the fact. |
-| When did it happen, and is it still true? | The dates on the source turns and everything said after them. A preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context. When a newer fact replaces an older one, the older fact is kept and marked superseded, not deleted, so the cache records what changed. |
-| Who reviewed it? | No separate reviewer is required, because the review happens on the record rather than on the cache. The record was reviewed as it was written, by the people writing it, and they correct it the way people do: by saying so in the conversation. Editing the record itself is reserved for virtual-context admins, who can edit or remove past turns, remove a topic (`VCFORGET`) or delete a whole conversation; the segments, summaries and facts derived from those turns are recomputed to match. Admins review a conversation's facts beside the turns they came from, and every edit is kept in an audit trail with the original text, who made it, when and why (see [reviewing and editing the record](docs/commands.md#reviewing-and-editing-the-record)). On LongMemEval's knowledge-update questions, where a fact is stated and later changed, virtual-context answered 17 of 17 with the current value (see [Benchmarks](#benchmarks)). |
-| What did extraction keep or reject, and why? | The append-only `fact_decisions` table, which records every accepted or rejected fact change with its reason. It is consulted before a change is proposed, so a change already rejected for the same facts and the same source turns is not proposed again; a change to either makes it a new proposal. It is bookkeeping about the cache, not the source of truth. |
+| Who can see it? | The audience its source turns were said to. A summary or fact is served only to requests in that audience, so what was said in a DM stays out of a group channel. |
+| When did it happen, and is it still true? | The dates on the source turns and everything said after them. A preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context. When a newer fact replaces an older one, the older fact is kept and marked superseded, not deleted, so the cache records what changed. On LongMemEval's knowledge-update questions, where a fact is stated and later changed, virtual-context answered 17 of 17 with the current value (see [Benchmarks](#benchmarks)). |
+| Can it be acted on now? | Its trust state, derived from the record: `verified` when its source turns prove it, `unverified` when no complete source proof exists, `retracted` when an admin changed a source turn. A retracted fact is never served; it is withheld until the rebuild replaces it. |
+| Who reviewed it? | Admins. They inspect each fact beside the turns it came from and its trust state, and correct the record itself: edit or remove a turn, forget a topic, or delete a conversation. The facts drawn from a changed turn are retracted at once and rebuilt from the corrected record, and a removed turn stays removed even when a client replays old history. Every change is kept in an append-only audit trail, protected by a database trigger, with the original text, who made it, when and why (see [reviewing and editing the record](docs/commands.md#reviewing-and-editing-the-record)). The people in the conversation correct it too, by saying so. |
+| What did extraction keep or reject, and why? | The append-only `fact_decisions` ledger, which records every accepted and every refused fact change with its proposal, before and after, and reason, and which a database trigger keeps immutable. It is read before every proposal: a change already refused for the same facts and source turns is not proposed again. |
 
-When a cached fact and the conversation disagree, the conversation wins, and it is always one page-in away. Each fact also records whether the record still supports it: `verified` when its source turns prove it, `unverified` when no complete source proof exists, and `retracted` when an admin edit changed a source turn. A retracted fact is never served; the rebuild replaces it.
+When a cached fact and the conversation disagree, the conversation wins, and it is always one page-in away.
 
 ## Quick start
 
@@ -136,7 +138,7 @@ report = engine.on_turn_complete(messages)                                      
 | Feature | What it does | Docs |
 |---|---|---|
 | Topic memory | Each turn is tagged by topic; older turns become per-topic segment summaries and one digest per topic. Tags converge on an existing vocabulary instead of piling up synonyms. | [engine](docs/engine.md) |
-| Structured facts | Compaction extracts facts (subject, verb, object, status, time, source turns). Newer facts supersede older ones, and facts can be retrieved by topic and by meaning. | [fact lifecycle](docs/fact-lifecycle.md) |
+| Structured facts | Compaction extracts facts (subject, verb, object, status, time, and the segment they came from). Newer facts supersede older ones, each fact records whether its source turns still support it, and facts can be retrieved by topic and by meaning. | [fact lifecycle](docs/fact-lifecycle.md) |
 | Retrieval | Topics are ranked by tag overlap, full-text match and embedding similarity, with full-text and semantic search over stored turns as a fallback. | [engine](docs/engine.md) |
 | Demand paging | The model sees topic digests for cold topics and segment summaries for relevant ones, and opens full text through tools when it needs detail. | [engine](docs/engine.md) |
 | Time-scoped recall | "What changed between June and July?" resolves by date math on stored timestamps, not by model guessing. | [engine](docs/engine.md) |
@@ -157,20 +159,20 @@ Type these as ordinary messages in a connected client; the proxy handles them wi
 |---|---|
 | `VCATTACH <label\|id>` | Reattach this client to another stored conversation |
 | `VCLABEL <name>` | Set the conversation label (no argument shows it) |
-| `VCSTATUS` | Conversation id, label, turns, segments, active topics |
+| `VCSTATUS` | Conversation id, label, turns, segments, active topics, record edits in progress |
 | `VCRECALL <query>` | Search stored context and bring matching topics into the next turn |
 | `VCCOMPACT` | Compact now |
 | `VCLIST` | List conversations with labels and turn counts |
 | `VCFORGET <topic>` | Forget a topic: remove it from every turn, remove turns left with no topic, and rebuild what was derived from them |
-| `VCMERGE INTO <label\|id>` | Merge this conversation's stored data into another |
+| `VCMERGE INTO <label\|id>` | Merge this conversation's stored data into another (hosted service) |
 
 `VCATTACH` is a durable redirect: nothing is deleted and old references keep resolving, so two clients (or two agents) can share one memory. Details: [docs/commands.md](docs/commands.md).
 
 ## Running it in production
 
 - **Storage:** SQLite by default; PostgreSQL (`pip install "virtual-context[postgres]"`) for multi-worker deployments. With pgvector installed, `virtual-context admin migrate-semantic-vectors` prepares in-database vector search.
-- **Multi-worker safety:** compactions run under leased, fenced operations, lifecycle changes are epoch-guarded, and a backlog sweeper compacts conversations whose traffic never triggers it inline.
-- **Operator tooling:** `virtual-context admin` has 28 guarded backfill, repair and migration commands with dry-run modes.
+- **Multi-worker safety:** compactions run under leased, fenced operations, lifecycle changes are epoch-guarded, and the stores find and claim conversations whose compaction backlog their traffic never triggered inline, for a sweeper to compact.
+- **Operator tooling:** `virtual-context admin` has 28 guarded commands for reviewing and editing the record, backfills, repairs and migrations, with dry-run modes.
 - **Security:** dashboard endpoints are open until you set `VC_DASHBOARD_TOKEN`; the default bind is loopback only.
 - **Observability:** per-stage timing logs, request captures in the dashboard, and per-call cost telemetry.
 
@@ -200,12 +202,12 @@ A cache can be wrong. What we know and how it is handled:
 |---|---|
 | [architecture.md](docs/architecture.md) | Memory model, request pipeline, multi-worker coordination, identity |
 | [engine.md](docs/engine.md) | Compaction, tagging, retrieval, code mode, cache awareness |
-| [fact-lifecycle.md](docs/fact-lifecycle.md) | How facts are extracted, superseded and retrieved |
+| [fact-lifecycle.md](docs/fact-lifecycle.md) | How facts are extracted, superseded, retracted and retrieved, and their trust state |
 | [attribution.md](docs/attribution.md) | Group conversations: who said what, person cards, speaker search |
 | [proxy.md](docs/proxy.md) | Proxy internals, routing, dashboard, streaming, endpoints |
 | [native-vector-search.md](docs/native-vector-search.md) | PostgreSQL + pgvector ranking and its migration |
 | [configuration.md](docs/configuration.md) | Every config key with its default, including the judgment layer |
-| [commands.md](docs/commands.md) | In-conversation commands, the CLI, import, admin tooling |
+| [commands.md](docs/commands.md) | In-conversation commands, the CLI, import, reviewing and editing the record, admin tooling |
 | [install.md](docs/install.md) | Install paths, daemons, multi-instance setups |
 | [design.md](docs/design.md) | Why it is built this way, and how it compares with RAG and plain compaction |
 | [benchmarks.md](docs/benchmarks.md) | Suites, results, how to run them |
