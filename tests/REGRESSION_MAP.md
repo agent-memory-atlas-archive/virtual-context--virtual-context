@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-109 — Chat Completions clients could not page deeper
+
+- **Symptom**: Chat Completions requests received retrieved context but none of the paging tools (`vc_expand_topic`, `vc_find_quote`, `vc_restore_tool`), so those clients could not open a topic's turns or restore a stubbed output.
+- **Root cause**: `OpenAIFormat` kept the base `supports_tool_interception = False` and a no-op `inject_tools`, although the continuation and response codecs already handled Chat Completions tool calls.
+- **Fix**: `OpenAIFormat` reports tool interception and injects VC tools as Chat Completions functions; `tool_names` reads tool names in every wire shape for the proxy's de-duplication and logging.
+- **Tests**:
+  - `test_chat_completions_paging_tools.py`
+
 ### BUG-108 — Facts shown to the model carried no pointer to their source
 
 - **Symptom**: a fact in the model's context showed its content but nothing about where it came from, so the model could not page in the turns behind a fact without guessing the topic.
@@ -1150,6 +1158,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_filter_keeps_paired_over_unanswered.py` | BUG-105 |
 | `test_chain_restore_format.py` | BUG-106 |
 | `test_fact_topic_pointer.py` | BUG-108 |
+| `test_chat_completions_paging_tools.py` | BUG-109 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

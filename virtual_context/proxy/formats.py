@@ -2700,6 +2700,43 @@ class OpenAIFormat(PayloadFormat):
 # Gemini
 # ---------------------------------------------------------------------------
 
+    # -- Paging tool support -------------------------------------------------
+
+    @property
+    def supports_tool_interception(self) -> bool:
+        return True
+
+    def inject_tools(
+        self,
+        body: dict,
+        tool_defs: list,
+        require_tool_use: bool | None = None,
+    ) -> dict:
+        tc = body.get("tool_choice")
+        if tc == "none" or (isinstance(tc, dict) and tc.get("type") == "none"):
+            return body
+        body = dict(body)
+        tools = list(body.get("tools") or [])
+        existing = {
+            (t.get("function") or {}).get("name") for t in tools if isinstance(t, dict)
+        }
+        for td in tool_defs:
+            if isinstance(td, dict) and td.get("name") and td["name"] not in existing:
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": td["name"],
+                        "description": td.get("description", ""),
+                        "parameters": td.get("input_schema", {}),
+                    },
+                })
+                existing.add(td["name"])
+        body["tools"] = tools
+        if require_tool_use and "tool_choice" not in body:
+            body["tool_choice"] = "required"
+        return body
+
+
 class GeminiFormat(PayloadFormat):
     """Google Gemini API format.
 

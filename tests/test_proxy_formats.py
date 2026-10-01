@@ -529,7 +529,7 @@ class TestOpenAIFormat:
         assert self.fmt.extract_assistant_text(response) == "the answer"
 
     def test_supports_tool_interception(self):
-        assert self.fmt.supports_tool_interception is False
+        assert self.fmt.supports_tool_interception is True
 
 
 # ---------------------------------------------------------------------------
@@ -1624,9 +1624,9 @@ class TestPagingToolSupport:
         assert user_msg["role"] == "user"
         assert any("functionResponse" in p for p in user_msg["parts"])
 
-    def test_openai_does_not_support_tool_interception(self):
+    def test_openai_supports_tool_interception(self):
         fmt = OpenAIFormat()
-        assert fmt.supports_tool_interception is False
+        assert fmt.supports_tool_interception is True
 
     def test_server_inject_vc_tools_gemini(self):
         from virtual_context.proxy.server import _inject_vc_tools

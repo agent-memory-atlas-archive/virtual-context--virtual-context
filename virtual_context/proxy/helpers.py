@@ -265,6 +265,21 @@ def _inject_vc_tools(
     )
 
 
+def tool_names(body: dict) -> list[str]:
+    """Names of the tools declared in ``body``, in any supported wire shape."""
+    names: list[str] = []
+    for tool in body.get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        if "functionDeclarations" in tool:
+            names.extend(d.get("name", "") for d in tool["functionDeclarations"] if isinstance(d, dict))
+        elif tool.get("name"):
+            names.append(tool["name"])
+        elif isinstance(tool.get("function"), dict) and tool["function"].get("name"):
+            names.append(tool["function"]["name"])
+    return names
+
+
 def _add_restore_tool(body: dict) -> dict:
     """Offer ``vc_restore_tool`` in *body* if it is not already offered.
 

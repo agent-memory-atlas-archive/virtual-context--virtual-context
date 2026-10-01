@@ -96,7 +96,7 @@ A dashboard runs at `http://127.0.0.1:5757/dashboard`.
 
 The two presets are the hosted service's configuration on one machine and differ only in where the model runs: SQLite storage, paging tools on, fact curation on. Answer quality depends on the model you pick. `scripts/smoke_recommended.sh` checks a preset end to end from a clean install. The optional parts (PostgreSQL vector search, the judgment layer, group attribution) are each a section of [docs/configuration.md](docs/configuration.md); `virtual-context presets list` shows every preset, and [docs/install.md](docs/install.md) covers install options and running it as a service.
 
-The proxy accepts Anthropic Messages, OpenAI Responses, OpenAI Chat Completions and Gemini requests. The paging tools are injected for Anthropic, OpenAI Responses and Gemini; Chat Completions clients get retrieved context but no tools.
+The proxy accepts Anthropic Messages, OpenAI Responses, OpenAI Chat Completions and Gemini requests, and injects the paging tools for all four.
 
 **Hosted:** [virtual-context.com](https://virtual-context.com) runs the same engine as a service with the dashboard and cost reports; you change your base URL and nothing else.
 

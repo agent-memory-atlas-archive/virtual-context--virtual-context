@@ -1100,6 +1100,7 @@ async def prepare_payload(
     # Resolve upstream context window limit for this model
     from .helpers import (  # noqa: F811 — resolve patched helpers at request time
         _add_restore_tool,
+    tool_names,
         _inject_context,
         _inject_vc_tools,
     )
@@ -2045,7 +2046,7 @@ async def prepare_payload(
             _restore_offered = bool(_tool_stubs_present)
             _note_prep("inject_paging_tools", _paging_stage)
             paging_enabled = True
-            _vc_names = [t["name"] for t in enriched_body.get("tools", []) if t.get("name", "").startswith("vc_")]
+            _vc_names = [name for name in tool_names(enriched_body) if name.startswith("vc_")]
             logger.info(
                 "PAGING Tools injected: %s (total tools: %d, policy=%s, turns=%d, compacted_prefix_messages=%d)",
                 _vc_names, len(enriched_body.get("tools", [])),
@@ -2076,7 +2077,7 @@ async def prepare_payload(
     # Inject vc_restore_tool when stubs are present but paging didn't already inject it
     _restore_tool_injected = False
     if _tool_stubs_present and not paging_enabled and fmt.supports_tool_interception:
-        existing_names = {t.get("name") for t in enriched_body.get("tools", []) if isinstance(t, dict)}
+        existing_names = set(tool_names(enriched_body))
         if "vc_restore_tool" not in existing_names:
             from ..core.tool_loop import vc_tool_definitions
             _restore_def = [d for d in vc_tool_definitions() if d["name"] == "vc_restore_tool"]
