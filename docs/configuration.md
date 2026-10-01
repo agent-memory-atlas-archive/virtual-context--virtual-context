@@ -392,7 +392,7 @@ tag_rules:
 
 ### judgment
 
-Routes eleven internal decisions through a typed-judgment model when mode is
+Routes thirteen internal decisions through a typed-judgment model when mode is
 `shadow` or `jev`: retrieval shortlist order (`rerank`), query intent
 (`query_intent`), inbound temporal intent (`temporal_intent`), safety-critical
 evidence (`safety_critical`), actor-card admission (`admission`), whether a freshly
@@ -400,7 +400,9 @@ minted tag duplicates an existing one (`tag_reuse`), which stored facts a new fa
 supersedes, duplicates, or contradicts (`supersession`), which tag names cover the
 same topic (`tag_consolidation`), which facts stay in the curated facts block
 (`fact_curation`), whether a broad tag spans several topics (`tag_split`), and
-whether a segment summary is grounded in its source (`summary_grounding`). `shadow` keeps legacy
+whether a segment summary is grounded in its source (`summary_grounding`), which topics and
+segments a request retrieves (`topic_select`), and which existing topics a stored turn is
+tagged with (`tag_select`). `shadow` keeps legacy
 behavior and logs `JUDGMENT_SHADOW` lines for comparison. `jev` uses the model's
 answer and falls back to legacy on any failure (`JUDGMENT_FALLBACK`). The
 default `legacy` never calls the model.
@@ -417,7 +419,15 @@ judgment:
   admission_max_state_bytes: 120000  # trim evidence segments, then uncited turns, to fit
   tag_reuse_candidates: 12        # existing tags offered per freshly minted tag
   curation_min_probability: 0.3   # facts at or above this probability stay in the block
+  curation_batch_tokens: 40000    # fact sets above this estimated size are judged in batches
   grounding_max_state_bytes: 120000  # skip the grounding call above this state size
+  topic_pool_size: 30             # topics offered to topic_select
+  topic_min_probability: 0.5      # topics and segments at or above this are retrieved
+  topic_pool_source: fused        # fused (multi-signal ranking) | embedding (summary similarity only)
+  segment_pool_size: 0            # segments judged with the topics in the same call (0 = topics only)
+  tag_select_candidates: 30       # existing topics nearest the turn offered to tag_select
+  tag_select_min_probability: 0.5 # a topic at or above this is kept for the turn
+  tag_select_max_tags: 6          # most topics kept per turn, likeliest first
   seams:                          # optional per-seam override of mode
     admission: shadow
     tag_reuse: shadow
@@ -426,7 +436,8 @@ judgment:
 `seams` lets each decision run in its own mode; a seam not listed follows `mode`. Seam
 names: `rerank`, `query_intent`, `temporal_intent`, `safety_critical`, `admission`,
 `tag_reuse`, `supersession`, `tag_consolidation`, `fact_curation`, `tag_split`,
-`summary_grounding`. The `VC_JUDGMENT_MODE` override changes `mode` only.
+`summary_grounding`, `topic_select`, `tag_select`. The `VC_JUDGMENT_MODE` override
+changes `mode` only.
 
 In `jev` mode the seams change behavior as follows. `tag_reuse` replaces a minted tag
 with the existing tag the model picks. `supersession` decides the superseded set (and
@@ -434,7 +445,12 @@ the fact links) without the comparison model. `tag_consolidation` builds groups 
 pairwise same-topic answers over lexically or semantically close tag names.
 `fact_curation` keeps facts at or above `curation_min_probability`. `tag_split` skips
 the split model when the tag holds one topic. `summary_grounding` adds the reject reason
-`jev_ungrounded` to the segment-summary gate, which triggers the existing retry. An
+`jev_ungrounded` to the segment-summary gate, which triggers the existing retry.
+`topic_select` retrieves the topics and segments at or above `topic_min_probability`, most
+likely first; when none qualify the default ranking stands. `tag_select` tags a stored turn
+with the existing topics at or above `tag_select_min_probability`, near-synonyms collapsed,
+and keeps the tagging model's new tags only when the turn has a subject no existing topic
+names; the tagging model's other output, such as fact signals, is unchanged. An
 admission payload above `admission_max_state_bytes` is trimmed (`JUDGMENT_TRIM`) or,
 when the cited material alone does not fit, skipped (`JUDGMENT_SKIP`).
 
