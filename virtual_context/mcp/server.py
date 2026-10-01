@@ -326,7 +326,7 @@ def domain_status() -> str:
         JSON array of tag statistics.
     """
     engine = _get_engine()
-    tags = engine._store.get_all_tags()
+    tags = engine._store.get_all_tags(conversation_id=engine.config.conversation_id)
     return json.dumps([
         {
             "tag": t.tag,
@@ -349,7 +349,7 @@ def domain_status() -> str:
 def list_domains() -> str:
     """List all stored tags/domains with their statistics."""
     engine = _get_engine()
-    tags = engine._store.get_all_tags()
+    tags = engine._store.get_all_tags(conversation_id=engine.config.conversation_id)
     lines = []
     for t in tags:
         lines.append(f"- **{t.tag}**: {t.usage_count} segments, {t.total_summary_tokens} summary tokens")
@@ -361,7 +361,9 @@ def list_domains() -> str:
 def get_domain_summaries(tag: str) -> str:
     """Get all stored summaries for a specific tag/domain."""
     engine = _get_engine()
-    summaries = engine._store.get_summaries_by_tags(tags=[tag], min_overlap=1, limit=50)
+    summaries = engine._store.get_summaries_by_tags(
+        tags=[tag], min_overlap=1, limit=50, conversation_id=engine.config.conversation_id,
+    )
     if not summaries:
         return f"No summaries found for tag: {tag}"
 

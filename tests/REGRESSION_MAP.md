@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-110 — MCP topic tool and resources served other conversations
+
+- **Symptom**: `domain_status`, `virtualcontext://domains` and `virtualcontext://domains/{tag}` listed topics and returned summaries from every conversation in the store, not only the one the MCP server's engine is bound to.
+- **Root cause**: the three handlers called `get_all_tags()` and `get_summaries_by_tags()` without `conversation_id`, which those store methods treat as "all conversations".
+- **Fix**: pass the engine's `conversation_id` to both reads.
+- **Tests**:
+  - `test_mcp_conversation_scope.py`
+
 ### BUG-109 — Chat Completions clients could not page deeper
 
 - **Symptom**: Chat Completions requests received retrieved context but none of the paging tools (`vc_expand_topic`, `vc_find_quote`, `vc_restore_tool`), so those clients could not open a topic's turns or restore a stubbed output.
@@ -1159,6 +1167,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_chain_restore_format.py` | BUG-106 |
 | `test_fact_topic_pointer.py` | BUG-108 |
 | `test_chat_completions_paging_tools.py` | BUG-109 |
+| `test_mcp_conversation_scope.py` | BUG-110 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
