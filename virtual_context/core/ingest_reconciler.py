@@ -1827,6 +1827,7 @@ class IngestReconciler:
             )
             _t_load = time.perf_counter()
             existing = self._load_reconcile_rows(conversation_id)
+            prepared_turns = self._apply_record_edits(conversation_id, prepared_turns)
             phase_timings["load_ms"] = (time.perf_counter() - _t_load) * 1000.0
             _t_locked = time.perf_counter()
             result = self._ingest_prepared_turns_locked(
@@ -1866,6 +1867,42 @@ class IngestReconciler:
                     observed=observed_now,
                 )
             return result
+
+    def _apply_record_edits(
+        self, conversation_id: str, rows: list[CanonicalTurnRow],
+    ) -> list[CanonicalTurnRow]:
+        """Replayed history as the edited record has it.
+
+        A host replays the messages it holds, including ones an admin removed
+        or edited in the stored record. A removed turn is dropped and an
+        edited one carries its replacement, so replay neither restores a
+        removed turn nor appends the original text beside its edit. Only this
+        replay path applies it: a new live message that happens to repeat
+        removed text is still recorded.
+        """
+        getter = getattr(self._store, "get_retired_turns", None)
+        retired = getter(conversation_id) if callable(getter) and rows else {}
+        if not retired:
+            return rows
+        kept = []
+        for row in rows:
+            if row.turn_hash not in retired:
+                kept.append(row)
+                continue
+            replacement = retired[row.turn_hash]
+            if replacement is None:
+                continue
+            turn_hash, norm_user, norm_assistant = compute_turn_hash_from_raw(
+                replacement["user_content"], replacement["assistant_content"], version=HASH_VERSION,
+            )
+            row.user_content = replacement["user_content"]
+            row.assistant_content = replacement["assistant_content"]
+            row.user_raw_content = row.assistant_raw_content = None
+            row.turn_hash, row.normalized_user_text, row.normalized_assistant_text = (
+                turn_hash, norm_user, norm_assistant,
+            )
+            kept.append(row)
+        return kept
 
     def _ingest_prepared_turns_locked(
         self,

@@ -1473,6 +1473,52 @@ def _apply_storage_overrides(config, args) -> None:
         config.storage.sqlite_path = sqlite_path
 
 
+def cmd_admin_record(args):
+    """Edit a conversation's record: forget a topic, edit or remove a turn.
+
+    The record changes first and every change is audited; the segments,
+    facts and topic summaries derived from it are then rebuilt in this
+    process. ``status`` and ``history`` only read.
+    """
+    from virtual_context.engine import VirtualContextEngine
+
+    config = load_config(args.config)
+    config.conversation_id = args.conversation_id
+    if getattr(args, "tenant_id", ""):
+        config.tenant_id = args.tenant_id
+    _apply_storage_overrides(config, args)
+    engine = VirtualContextEngine(config=config)
+    editor = engine.record_editor
+    try:
+        action = args.record_action
+        if action == "forget":
+            result = editor.forget_topic(args.target, actor=args.actor, reason=args.reason)
+        elif action == "edit":
+            if args.user is None and args.assistant is None:
+                raise SystemExit("edit needs --user and/or --assistant")
+            result = editor.edit_turn(args.target, user_content=args.user,
+                                      assistant_content=args.assistant,
+                                      actor=args.actor, reason=args.reason)
+        elif action == "remove":
+            result = editor.remove_turn(args.target, actor=args.actor, reason=args.reason)
+        elif action == "status":
+            result = {"operations": editor.status(args.target or None)}
+        elif action == "history":
+            result = {"edits": engine._store.get_turn_edits(
+                engine.config.conversation_id, canonical_turn_id=args.target or None,
+            )}
+        else:  # process: finish an interrupted rebuild
+            result = editor.process(args.target) or {"error": "operation not found"}
+        if action in ("forget", "edit", "remove") and result.get("operation_id"):
+            result["rebuild"] = editor.process(result["operation_id"])
+        print(json.dumps(result, indent=2, default=str))
+    finally:
+        try:
+            engine.close()
+        except Exception:
+            pass
+
+
 def cmd_admin_backfill_tag_summaries(args):
     """Backfill ``tag_summaries`` rows for a conversation whose segments
     are already durable.
@@ -3018,6 +3064,27 @@ def main():
     consolidate_parser.add_argument("--sqlite-path")
     consolidate_parser.set_defaults(func=cmd_admin_consolidate_tags)
 
+    record_parser = admin_sub.add_parser(
+        "record",
+        help="Edit a conversation's record: forget a topic, edit or remove a turn",
+    )
+    record_parser.add_argument(
+        "record_action", choices=("forget", "edit", "remove", "status", "history", "process"),
+    )
+    record_parser.add_argument("conversation_id")
+    record_parser.add_argument(
+        "target", nargs="?", default="",
+        help="Topic (forget), canonical turn id (edit/remove/history) or operation id (status/process)",
+    )
+    record_parser.add_argument("--user", default=None, help="New user text (edit)")
+    record_parser.add_argument("--assistant", default=None, help="New assistant text (edit)")
+    record_parser.add_argument("--actor", default="cli", help="Who is making the edit, for the audit trail")
+    record_parser.add_argument("--reason", default="", help="Why, for the audit trail")
+    record_parser.add_argument("--tenant-id", default="")
+    record_parser.add_argument("--storage-backend", choices=("sqlite", "postgres", "filesystem"))
+    record_parser.add_argument("--postgres-dsn")
+    record_parser.add_argument("--sqlite-path")
+
     backfill_ts_parser = admin_sub.add_parser(
         "backfill-tag-summaries",
         help=(
@@ -3679,6 +3746,8 @@ def main():
             cmd_migrate_semantic_vectors(args)
         elif args.admin_command == "retag-canonical-turns":
             cmd_admin_retag_canonical_turns(args)
+        elif args.admin_command == "record":
+            cmd_admin_record(args)
         elif args.admin_command == "backfill-tag-summaries":
             cmd_admin_backfill_tag_summaries(args)
         elif args.admin_command == "backfill-fact-embeddings":
@@ -3731,6 +3800,7 @@ def main():
         else:
             print(
                 "Usage:\n"
+                "  virtual-context admin record forget|edit|remove|status|history|process <conversation_id> [target] [--user T] [--assistant T] [--actor A] [--reason R]\n"
                 "  virtual-context admin backfill-tag-summaries <conversation_id> [--tenant-id <id>] [--force-rebuild]\n"
                 "  virtual-context admin backfill-fact-embeddings <conversation_id> [--tenant-id <id>] [--since <ts>] [--until <ts>] [--force-rebuild]\n"
                 "  virtual-context admin backfill-senders [<conversation_id>] [--tenant-id <id>] [--all-convs-for-tenant] [--dry-run] [--limit N]\n"

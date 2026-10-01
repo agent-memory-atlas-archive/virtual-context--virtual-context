@@ -1530,7 +1530,7 @@ async def _handle_vc_command(
     elif cmd == "list":
         text = _handle_vclist(tenant_registry, tenant_id)
     elif cmd == "forget":
-        text = _handle_vcforget(arg, state)
+        text = _handle_vcforget(arg, state, actor=_command_actor(result))
     else:
         text = f"Unknown VC command: {cmd}"
 
@@ -1741,6 +1741,15 @@ def _handle_vcstatus(conv_id: str, state, tenant_registry, tenant_id):
         f"Generation: {generation}",
         f"Active tags: {', '.join(active_tags[:15]) if active_tags else 'none'}",
     ])
+    try:
+        record_edits = engine.record_editor.status()
+    except Exception:
+        record_edits = []
+    for op in record_edits:
+        lines.append(
+            f"Record edit: {op['action']} {op['target']} by {op['actor']}, "
+            f"{len(op['done'])}/{len(op['segments'])} segments rebuilt ({op['status']})"
+        )
     return "\n".join(lines)
 
 
@@ -2233,7 +2242,7 @@ def _handle_vc_command_rest(
     elif cmd == "list":
         text = _handle_vclist(registry, tenant_id)
     elif cmd == "forget":
-        text = _handle_vcforget(arg, state)
+        text = _handle_vcforget(arg, state, actor=_command_actor(result))
     else:
         text = f"Unknown VC command: {cmd}"
 
@@ -2246,60 +2255,51 @@ def _handle_vc_command_rest(
     })
 
 
-def _handle_vcforget(tag: str, state):
-    """Delete segments and summaries for a specific tag."""
+def _command_actor(result) -> str:
+    """Who issued a VC command, as far as the request proves it."""
+    context = getattr(result, "speaker_context", None)
+    return (getattr(context, "requester_actor_id", "") or "").strip() or "vc-command"
+
+
+def _handle_vcforget(tag: str, state, *, actor: str = "vc-command"):
+    """Forget a topic: strip it from every turn, remove turns left with none.
+
+    The record changes immediately; segments, facts and topic summaries are
+    rebuilt in the background.
+    """
     if not tag:
-        return "Usage: VCFORGET <tag>"
+        return "Usage: VCFORGET <topic>"
     if not state:
         return "No active conversation."
 
     engine = state.engine
-    store = engine._store
     conv_id = engine.config.conversation_id
-
-    # Check if tag exists — get_all_tags returns TagStats objects
-    all_tag_stats = store.get_all_tags(conversation_id=conv_id)
-    all_tag_names = [ts.tag for ts in all_tag_stats if hasattr(ts, "tag")]
-    if tag not in all_tag_names:
-        # Try case-insensitive match
-        tag_lower = tag.lower()
-        matches = [t for t in all_tag_names if t.lower() == tag_lower]
-        if not matches:
-            available = ", ".join(sorted(all_tag_names)[:20])
-            return f"Tag '{tag}' not found. Available tags: {available}"
-        tag = matches[0]
-
-    # Delete segments for this tag
-    deleted = 0
     try:
-        segments = store.get_segments_by_tags([tag], conversation_id=conv_id)
-        for seg in segments:
-            ref = getattr(seg, "ref", "") or getattr(seg, "segment_ref", "")
-            if ref:
-                store.delete_segment(ref)
-                deleted += 1
-    except Exception:
-        pass
+        report = engine.record_editor.forget_topic(tag, actor=actor, reason="VCFORGET")
+    except RuntimeError as exc:
+        return f"Cannot forget '{tag}' yet: {exc}."
+    if not report["found"]:
+        available = ", ".join(sorted(
+            ts.tag for ts in engine._store.get_all_tags(conversation_id=conv_id)
+        )[:20])
+        return f"Topic '{tag}' not found. Available topics: {available}"
+    topic = report["topic"]
+    if report["segments_to_rebuild"]:
+        state.submit_record_edit(report["operation_id"])
 
-    # Delete tag summary
-    try:
-        if hasattr(store, "delete_tag_summary"):
-            store.delete_tag_summary(tag, conversation_id=conv_id)
-    except Exception:
-        pass
-
-    # Remove from working set if present
-    paging = getattr(engine, "_paging", None)
-    if paging and hasattr(paging, "working_set"):
-        paging.working_set.pop(tag, None)
-
-    # Emit event so dashboard updates
-    if state and state.metrics:
+    if state.metrics:
         state.metrics.record({
             "type": "tag_forgotten",
             "conversation_id": conv_id,
-            "tag": tag,
-            "segments_removed": deleted,
+            "tag": topic,
+            "operation_id": report["operation_id"],
+            "turns_removed": report["turns_removed"],
+            "turns_untagged": report["turns_untagged"],
+            "segments_removed": report["segments_deleted"],
         })
 
-    return f"Forgot '{tag}': {deleted} segment(s) removed."
+    return (
+        f"Forgot '{topic}': {report['turns_removed']} turn(s) removed, "
+        f"{report['turns_untagged']} untagged, {report['segments_to_rebuild']} segment(s) "
+        f"rebuilding in the background (operation {report['operation_id'][:8]})."
+    )

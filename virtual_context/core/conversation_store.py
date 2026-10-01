@@ -46,6 +46,11 @@ class ConversationStoreView:
         "store_tool_output",
         "update_fact_fields",
         "update_segment",
+        "forget_topic_records",
+        "edit_canonical_turn",
+        "remove_canonical_turn",
+        "update_record_edit_operation",
+        "delete_tag_summaries",
     }
 
     def __init__(self, store: Any, conversation_id: str, generation: int) -> None:

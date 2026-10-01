@@ -2756,5 +2756,37 @@ class CompositeStore:
     def get_fact_admission_snapshot(self, fact_id, *, tenant_id=None):
         return self._facts.get_fact_admission_snapshot(fact_id, tenant_id=tenant_id)
 
+    # Record edits change canonical turns and the segments derived from them,
+    # so they belong to the store that owns both.
+
+    def forget_topic_records(self, conversation_id, tags, **kwargs):
+        return self._segments.forget_topic_records(conversation_id, tags, **kwargs)
+
+    def edit_canonical_turn(self, conversation_id, canonical_turn_id, **kwargs):
+        return self._segments.edit_canonical_turn(conversation_id, canonical_turn_id, **kwargs)
+
+    def remove_canonical_turn(self, conversation_id, canonical_turn_id, **kwargs):
+        return self._segments.remove_canonical_turn(conversation_id, canonical_turn_id, **kwargs)
+
+    def get_turn_edits(self, conversation_id, **kwargs):
+        return self._segments.get_turn_edits(conversation_id, **kwargs)
+
+    def delete_tag_summaries(self, conversation_id, tags):
+        return self._segments.delete_tag_summaries(conversation_id, tags)
+
+    def get_retired_turns(self, conversation_id):
+        fn = getattr(self._segments, "get_retired_turns", None)
+        return fn(conversation_id) if callable(fn) else {}
+
+    def get_record_edit_operation(self, operation_id):
+        return self._segments.get_record_edit_operation(operation_id)
+
+    def list_record_edit_operations(self, conversation_id, **kwargs):
+        fn = getattr(self._segments, "list_record_edit_operations", None)
+        return fn(conversation_id, **kwargs) if callable(fn) else []
+
+    def update_record_edit_operation(self, operation_id, **kwargs):
+        return self._segments.update_record_edit_operation(operation_id, **kwargs)
+
     def get_pending_exchange(self, conversation_id, exchange_id, *, now):
         return self._state.get_pending_exchange(conversation_id, exchange_id, now=now)

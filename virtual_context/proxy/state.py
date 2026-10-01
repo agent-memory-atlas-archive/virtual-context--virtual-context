@@ -2813,6 +2813,62 @@ class ProxyState:
             priority = ""
         return priority == "backlog"
 
+    def submit_record_edit(self, operation_id: str):
+        """Queue the derived rebuild of a record edit behind any compaction."""
+        return self._compact_pool.submit(self.run_record_edit, operation_id)
+
+    def run_record_edit(self, operation_id: str, *, attempts: int = 60, wait_s: float = 5.0) -> bool:
+        """Rebuild what a record edit changed while holding the compaction lease.
+
+        The lease is the compaction operation row, so the rebuild cannot
+        interleave with compaction on any worker; its writes are fenced the
+        same way. If another worker holds the lease the rebuild waits for it.
+        Returns False when the lease was never obtained; the operation stays
+        pending and a later run resumes it.
+        """
+        conversation_id = self.engine.config.conversation_id
+        for attempt in range(attempts):
+            lease_id = str(uuid.uuid4())
+            with self._compaction_lock:
+                self._active_compaction_op = lease_id
+                self._compaction_cancelled.clear()
+                try:
+                    entered = bool(self.enter_compaction(
+                        phase_count=1, initial_phase_name="record_edit", operation_id=lease_id,
+                    ))
+                except Exception:
+                    logger.warning("RECORD_EDIT enter_compaction failed for %s",
+                                   conversation_id[:12], exc_info=True)
+                    entered = False
+                if entered:
+                    stop = threading.Event()
+                    sidecar = threading.Thread(
+                        target=self._run_compaction_heartbeat_sidecar,
+                        args=(conversation_id, int(self.engine._engine_state.lifecycle_epoch),
+                              lease_id, stop),
+                        daemon=True, name="vc-record-edit-heartbeat",
+                    )
+                    sidecar.start()
+                    try:
+                        self.advance_compaction_phase(phase_index=0, phase_name="record_edit")
+                        self.engine.record_editor.process(operation_id, lease_operation_id=lease_id)
+                        self.exit_compaction(success=True)
+                        return True
+                    except Exception as exc:
+                        logger.warning("RECORD_EDIT op=%s rebuild failed", operation_id[:8], exc_info=True)
+                        try:
+                            self.exit_compaction(success=False, error_message=str(exc))
+                        except Exception:
+                            logger.warning("exit_compaction failed for %s", conversation_id[:12], exc_info=True)
+                        return True
+                    finally:
+                        stop.set()
+                        sidecar.join(timeout=5)
+            if attempt + 1 < attempts:
+                time.sleep(wait_s)
+        logger.warning("RECORD_EDIT op=%s left pending: compaction lease unavailable", operation_id[:8])
+        return False
+
     def _run_compact(
         self,
         history: list[Message],

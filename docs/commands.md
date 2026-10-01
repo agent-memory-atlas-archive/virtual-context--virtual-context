@@ -12,7 +12,7 @@ Virtual-context provides user-facing commands that work across both the proxy (A
 | `VCRECALL <query>` | Search stored context and promote matching topics into the working set |
 | `VCCOMPACT` | Force immediate compaction |
 | `VCLIST` | List conversations with labels and turn counts |
-| `VCFORGET <tag>` | Delete the segments and summaries stored for a tag |
+| `VCFORGET <topic>` | Forget a topic and rebuild what was derived from it |
 | `VCMERGE INTO <target>` | Merge this conversation into another (reserved; see below) |
 | `VCMERGESTATUS` | Report merge progress (reserved; see below) |
 
@@ -105,15 +105,32 @@ VCLIST
 
 ## VCFORGET
 
-Delete the stored segments and summaries for a specific tag. Useful for removing a topic that is stale or sensitive.
+Forget a topic. The topic is removed from every turn that carries it, and a turn left with no topic at all is removed. The topic's summary is deleted, and the segments, facts and summaries derived from the changed turns are rebuilt in the background. `VCSTATUS` shows the rebuild while it runs.
 
 ### Usage
 
 ```
-VCFORGET <tag>
+VCFORGET <topic>
 ```
 
-The argument must be an existing tag name (case-insensitive). If the tag is not found, the response lists the available tags. This is a permanent deletion of that tag's segments and summaries.
+The topic is matched case-insensitively, and an alias resolves to its topic. If the topic is not found, the response lists the available topics.
+
+Every change is kept in an audit trail: each untagged or removed turn records its text and tags before the change, who made it and when. A host replaying old history does not bring a removed turn back. To erase content entirely, delete the conversation.
+
+## Editing the record
+
+`virtual-context admin record` edits a conversation's record directly. Each action changes the turns, writes the audit trail, then rebuilds the segments, facts and topic summaries derived from them:
+
+```
+virtual-context admin record forget  <conversation_id> <topic>
+virtual-context admin record edit    <conversation_id> <turn_id> --user "<text>" [--assistant "<text>"]
+virtual-context admin record remove  <conversation_id> <turn_id>
+virtual-context admin record history <conversation_id> [<turn_id>]
+virtual-context admin record status  <conversation_id> [<operation_id>]
+virtual-context admin record process <conversation_id> <operation_id>
+```
+
+`--actor` and `--reason` are stored with each change. `edit` keeps the original text in the audit trail and drops any source attestation the turn carried, since the turn no longer matches its source. `remove` removes both halves of the exchange. `process` finishes a rebuild that was interrupted. Deciding who may run these is up to the deployment.
 
 ## VCMERGE and VCMERGESTATUS
 
@@ -177,6 +194,7 @@ Each imported conversation keeps its own conversation ID from the export, so sep
 
 | Subcommand | Purpose |
 |------------|---------|
+| `record` | Forget a topic, edit or remove a turn, with an audit trail (see [Editing the record](#editing-the-record)) |
 | `backfill-tag-summaries` | Materialize missing tag summaries |
 | `backfill-fact-embeddings` | Write embeddings for facts that predate embedding storage |
 | `backfill-senders` | Recover sender labels on canonical turns |

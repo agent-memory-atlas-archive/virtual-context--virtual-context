@@ -6228,7 +6228,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             TABLES_SIMPLE = (
                 "segments", "canonical_turn_anchors", "canonical_turn_chunks",
                 "ingest_batches", "facts",
-                "fact_decisions", "fact_embeddings",
+                "fact_decisions", "fact_embeddings", "turn_edits", "record_edit_operations",
                 "segment_tool_outputs",
             )
             # Tables whose natural key can legitimately collide across
@@ -6723,11 +6723,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
 
                 # Step 5: per-table moves.
                 for tbl in TABLES_SIMPLE:
-                    if tbl == "fact_decisions":
+                    if tbl in ("fact_decisions", "turn_edits", "record_edit_operations"):
                         # Audit payload and original owner stay immutable. Older
                         # records may honestly have an unknown (empty) origin.
                         cur = conn.execute(
-                            "UPDATE fact_decisions SET conversation_id=%s WHERE conversation_id=%s",
+                            f"UPDATE {tbl} SET conversation_id=%s WHERE conversation_id=%s",
                             (target_conversation_id, source_conversation_id),
                         )
                     else:
@@ -8221,6 +8221,8 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                     "engine_state",
                     "pending_tool_exchanges",
                     "fact_decisions",
+                    "turn_edits",
+                    "record_edit_operations",
                     "fact_embeddings",
                     "facts",
                     "canonical_turns",

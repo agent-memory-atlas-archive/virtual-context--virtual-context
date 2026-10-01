@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .core.record_editing import RecordEditor
     from .proxy.formats import PayloadFormat
     from .proxy.session_state import SessionState
 
@@ -3065,6 +3066,16 @@ class VirtualContextEngine:
             turn_id=turn_id,
             disable_replacement_passes=disable_replacement_passes,
         )
+
+    @property
+    def record_editor(self) -> "RecordEditor":
+        """Admin edits to this conversation's record: forget a topic, edit or remove a turn."""
+        from .core.record_editing import RecordEditor
+
+        editor = self.__dict__.get("_record_editor")
+        if editor is None:
+            editor = self.__dict__["_record_editor"] = RecordEditor(self)
+        return editor
 
     def retag_canonical_turns(
         self,

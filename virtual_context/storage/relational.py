@@ -15,9 +15,10 @@ import uuid
 
 from ..core.store_capabilities import RELATIONAL_CAPABILITIES
 from .fact_mutations import FactMutationMixin
+from .record_edits import RecordEditMixin
 
 
-class RelationalStoreMixin(FactMutationMixin):
+class RelationalStoreMixin(FactMutationMixin, RecordEditMixin):
     capabilities = RELATIONAL_CAPABILITIES
     _relational_dialect = "sqlite"
 
@@ -55,6 +56,7 @@ class RelationalStoreMixin(FactMutationMixin):
     def _ensure_request_state_schema(self):
         with self._relational_connection(write=True, scope="vc-request-state-schema") as conn:
             self._ensure_fact_decision_schema(conn)
+            self._ensure_record_edit_schema(conn)
             # PostgreSQL builds this potentially large index concurrently via
             # the explicit read-index migration, never under bootstrap locks.
             if self._relational_dialect != "postgres":

@@ -219,6 +219,31 @@ class TurnTagIndex:
             self._all_tags = {tag for entry in self.entries for tag in entry.tags}
         return modified
 
+    def remove_canonical_turns(self, canonical_turn_ids) -> int:
+        """Drop the entries of removed turns. Returns the number dropped."""
+        gone = {str(i) for i in canonical_turn_ids}
+        kept = [e for e in self.entries if e.canonical_turn_id not in gone]
+        dropped = len(self.entries) - len(kept)
+        if dropped:
+            self.entries = []
+            self._by_logical_turn, self._by_canonical_turn, self._by_hash = {}, {}, {}
+            self._all_tags = set()
+            evicted = self._evicted_count
+            for entry in kept:
+                self.append(entry)
+            self._evicted_count = evicted
+        return dropped
+
+    def set_turn_tags(self, canonical_turn_id: str, tags: list[str], primary_tag: str) -> bool:
+        """Replace one turn's tags after its stored row changed."""
+        entry = self._by_canonical_turn.get(str(canonical_turn_id))
+        if entry is None:
+            return False
+        entry.tags = list(tags)
+        entry.primary_tag = primary_tag or "_general"
+        self._all_tags = {tag for e in self.entries for tag in e.tags}
+        return True
+
     def get_tag_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for entry in self.entries:

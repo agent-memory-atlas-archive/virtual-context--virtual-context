@@ -161,7 +161,7 @@ Type these as ordinary messages in a connected client; the proxy handles them wi
 | `VCRECALL <query>` | Search stored context and bring matching topics into the next turn |
 | `VCCOMPACT` | Compact now |
 | `VCLIST` | List conversations with labels and turn counts |
-| `VCFORGET <tag>` | Delete a topic's segments and summaries |
+| `VCFORGET <topic>` | Forget a topic: remove it from every turn, remove turns left with no topic, and rebuild what was derived from them |
 | `VCMERGE INTO <label\|id>` | Merge this conversation's stored data into another |
 
 `VCATTACH` is a durable redirect: nothing is deleted and old references keep resolving, so two clients (or two agents) can share one memory. Details: [docs/commands.md](docs/commands.md).
@@ -170,7 +170,7 @@ Type these as ordinary messages in a connected client; the proxy handles them wi
 
 - **Storage:** SQLite by default; PostgreSQL (`pip install "virtual-context[postgres]"`) for multi-worker deployments. With pgvector installed, `virtual-context admin migrate-semantic-vectors` prepares in-database vector search.
 - **Multi-worker safety:** compactions run under leased, fenced operations, lifecycle changes are epoch-guarded, and a backlog sweeper compacts conversations whose traffic never triggers it inline.
-- **Operator tooling:** `virtual-context admin` has 27 guarded backfill, repair and migration commands with dry-run modes.
+- **Operator tooling:** `virtual-context admin` has 28 guarded backfill, repair and migration commands with dry-run modes.
 - **Security:** dashboard endpoints are open until you set `VC_DASHBOARD_TOKEN`; the default bind is loopback only.
 - **Observability:** per-stage timing logs, request captures in the dashboard, and per-call cost telemetry.
 
