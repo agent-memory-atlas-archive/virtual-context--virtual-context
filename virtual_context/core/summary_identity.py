@@ -403,3 +403,70 @@ def is_proved_summary_rendering(text: object) -> bool:
 def sanitize_summary_payload_for_model(payload: object, **_kwargs) -> object:
     """Tool payloads carry stored summary text unchanged."""
     return payload
+
+
+def facts_admitted_for_audience(
+    facts: Iterable[object],
+    *,
+    store: object | None,
+    conversation_id: str,
+    speaker_context: "SpeakerRetrievalContext | None",
+) -> list[bool]:
+    """Whether each fact may be shown to a request in its audience.
+
+    A fact's source turns are those of the segment it was extracted from, so
+    a fact is admitted exactly when its segment would be. A fact with no
+    segment carries no source turns and is admitted, as an unsourced summary
+    is; a segment that could not be read withholds its facts. A store with no
+    segment reader has no sources to check, as with summaries.
+    """
+    materialized = list(facts)
+    refs = list(dict.fromkeys(
+        ref for ref in (str(getattr(f, "segment_ref", "") or "").strip() for f in materialized)
+        if ref
+    ))
+    segment_ok: dict[str, bool] = {}
+    loaded: list[tuple[str, object]] = []
+    getter = getattr(store, "get_segment", None)
+    for ref in refs:
+        if not callable(getter):
+            segment_ok[ref] = True
+            continue
+        try:
+            segment = getter(ref, conversation_id=conversation_id or None)
+        except Exception:
+            segment_ok[ref] = False
+            continue
+        if segment is None:
+            segment_ok[ref] = True
+        else:
+            loaded.append((ref, segment))
+    if loaded:
+        admitted = summaries_admitted_for_audience(
+            (segment for _ref, segment in loaded),
+            store=store,
+            conversation_id=conversation_id,
+            speaker_context=speaker_context,
+        )
+        for (ref, _segment), ok in zip(loaded, admitted, strict=True):
+            segment_ok[ref] = ok
+    return [
+        segment_ok.get(str(getattr(f, "segment_ref", "") or "").strip(), True)
+        for f in materialized
+    ]
+
+
+def facts_for_audience(
+    facts: Iterable[object],
+    *,
+    store: object | None,
+    conversation_id: str,
+    speaker_context: "SpeakerRetrievalContext | None",
+) -> list:
+    """``facts`` without those whose source turns belong to another audience."""
+    materialized = list(facts)
+    admitted = facts_admitted_for_audience(
+        materialized, store=store, conversation_id=conversation_id,
+        speaker_context=speaker_context,
+    )
+    return [fact for fact, ok in zip(materialized, admitted, strict=True) if ok]

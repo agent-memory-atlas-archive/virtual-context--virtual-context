@@ -36,6 +36,8 @@ from .speaker_labels import (
     resolve_speaker_labels,
 )
 from .summary_identity import (
+    facts_admitted_for_audience,
+    facts_for_audience,
     is_proved_summary_rendering,
     render_summaries_for_model,
 )
@@ -1004,6 +1006,10 @@ def _attach_related_facts(
     try:
         _sf_limit = engine.config.search.search_facts_max_results
         facts = engine._store.search_facts(query=query, limit=_sf_limit, conversation_id=engine.config.conversation_id)
+        facts = facts_for_audience(
+            facts, store=engine._store, conversation_id=engine.config.conversation_id,
+            speaker_context=summary_speaker_context or SpeakerRetrievalContext.ineligible(),
+        )
     except Exception:
         return result
 
@@ -1775,7 +1781,27 @@ def _execute_vc_tool_unescaped(
                 _return_meta=True,
                 _intent_context=intent_context,
             )
-            facts = meta["facts"]
+            # A fact is shown only where its source turns may be: the same
+            # audience check the summaries it came from pass.
+            facts = facts_for_audience(
+                meta["facts"], store=engine._store,
+                conversation_id=engine.config.conversation_id,
+                speaker_context=summary_speaker_context,
+            )
+            meta["facts"] = facts
+            meta["linked_facts"] = [
+                linked for linked, ok in zip(
+                    meta.get("linked_facts") or [],
+                    facts_admitted_for_audience(
+                        [linked.fact for linked in meta.get("linked_facts") or []],
+                        store=engine._store,
+                        conversation_id=engine.config.conversation_id,
+                        speaker_context=summary_speaker_context,
+                    ),
+                    strict=True,
+                )
+                if ok
+            ]
             # Speaker selection is resolved with the SAME validated helper the
             # quote path uses, so a handle can only ever name an actor this
             # request's roster snapshot proved. Selection was previously

@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-112 — Facts reached requests from another audience
+
+- **Symptom**: a fact extracted from a DM turn inside an owner conversation was returned by `vc_query_facts`, attached to `vc_find_quote` results, listed by `vc_remember_when` and injected before a guild request, although the summary of the same turn was withheld.
+- **Root cause**: the audience check reads source turn ids off each item; summaries carry them and facts do not, so every fact passed.
+- **Fix**: `facts_admitted_for_audience` admits a fact exactly when its segment would be, reaching the source turns through the segment. Applied to `vc_query_facts` (and its linked facts), the facts attached to `vc_find_quote`, the fact hits of `vc_remember_when`, and the retrieved facts before curation and injection.
+- **Tests**:
+  - `test_fact_audience.py`
+
 ### BUG-111 — Refused supersessions were proposed again
 
 - **Symptom**: a supersession `fact_decisions` had refused was proposed and judged again on every later pass, with the same facts and sources, and refused again.
@@ -1177,6 +1185,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_chat_completions_paging_tools.py` | BUG-109 |
 | `test_mcp_conversation_scope.py` | BUG-110 |
 | `test_refused_supersession.py` | BUG-111 |
+| `test_fact_audience.py` | BUG-112 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

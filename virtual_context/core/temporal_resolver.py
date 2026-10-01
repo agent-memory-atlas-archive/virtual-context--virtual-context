@@ -442,8 +442,8 @@ class TemporalResolver:
         *,
         speaker_context: "SpeakerRetrievalContext | None",
     ) -> tuple[list[dict], set[str]]:
-        """Facts are shown as stored."""
-        return results, set()
+        """Drop fact hits whose segment's source turns belong to another audience."""
+        return self._scope_segment_results_for_request(results, speaker_context=speaker_context)
 
     def _default_remember_when_max_results(self, resolved_mode: str) -> int:
         base = self._config.search.remember_when_max_results

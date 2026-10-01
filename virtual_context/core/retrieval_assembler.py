@@ -189,6 +189,17 @@ class RetrievalAssembler:
     # on_message_inbound
     # ------------------------------------------------------------------
 
+    def _facts_for_audience(self, facts: list, speaker_context) -> list:
+        """Retrieved facts this request's audience may see, before curation."""
+        if not facts:
+            return facts
+        from .summary_identity import facts_for_audience
+
+        return facts_for_audience(
+            facts, store=self._store, conversation_id=self.config.conversation_id,
+            speaker_context=speaker_context,
+        )
+
     def _curate_facts(self, facts: list, question: str) -> list:
         """Curate *facts* for *question*, reusing an identical earlier decision.
 
@@ -520,6 +531,7 @@ class RetrievalAssembler:
             **query_options,
         )
         _note("retrieve_primary", _retrieve_stage)
+        retrieval_result.facts = self._facts_for_audience(retrieval_result.facts, speaker_context)
 
         # D2: Curate facts down to query-relevant subset before assembly
         if self._fact_curator and retrieval_result.facts:
@@ -608,6 +620,9 @@ class RetrievalAssembler:
                 if retry_tags != ["_general"]:
                     message_tags = retry_tags
                     retrieval_result = retry_result
+                    retrieval_result.facts = self._facts_for_audience(
+                        retrieval_result.facts, speaker_context,
+                    )
                     # Re-assemble with the improved retrieval result so
                     # prepend_text includes the newly matched summaries.
                     if self._fact_curator and retrieval_result.facts:
