@@ -1,5 +1,5 @@
 schema_version: 1
-status: historical_claims_without_original_run_manifest
+status: claims_without_original_run_manifest
 captured_on: '2026-09-05'
 claim_source:
   repository_commit: 5f293764fda5bb79e43fec2675a2ba67eeac0e98

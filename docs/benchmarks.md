@@ -10,7 +10,7 @@ Virtual-context is evaluated against established long-conversation memory benchm
 
 **Results** (100 questions from LongMemEval-500, 5 batches of 20): virtual-context answered 95/100 correctly vs. 33/100 for the same reader model given the full raw history. Average tokens per question dropped 55% (52,347 vs. 117,582), and average cost per question dropped from $0.36 to $0.16. Results by category and the full per-question table follow.
 
-The [claim record](../benchmarks/longmemeval/historical-claims.yaml) identifies
+The [claim record](../benchmarks/longmemeval/claims.yaml) identifies
 the exact published source bytes and the run provenance that is available. New
 runs are recorded with the content-addressed pipeline manifest described below.
 
