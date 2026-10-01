@@ -46,14 +46,28 @@ Recent turns stay verbatim. Older turns are grouped by topic, summarized and min
 
 ## The conversation is the record
 
-Many memory systems keep only what they extract: once a fact is written, the fact is the memory, so they need a ledger of fact decisions, trust scores and human review to keep that store honest. virtual-context is built the other way around. **The conversation itself is the memory, and it is kept in full.** Summaries, tags and facts are an index into it, not a replacement for it.
+virtual-context is built like virtual memory. **The conversation is the backing store: every turn is kept verbatim, with who said it, where, when and to whom.** Everything else is a cache layer above it, there to put the right part of the conversation in front of the model, not to replace it.
 
-- **Every turn is stored verbatim** in `canonical_turns`: the user's message and the reply exactly as sent, with who said it (sender and actor id), where (channel), when (session date), who could see it (audience), the platform message id, and the message it replied to. Compaction marks a turn as compacted; it does not delete its text.
-- **Every summary keeps its source.** A segment stores its summary next to the `full_text` it summarizes. A topic summary records which segments and turns it covers and the last turn it covers (`covers_through_turn`).
-- **Every fact points back to where it came from**: the segment and turns it was extracted from, its author, and the platform message when one is known.
-- **The model can always go back to the words.** `vc_find_quote` searches the verbatim record, `vc_expand_topic` opens a topic's full text, `vc_remember_when` scopes recall to a time range, and `vc_restore_tool` puts a compacted exchange back in place.
+| Layer | What it holds | Role |
+|---|---|---|
+| Canonical turns | Every message exactly as sent, with sender, channel, time, audience and reply target | The record. The ground truth everything else points back to. |
+| Layer 0: recent turns | The latest exchanges, verbatim | Always in the model's view. |
+| Layer 1: segment summaries and facts | Per-topic summaries of older turns, and facts extracted from them | Compact, cached views of what was said. Each segment keeps its full text and the ids of the turns it covers; each fact names the topic it came from. |
+| Layer 2: topic summaries | One digest per topic | The bird's-eye view, and the table of contents for paging. |
 
-So the question "why does the memory say this?" is answered by the conversation: what was said, by whom, in what order, and what was decided after it. That is also how a fact's history reads: a preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context, rather than three versions of a row. Fact-level bookkeeping still exists (every accepted or rejected fact change is written to an append-only `fact_decisions` table with its reason), but it is an index of extraction decisions, not the source of truth. When a fact and the conversation disagree, the conversation wins, and anyone can check.
+**Paging happens on every turn.** Before each model call, virtual-context pages in what the current question needs: the recent turns, the summaries of the relevant topics, the most relevant facts, and an index of every other topic. Facts and summaries are selected toward the same goal, so a fact arrives with the summary of the topic it came from, or with a pointer to it. When the model needs more, it pages deeper itself: `vc_expand_topic` opens a topic from its summary down to the exact turns, `vc_find_quote` searches the verbatim record, `vc_remember_when` scopes recall to a time range, and `vc_restore_tool` puts a compacted exchange back in place.
+
+So a fact is not a final answer. It is a cached copy of something that was said, telling the model what it can assume and where the full discussion lives. That is where the questions a memory has to answer are settled:
+
+| Question | Where the answer comes from |
+|---|---|
+| Why does the memory say this? | The turns it came from: the exact words, in their original order and context, one page-in away from the fact. |
+| Who said it, and how much weight does it carry? | The source turns: the speaker, the audience it was said to, the message it replied to, and whether anything said later contradicts it. Belief comes from the record, not from a score attached to the fact. |
+| When did it happen, and is it still true? | The dates on the source turns and everything said after them. A preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context. When a newer fact replaces an older one, the older fact is kept and marked superseded, not deleted, so the cache records what changed. |
+| Who reviewed it? | No separate reviewer is required, because the review happens on the record rather than on the cache. The record was reviewed as it was written, by the people writing it, and they correct it the way people do: by saying so in the conversation. Editing the record itself is reserved for virtual-context admins, who can edit or remove past turns, remove a topic (`VCFORGET`) or delete a whole conversation; the segments, summaries and facts derived from those turns are recomputed to match. An edited turn is marked as edited, with who edited it and when, and every edit is kept in an audit trail. On LongMemEval's knowledge-update questions, where a fact is stated and later changed, virtual-context answered 17 of 17 with the current value (see [Benchmarks](#benchmarks)). |
+| What did extraction keep or reject, and why? | The append-only `fact_decisions` table, which records every accepted or rejected fact change with its reason. It is consulted before a change is proposed, so a change already rejected for the same source is not proposed again. It is bookkeeping about the cache, not the source of truth. |
+
+When a cached fact and the conversation disagree, the conversation wins, and it is always one page-in away.
 
 ## Quick start
 
@@ -173,6 +187,12 @@ On 100 questions from [LongMemEval-500](https://github.com/xiaowu0162/LongMemEva
 | Cost per question | $0.16 | $0.36 |
 
 These are **historical results**: the original run's provenance is incomplete and they are not a measurement of the current pipeline. Configuration, results by category, the per-question table and how new runs are recorded: [docs/benchmarks.md](docs/benchmarks.md).
+
+## Known limits
+
+A cache can be wrong. What we know and how it is handled:
+
+- **A wrong cached fact can steer an answer.** If extraction misreads what was said, the model may act on that fact before paging in its source. Several things limit this: facts are curated per question rather than shown wholesale, every fact names its topic so the source is one page-in away, the topic's summary is selected for the same question, facts keep their author and dates, and supersession retires a fact once a newer one replaces it. A later correction in the conversation always becomes part of the record. Better ways to catch a stale fact before it is used are ongoing work.
 
 ## Documentation
 
