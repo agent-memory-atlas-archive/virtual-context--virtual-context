@@ -23,6 +23,5 @@ run_provenance:
   dataset_sha256: null
   memory_cache_manifest: null
   original_machine_readable_results: null
-interpretation: Frozen record of the published claim. Original run artifacts were
-  not available in the tracked repository. This record does not attest current accuracy,
-  reproduce the run, or convert historical caches into valid cache hits.
+interpretation: Record of the published claim. Original run artifacts were not available
+  in the tracked repository.
