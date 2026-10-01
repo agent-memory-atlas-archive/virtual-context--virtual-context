@@ -35,6 +35,7 @@ from .speaker_labels import (
     project_fact_speaker_fields,
     resolve_speaker_labels,
 )
+from .fact_lifecycle import servable_facts
 from .summary_identity import (
     facts_admitted_for_audience,
     facts_for_audience,
@@ -1007,7 +1008,8 @@ def _attach_related_facts(
         _sf_limit = engine.config.search.search_facts_max_results
         facts = engine._store.search_facts(query=query, limit=_sf_limit, conversation_id=engine.config.conversation_id)
         facts = facts_for_audience(
-            facts, store=engine._store, conversation_id=engine.config.conversation_id,
+            servable_facts(facts), store=engine._store,
+            conversation_id=engine.config.conversation_id,
             speaker_context=summary_speaker_context or SpeakerRetrievalContext.ineligible(),
         )
     except Exception:
@@ -1784,16 +1786,20 @@ def _execute_vc_tool_unescaped(
             # A fact is shown only where its source turns may be: the same
             # audience check the summaries it came from pass.
             facts = facts_for_audience(
-                meta["facts"], store=engine._store,
+                servable_facts(meta["facts"]), store=engine._store,
                 conversation_id=engine.config.conversation_id,
                 speaker_context=summary_speaker_context,
             )
             meta["facts"] = facts
+            _linked = [
+                linked for linked in meta.get("linked_facts") or []
+                if servable_facts([linked.fact])
+            ]
             meta["linked_facts"] = [
                 linked for linked, ok in zip(
-                    meta.get("linked_facts") or [],
+                    _linked,
                     facts_admitted_for_audience(
-                        [linked.fact for linked in meta.get("linked_facts") or []],
+                        [linked.fact for linked in _linked],
                         store=engine._store,
                         conversation_id=engine.config.conversation_id,
                         speaker_context=summary_speaker_context,

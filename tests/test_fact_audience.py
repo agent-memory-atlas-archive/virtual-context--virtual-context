@@ -84,7 +84,7 @@ def test_a_dm_request_does_not_see_guild_facts(engine):
 def test_injected_facts_are_filtered_before_curation(engine):
     facts = engine._store.query_facts(conversation_id=OWNER, limit=10)
     assert len(facts) == 2
-    kept = engine._retrieval._facts_for_audience(facts, None)
+    kept = engine._retrieval._facts_for_request(facts, None)
     assert [f.what for f in kept] == ["I run the guild league on Fridays"]
 
 

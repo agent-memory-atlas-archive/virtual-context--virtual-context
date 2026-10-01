@@ -185,6 +185,15 @@ class RecordEditMixin:
                           actor, segments, retag=(), tags=(), forgotten=()):
         p = self._placeholder
         now = _now()
+        # The record no longer supports what was extracted from these
+        # segments; their facts are withheld until the rebuild replaces them.
+        refs = sorted({segment["ref"] for segment in segments})
+        if refs:
+            conn.execute(
+                f"""UPDATE facts SET trust_state='retracted' WHERE conversation_id={p}
+                AND segment_ref IN ({','.join([p] * len(refs))})""",
+                [conversation_id, *refs],
+            )
         conn.execute(
             f"""INSERT INTO record_edit_operations (operation_id,conversation_id,action,target,
             actor,status,segments_json,retag_json,tags_json,forgotten_json,created_at,updated_at)

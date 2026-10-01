@@ -2753,6 +2753,10 @@ class CompositeStore:
     def get_fact_decisions(self, conversation_id, *, limit=100, before=None):
         return self._facts.get_fact_decisions(conversation_id, limit=limit, before=before)
 
+    def refresh_fact_trust(self, conversation_id, segment_refs):
+        fn = getattr(self._facts, "refresh_fact_trust", None)
+        return fn(conversation_id, segment_refs) if callable(fn) else {}
+
     def get_refused_supersessions(self, conversation_id, replacement_fact_id):
         fn = getattr(self._facts, "get_refused_supersessions", None)
         return fn(conversation_id, replacement_fact_id) if callable(fn) else []

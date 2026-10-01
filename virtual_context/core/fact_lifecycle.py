@@ -21,9 +21,15 @@ def fact_version(fact: Fact) -> str:
     """Stable persisted-fact fingerprint for optimistic proposal admission."""
     value = asdict(fact)
     value.pop("session_date", None)  # Query-derived presentation, not source state.
+    value.pop("trust_state", None)  # Derived from the sources, not fact content.
     value["tags"] = sorted(set(value.get("tags") or []))
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def servable_facts(facts):
+    """``facts`` without the retracted ones: the record no longer supports them."""
+    return [fact for fact in facts if getattr(fact, "trust_state", "") != "retracted"]
 
 
 @dataclass(frozen=True)

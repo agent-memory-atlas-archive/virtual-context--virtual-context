@@ -2021,6 +2021,10 @@ class CompactionPipeline:
                         self._config.conversation_id, _seg_ref, result.facts,
                         **self._compaction_guard_kwargs(operation_id),
                     )
+                    if _inserted:
+                        self._store.refresh_fact_trust(
+                            self._config.conversation_id, [_seg_ref],
+                        )
                     if _deleted:
                         # Name the REF as well as the tag. Eviction is keyed on
                         # segment_ref and one tag maps to many refs, so a reader

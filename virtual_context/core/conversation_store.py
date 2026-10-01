@@ -51,6 +51,7 @@ class ConversationStoreView:
         "remove_canonical_turn",
         "update_record_edit_operation",
         "delete_tag_summaries",
+        "refresh_fact_trust",
     }
 
     def __init__(self, store: Any, conversation_id: str, generation: int) -> None:

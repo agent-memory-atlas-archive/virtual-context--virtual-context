@@ -103,6 +103,9 @@ class FactSignal:
     what: str = ""               # full-sentence memory with ALL specifics
 
 
+FACT_TRUST_STATES = ("verified", "unverified", "retracted")
+
+
 @dataclass
 class Fact:
     """Consolidated queryable fact.
@@ -150,6 +153,12 @@ class Fact:
     # unassociated model output.
     author_source_role: str = ""
     author_source_message_id: str = ""
+    # Whether the record still supports this fact (FACT_TRUST_STATES):
+    # ``verified`` when its source turns exist and prove it, ``unverified``
+    # when no complete source proof exists, ``retracted`` when an admin edit
+    # changed a source turn and the fact awaits its rebuild. A retracted fact
+    # is never served.
+    trust_state: str = "unverified"
 
     @classmethod
     def from_dict(cls, d: dict, *, dt_parser=None) -> Fact:
@@ -204,6 +213,7 @@ class Fact:
             ),
             author_source_role=d.get("author_source_role", "") or "",
             author_source_message_id=d.get("author_source_message_id", "") or "",
+            trust_state=d.get("trust_state", "") or "unverified",
         )
 
     def format_for_prompt(self, include_index: int | None = None) -> str:

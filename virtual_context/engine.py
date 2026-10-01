@@ -4255,6 +4255,8 @@ class VirtualContextEngine:
                     conversation_id, stored.ref, result.facts,
                     expected_lifecycle_epoch=epoch,
                 )
+                if inserted:
+                    self._store.refresh_fact_trust(conversation_id, [stored.ref])
                 if old_facts and deleted == 0 and inserted == 0:
                     report["failed"] += 1
                     continue

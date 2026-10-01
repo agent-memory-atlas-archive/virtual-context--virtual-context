@@ -56,6 +56,7 @@ class RelationalStoreMixin(FactMutationMixin, RecordEditMixin):
     def _ensure_request_state_schema(self):
         with self._relational_connection(write=True, scope="vc-request-state-schema") as conn:
             self._ensure_fact_decision_schema(conn)
+            self._ensure_fact_trust_schema(conn)
             self._ensure_record_edit_schema(conn)
             # PostgreSQL builds this potentially large index concurrently via
             # the explicit read-index migration, never under bootstrap locks.

@@ -162,6 +162,47 @@ class FactMutationMixin:
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_decisions_replacement
             ON fact_decisions (conversation_id,replacement_fact_id)""")
 
+    def _ensure_fact_trust_schema(self, conn):
+        if self._relational_dialect == "postgres":
+            # ADD COLUMN IF NOT EXISTS locks the table even when it does
+            # nothing, and this runs per engine; look first.
+            if not conn.execute(
+                """SELECT 1 FROM information_schema.columns
+                WHERE table_name='facts' AND column_name='trust_state'"""
+            ).fetchone():
+                conn.execute("""ALTER TABLE facts ADD COLUMN IF NOT EXISTS
+                    trust_state TEXT NOT NULL DEFAULT 'unverified'""")
+        elif "trust_state" not in {row["name"] for row in conn.execute("PRAGMA table_info(facts)")}:
+            conn.execute("""ALTER TABLE facts ADD COLUMN
+                trust_state TEXT NOT NULL DEFAULT 'unverified'""")
+
+    def refresh_fact_trust(self, conversation_id, segment_refs):
+        """Set each current fact of these segments to what its sources prove.
+
+        ``verified`` when the segment's source turns exist and re-prove the
+        fact, ``unverified`` otherwise. Returns the count per state.
+        """
+        refs = sorted({ref for ref in segment_refs if ref})
+        if not refs:
+            return {}
+        p = self._placeholder
+        counts = {"verified": 0, "unverified": 0}
+        with self._relational_connection(write=True, scope=f"vc-fact-trust:{conversation_id}") as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM facts WHERE conversation_id={p}
+                AND segment_ref IN ({','.join([p] * len(refs))}) AND superseded_by IS NULL""",
+                [conversation_id, *refs],
+            ).fetchall()
+            for row in rows:
+                fact = self._row_to_fact(row)
+                state = "verified" if self._fact_sources(conn, fact) else "unverified"
+                if fact.trust_state != state:
+                    conn.execute(
+                        f"UPDATE facts SET trust_state={p} WHERE id={p}", (state, fact.id),
+                    )
+                counts[state] += 1
+        return counts
+
     def _fact_guard(self, conn, facts, operation_id, owner_worker_id, lifecycle_epoch, site):
         supplied = sum(
             value is not None for value in (operation_id, owner_worker_id, lifecycle_epoch)
