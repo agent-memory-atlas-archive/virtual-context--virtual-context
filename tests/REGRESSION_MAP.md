@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-108 — Facts shown to the model carried no pointer to their source
+
+- **Symptom**: a fact in the model's context showed its content but nothing about where it came from, so the model could not page in the turns behind a fact without guessing the topic.
+- **Root cause**: `Fact.format_for_prompt` rendered subject, verb, object and descriptive fields but no tag or segment reference, although every fact stores the tags of the segment it came from.
+- **Fix**: the rendered line ends with `[topic: <first tag>]`, a topic `vc_expand_topic` can open.
+- **Tests**:
+  - `test_fact_topic_pointer.py`
+
 ### BUG-107 — Facts never recorded the turns they came from
 
 - **Symptom**: every stored fact had an empty `turn_numbers` (0 of 91,393 in a production store), so a fact could be traced to its segment but not to the turns it was extracted from.
@@ -1150,6 +1158,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_filter_keeps_paired_over_unanswered.py` | BUG-105 |
 | `test_chain_restore_format.py` | BUG-106 |
 | `test_fact_source_turns.py` | BUG-107 |
+| `test_fact_topic_pointer.py` | BUG-108 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |

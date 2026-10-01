@@ -229,6 +229,10 @@ class Fact:
             line += f" [why: {self.why}]"
         if self.status and self.status != "active":
             line += f" [status: {self.status}]"
+        # The fact is a cached copy of what was said; its topic is where the
+        # source can be paged in (vc_expand_topic).
+        if self.tags and self.tags[0]:
+            line += f" [topic: {self.tags[0]}]"
         # Fields are extracted from conversation text, so a quoted markup
         # lookalike could open a forged wrapper inside a rendered context
         # block. Emit angle brackets as literal escapes at this prompt
