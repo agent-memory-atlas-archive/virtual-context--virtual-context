@@ -1,5 +1,11 @@
 # Jev judgment harness: first results
 
+This harness decides, one decision at a time, whether the optional typed judgment model
+should replace the built-in path. Each table scores both on the same set. The sets are small
+and hand-written, not a sample of production traffic, so a rate here compares the two paths
+on those cases and is not a production accuracy. Built-in paths that are off by default are
+noted where they appear.
+
 Run: 2026-09-16, late evening ET (result files stamped 2026-09-17T02:37Z to 02:38Z UTC).
 Model returned by the API: `jev-1.13.0` (requested `jev-latest`). Legacy admission model:
 `qwen/qwen3-235b-a22b-2507` through OpenRouter. Result files: `benchmarks/jev/results/`.
@@ -167,8 +173,8 @@ budget cut already removes the same low-probability tail.
 
 A per-candidate yes/no question ("is this claim about the actor themselves") now turns a
 `durable` answer into `wrong_subject` when its probability is below `noul_threshold`.
-Jev-only rerun on the same 13 candidates (legacy side unchanged from the first run; the
-harness OpenRouter account had no credit left for a second legacy pass):
+Jev-only rerun on the same 13 candidates (the legacy side was not rerun; its row is the
+first run's):
 
 | side | reason accuracy | admit/reject accuracy | coverage accuracy | mean ms | mean input tokens |
 |---|---|---|---|---|---|
@@ -183,8 +189,7 @@ answered `completed`) and `agent_persona c2` (a finite honored preference, answe
 
 ## Not measured here
 Tag select-instead-of-generate, summary faithfulness, retrieval gate, tag consolidation,
-hint ranking. Production shadow mode has not been enabled anywhere; every deployment stays
-on `legacy`.
+hint ranking.
 
 ## Second seam set (added 2026-09-20, 8:45 PM ET; result files stamped 2026-09-21T00:45Z to 00:48Z)
 
@@ -231,7 +236,9 @@ Per area:
   22 (missed q7:f1, "likes Thai food" for a peanut-allergy question, p 0.24). False positives
   on the 17 irrelevant facts: legacy 0, Jev raw 1, Jev deployed 4 (p 0.32 to 0.51). The
   curator's stated contract is inclusive, so the deployed profile is the intended one.
-- **tag_split.** Both sides said "splittable" for all 12 tags. The production model split
+- **tag_split.** Tag splitting is off by default (`tag_splitting.enabled: false`), so this
+  row measures a path that runs only when an operator enables it, and the result is a reason
+  to leave it off at the 0.5 cut. Both sides said "splittable" for all 12 tags. The production model split
   every single-topic set (five turns each on one subject). Jev separated the classes by
   probability: multi-topic tags p 0.92 to 0.97, single-topic tags p 0.52 to 0.91 (five of
   six at or below 0.78). Accuracy at a 0.8 cut is 91.7%; the 0.5 default is the wrong cut
