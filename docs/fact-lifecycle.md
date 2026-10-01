@@ -39,7 +39,11 @@ edges. The winning fact remains source-derived: model-written consolidation pros
 is no longer allowed to rewrite its statement or temporal status.
 
 SQL decisions record the proposal, acceptance reason and policy version, observed
-and event dates, source versions and before/after values.
+and event dates, source versions and before/after values. Candidate selection reads
+these refusals back: a supersession refused under the current policy for the same
+fact versions and source versions is not proposed again, while a change to either
+fact or to a source turn makes it a new proposal. A refusal of a stale snapshot does
+not count, since it was never judged on its merits.
 Model inputs are bound to fact fingerprints and canonical/segment versions before
 comparison. Each incoming fact's candidate selection shares one snapshot per
 candidate across embedding and comparison; this cache never crosses requests.
