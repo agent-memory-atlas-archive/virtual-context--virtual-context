@@ -44,6 +44,17 @@ client ──> virtual-context proxy ──> model provider
 
 Recent turns stay verbatim. Older turns are grouped by topic, summarized and mined for facts. Each turn, the model gets recent turns plus the topics and facts relevant to the question, and a topic index telling it what else it can open with built-in tools (`vc_expand_topic`, `vc_find_quote`, `vc_recall_all`, and others).
 
+## The conversation is the record
+
+Many memory systems keep only what they extract: once a fact is written, the fact is the memory, so they need a ledger of fact decisions, trust scores and human review to keep that store honest. virtual-context is built the other way around. **The conversation itself is the memory, and it is kept in full.** Summaries, tags and facts are an index into it, not a replacement for it.
+
+- **Every turn is stored verbatim** in `canonical_turns`: the user's message and the reply exactly as sent, with who said it (sender and actor id), where (channel), when (session date), who could see it (audience), the platform message id, and the message it replied to. Compaction marks a turn as compacted; it does not delete its text.
+- **Every summary keeps its source.** A segment stores its summary next to the `full_text` it summarizes. A topic summary records which segments and turns it covers and the last turn it covers (`covers_through_turn`).
+- **Every fact points back to where it came from**: the segment and turns it was extracted from, its author, and the platform message when one is known.
+- **The model can always go back to the words.** `vc_find_quote` searches the verbatim record, `vc_expand_topic` opens a topic's full text, `vc_remember_when` scopes recall to a time range, and `vc_restore_tool` puts a compacted exchange back in place.
+
+So the question "why does the memory say this?" is answered by the conversation: what was said, by whom, in what order, and what was decided after it. That is also how a fact's history reads: a preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context, rather than three versions of a row. Fact-level bookkeeping still exists (every accepted or rejected fact change is written to an append-only `fact_decisions` table with its reason), but it is an index of extraction decisions, not the source of truth. When a fact and the conversation disagree, the conversation wins, and anyone can check.
+
 ## Quick start
 
 ```bash
