@@ -16,7 +16,7 @@
 
 **Virtual memory for LLM context. Give your agent a context window of tens or hundreds of millions of tokens; the model only ever sees the part that matters.**
 
-Your client sets `contextWindow: 20000000` (or 200,000,000). Your model's real window is 200K. virtual-context sits between them and makes it work, the same way an operating system lets a process address more memory than physically exists. The client keeps sending its whole conversation; virtual-context stores all of it, organizes it by topic, and forwards the model a compact window of what matters for the current turn, at a size you choose. Nothing is discarded, and anything older can be paged back in at full fidelity. The dashboard above shows a live 3 million token conversation served at 80K real tokens.
+Your client sets `contextWindow: 20000000` (or 200,000,000). Your model's real window is 200K. virtual-context sits between them and makes it work, the same way an operating system lets a process address more memory than physically exists. The client keeps sending its whole conversation; virtual-context stores all of it, organizes it by topic, and forwards the model a compact window of what matters for the current turn, at a size you choose. Nothing is discarded unless an admin removes it, and anything older can be paged back in, down to its full transcript. The dashboard above shows a live 3 million token conversation served at 80K real tokens.
 
 It runs as an HTTP proxy, so integration is a base-URL change; a Python SDK and an MCP server are there for direct use.
 
@@ -25,7 +25,7 @@ It runs as an HTTP proxy, so integration is a base-URL change; a Python SDK and 
 - **Memory that lasts.** What the user said at turn 12 is still recallable at turn 1,000, across sessions, clients and models.
 - **Better answers from less context.** A focused window of relevant summaries and facts beats a raw window of everything, where the one fact you need is buried.
 - **Lower cost.** Smaller payloads, arranged to keep providers' prompt caches warm.
-- **Group chats that know who said what.** Every message keeps its sender, facts keep their author, and search can be scoped to one person.
+- **Group chats that know who said what.** Every message keeps its sender, facts keep the author their source shows, and search can be scoped to one person.
 - **One memory everywhere.** Build context in Claude Code, continue it from Telegram, query it from Cursor.
 
 ## How it works
@@ -42,7 +42,7 @@ client ──> virtual-context proxy ──> model provider
              topic summaries   one digest per topic, the bird's-eye view
 ```
 
-Recent turns stay verbatim. Older turns are grouped by topic, summarized and mined for facts. Each turn, the model gets recent turns plus the topics and facts relevant to the question, and a topic index telling it what else it can open with built-in tools (`vc_expand_topic`, `vc_find_quote`, `vc_recall_all`, and others).
+Recent messages stay verbatim. Older turns are grouped by topic, summarized and mined for facts. Each turn, the model gets recent turns plus the topics and facts relevant to the question, and a topic index telling it what else it can open with built-in tools (`vc_expand_topic`, `vc_find_quote`, `vc_recall_all`, and others).
 
 ## The conversation is the record
 
@@ -55,19 +55,19 @@ virtual-context is built like virtual memory. **The conversation is the backing 
 | Layer 1: segment summaries and facts | Per-topic summaries of older turns, and facts extracted from them | Compact, cached views of what was said. Each segment keeps its full text and the ids of the turns it covers; each fact names the topic it came from. |
 | Layer 2: topic summaries | One digest per topic | The bird's-eye view, and the table of contents for paging. |
 
-**Paging happens on every turn.** Before each model call, virtual-context pages in what the current question needs: the recent turns, the summaries of the relevant topics, the most relevant facts, and an index of every other topic. Facts and summaries are selected toward the same goal, so a fact arrives with the summary of the topic it came from, or with a pointer to it. When the model needs more, it pages deeper itself: `vc_expand_topic` opens a topic from its summary down to the exact turns, `vc_find_quote` searches the verbatim record, `vc_remember_when` scopes recall to a time range, and `vc_restore_tool` puts back a tool output, or a turn's whole tool-call chain, that the proxy replaced with a stub in the request.
+**Paging happens on every turn.** Before each model call, virtual-context pages in what the current question needs: the recent turns, the summaries of the relevant topics, the most relevant facts, and an index of the other topics. Facts and summaries are selected for the same question, and every fact carries a pointer to the topic it came from. When the model needs more, it pages deeper itself: `vc_expand_topic` opens a topic from its summary down to its full transcript, `vc_find_quote` searches the verbatim record, `vc_remember_when` scopes recall to a time range, and `vc_restore_tool` puts back a tool output, or a turn's whole tool-call chain, that the proxy replaced with a stub in the request.
 
 So a fact is not a final answer. It is a cached copy of something that was said, telling the model what it can assume and where the full discussion lives. That is where the questions a memory has to answer are settled:
 
 | Question | Where the answer comes from |
 |---|---|
-| Why does the memory say this? | The turns it came from: the exact words, in their original order and context, one page-in away from the fact. |
+| Why does the memory say this? | The conversation it came from: the topic's full transcript, in its original order and context, one page-in away from the fact. |
 | Who said it, and how much weight does it carry? | The source turns: the speaker, the audience it was said to, the message it replied to, and whether anything said later contradicts it. Belief comes from the record, not from a score attached to the fact. |
 | Who can see it? | The audience its source turns were said to. A summary or fact is served only to requests in that audience, so what was said in a DM stays out of a group channel. |
-| When did it happen, and is it still true? | The dates on the source turns and everything said after them. A preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context. When a newer fact replaces an older one, the older fact is kept and marked superseded, not deleted, so the cache records what changed. On LongMemEval's knowledge-update questions, where a fact is stated and later changed, virtual-context answered 17 of 17 with the current value (see [Benchmarks](#benchmarks)). |
+| When did it happen, and is it still true? | The dates on the source turns and everything said after them. A preference stated in March, revised in June and acted on in July is three moments in the record, each with its speaker and context. When a newer fact replaces an older one, the older fact is kept and marked superseded, not deleted, so the cache records what changed. On the knowledge-update questions in our LongMemEval run, where a fact is stated and later changed, virtual-context answered all 17 correctly (see [Benchmarks](#benchmarks)). |
 | Can it be acted on now? | Its trust state, derived from the record: `verified` when its source turns prove it, `unverified` when no complete source proof exists, `retracted` when an admin changed a source turn. A retracted fact is never served; it is withheld until the rebuild replaces it. |
-| Who reviewed it? | The people in the conversation. The conversation is the record, and every fact and summary is checked against it. Humans keep that record current as they talk: when something changes or was wrong, they say so, it becomes part of the record, and newer facts supersede the ones it corrects. When a cache such as a fact needs correcting, admins can do that through the record: they inspect each fact beside the turns it came from and its trust state, and edit or remove a turn, forget a topic, or delete a conversation. The facts drawn from a changed turn are retracted at once and rebuilt, a removed turn stays removed even when a client replays old history, and every admin change is kept in an append-only audit trail, protected by a database trigger, with the original text, who made it, when and why (see [reviewing and editing the record](docs/commands.md#reviewing-and-editing-the-record)). |
-| What did extraction keep or reject, and why? | The append-only `fact_decisions` ledger, which records every accepted and every refused fact change with its proposal, before and after, and reason, and which a database trigger keeps immutable. It is read before every proposal: a change already refused for the same facts and source turns is not proposed again. |
+| Who reviewed it? | The people in the conversation. The conversation is the record, and every fact is checked against it. Humans keep that record current as they talk: when something changes or was wrong, they say so, it becomes part of the record, and newer facts supersede the ones it corrects. When a cache such as a fact needs correcting, admins can do that through the record: they inspect each fact beside the turns it came from and its trust state, and edit or remove a turn, forget a topic, or delete a conversation. The facts drawn from a changed turn are retracted at once and rebuilt, a removed turn stays removed even when a client replays old history, and every admin change is kept in an audit trail, whose entries a database trigger keeps from being changed, with the original text, who made it, when and why (see [reviewing and editing the record](docs/commands.md#reviewing-and-editing-the-record)). |
+| What did extraction keep or reject, and why? | The append-only `fact_decisions` ledger, which records every supersession the store accepts or refuses, and every fact revision, with its proposal, before and after, and reason; a database trigger keeps recorded decisions from being changed. It is read before every proposal: a change already refused for the same facts and source turns is not proposed again. |
 
 When a cached fact and the conversation disagree, the conversation wins, and it is always one page-in away.
 
@@ -80,7 +80,7 @@ pip install "virtual-context[proxy,embeddings]"    # Python 3.11+
 virtual-context uses a language model of your choice to tag turns and write summaries. Pick where it runs:
 
 ```bash
-# A local model server (Ollama, LM Studio, llama.cpp, vLLM): nothing leaves your machine
+# A local model server (Ollama, LM Studio, llama.cpp, vLLM): tagging and summaries stay on your machine
 virtual-context init recommended-local
 
 # Or a hosted model through OpenRouter
@@ -116,7 +116,7 @@ Tool output (file reads, searches, command results) is collapsed into restorable
 
 ```python
 client = anthropic.Anthropic(base_url="http://127.0.0.1:5757")
-client = OpenAI(base_url="http://127.0.0.1:5757/v1")
+client = OpenAI(base_url="http://127.0.0.1:5757/v1")         # proxy started with --upstream https://api.openai.com
 ```
 
 **OpenClaw:** use the [OpenClaw plugin](https://github.com/virtual-context/openclaw-plugin). Settings for direct proxy use are in [docs/install.md](docs/install.md).
@@ -140,10 +140,10 @@ report = engine.on_turn_complete(messages)                                      
 | Topic memory | Each turn is tagged by topic; older turns become per-topic segment summaries and one digest per topic. Tags converge on an existing vocabulary instead of piling up synonyms. | [engine](docs/engine.md) |
 | Structured facts | Compaction extracts facts (subject, verb, object, status, time, and the segment they came from). Newer facts supersede older ones, each fact records whether its source turns still support it, and facts can be retrieved by topic and by meaning. | [fact lifecycle](docs/fact-lifecycle.md) |
 | Retrieval | Topics are ranked by tag overlap, full-text match and embedding similarity, with full-text and semantic search over stored turns as a fallback. | [engine](docs/engine.md) |
-| Demand paging | The model sees topic digests for cold topics and segment summaries for relevant ones, and opens full text through tools when it needs detail. | [engine](docs/engine.md) |
-| Time-scoped recall | "What changed between June and July?" resolves by date math on stored timestamps, not by model guessing. | [engine](docs/engine.md) |
+| Demand paging | The model sees cold topics by name and segment summaries for relevant ones, and opens full text through tools when it needs detail. | [engine](docs/engine.md) |
+| Time-scoped recall | "What changed between June and July?": the model names the date range, and virtual-context selects what falls inside it by the stored dates. | [engine](docs/engine.md) |
 | Group memory | Sender and channel are stored on every message, facts keep their author, members get person cards, and search can be scoped to one speaker. Direct-message content never appears in a server's context. Off by default. | [attribution](docs/attribution.md) |
-| Tool and media compression | Finished tool exchanges become stubs restorable with `vc_restore_tool`; screenshots are recompressed with originals kept. | [proxy](docs/proxy.md) |
+| Tool and media compression | Finished tool exchanges become stubs restorable with `vc_restore_tool`; images are recompressed and restorable the same way. | [proxy](docs/proxy.md) |
 | Prompt-cache aware | Injected context sits after a cache breakpoint, and payload rewrites wait until the provider's cache would have expired anyway. | [engine](docs/engine.md) |
 | A ceiling you choose | Set `context_window` to any size; the virtual window the client sees is independent of it. | [configuration](docs/configuration.md) |
 | Truncation recovery | When a client trims its own history, the missing turns are restored from storage. | [proxy](docs/proxy.md) |
@@ -157,12 +157,12 @@ Type these as ordinary messages in a connected client; the proxy handles them wi
 
 | Command | What it does |
 |---|---|
-| `VCATTACH <label\|id>` | Reattach this client to another stored conversation |
-| `VCLABEL <name>` | Set the conversation label (no argument shows it) |
-| `VCSTATUS` | Conversation id, label, turns, segments, active topics, record edits in progress |
+| `VCATTACH <id\|label>` | Reattach this client to another stored conversation, by id, or by label on the hosted service |
+| `VCLABEL <name>` | Set the conversation label, no argument shows it (hosted service) |
+| `VCSTATUS` | Conversation id, turns, segments, active topics, record edits in progress |
 | `VCRECALL <query>` | Search stored context and bring matching topics into the next turn |
 | `VCCOMPACT` | Compact now |
-| `VCLIST` | List conversations with labels and turn counts |
+| `VCLIST` | List conversations with labels and turn counts (hosted service) |
 | `VCFORGET <topic>` | Forget a topic: remove it from every turn, remove turns left with no topic, and rebuild what was derived from them |
 | `VCMERGE INTO <label\|id>` | Merge this conversation's stored data into another (hosted service) |
 
@@ -176,7 +176,7 @@ Type these as ordinary messages in a connected client; the proxy handles them wi
 - **Security:** dashboard endpoints are open until you set `VC_DASHBOARD_TOKEN`; the default bind is loopback only.
 - **Observability:** per-stage timing logs, request captures in the dashboard, and per-call cost telemetry.
 
-Architecture, including the canonical-turn model and the REST prepare/ingest surface: [docs/architecture.md](docs/architecture.md).
+Architecture, including the canonical-turn model and the prepare/ingest path a host exposes over REST: [docs/architecture.md](docs/architecture.md).
 
 ## Benchmarks
 
@@ -202,11 +202,11 @@ A cache can be wrong. What we know and how it is handled:
 |---|---|
 | [architecture.md](docs/architecture.md) | Memory model, request pipeline, multi-worker coordination, identity |
 | [engine.md](docs/engine.md) | Compaction, tagging, retrieval, code mode, cache awareness |
-| [fact-lifecycle.md](docs/fact-lifecycle.md) | How facts are extracted, superseded, retracted and retrieved, and their trust state |
+| [fact-lifecycle.md](docs/fact-lifecycle.md) | How facts are superseded and retracted, and their trust state |
 | [attribution.md](docs/attribution.md) | Group conversations: who said what, person cards, speaker search |
 | [proxy.md](docs/proxy.md) | Proxy internals, routing, dashboard, streaming, endpoints |
 | [native-vector-search.md](docs/native-vector-search.md) | PostgreSQL + pgvector ranking and its migration |
-| [configuration.md](docs/configuration.md) | Every config key with its default, including the judgment layer |
+| [configuration.md](docs/configuration.md) | Config keys with their defaults, including the judgment layer |
 | [commands.md](docs/commands.md) | In-conversation commands, the CLI, import, reviewing and editing the record, admin tooling |
 | [install.md](docs/install.md) | Install paths, daemons, multi-instance setups |
 | [design.md](docs/design.md) | Why it is built this way, and how it compares with RAG and plain compaction |
@@ -225,4 +225,4 @@ uv sync --locked --extra all --extra dev
 
 ## License
 
-AGPL-3.0, Copyright Y. Ahmed Kidwai. For commercial licensing: ahmed@kidw.ai
+AGPL-3.0-or-later, Copyright Y. Ahmed Kidwai. For commercial licensing: ahmed@kidw.ai
