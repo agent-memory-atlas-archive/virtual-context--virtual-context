@@ -7,7 +7,7 @@ import logging
 import re
 import time
 
-from ..core.fact_lifecycle import decide_supersession, fact_version, parse_fact_date
+from ..core.fact_lifecycle import POLICY_VERSION, decide_supersession, fact_version, parse_fact_date
 from ..core.store import ContextStore
 from ..core.telemetry import TelemetryLedger
 from ..types import Fact, FactLink, LLMProvider, RelationType, SupersessionConfig
@@ -143,6 +143,33 @@ def _proposal_versions(new_snapshot, old_snapshot):
     }
 
 
+def _refused_supersessions(store, new):
+    reader = getattr(store, "get_refused_supersessions", None)
+    if not callable(reader) or not new.conversation_id:
+        return {}
+    refused: dict[str, list[dict]] = {}
+    for entry in reader(new.conversation_id, new.id) or []:
+        refused.setdefault(entry["fact_id"], []).append(entry)
+    return refused
+
+
+def _already_refused(refused, old_id, new_id, new_snapshot, old_snapshot) -> bool:
+    """The ledger refused this exact supersession on the same sources and facts.
+
+    The decision is a function of the two facts, their sources and the
+    admission policy, so an unchanged proposal would be refused again; it is
+    not proposed. A changed source, fact or policy makes it a new proposal.
+    """
+    versions = _proposal_versions(new_snapshot, old_snapshot)
+    return any(
+        entry["policy_version"] == POLICY_VERSION
+        and entry["source_versions"] == versions["expected_source_versions"]
+        and entry["fact_versions"].get(old_id) == versions["expected_old_version"]
+        and entry["fact_versions"].get(new_id) == versions["expected_new_version"]
+        for entry in refused.get(old_id, ())
+    )
+
+
 def _admitted_snapshots(store, new, candidates, *, snapshot_cache=None):
     """Bind each fact once before model I/O; SQL revalidates these proofs by CAS.
 
@@ -154,11 +181,14 @@ def _admitted_snapshots(store, new, candidates, *, snapshot_cache=None):
     if new_snapshot is None:
         return None, [], {}
     accepted, old_snapshots = [], {}
+    refused = _refused_supersessions(store, new)
     for old in candidates:
         if old.id == new.id:
             continue
         snapshot = _proposal_snapshot(store, old, cache=cache)
         if snapshot is None:
+            continue
+        if _already_refused(refused, old.id, new.id, new_snapshot, snapshot):
             continue
         if decide_supersession(new, old, new_audience=new_snapshot.get("audience"), old_audience=snapshot.get("audience")).accepted:
             accepted.append(old)

@@ -2753,6 +2753,10 @@ class CompositeStore:
     def get_fact_decisions(self, conversation_id, *, limit=100, before=None):
         return self._facts.get_fact_decisions(conversation_id, limit=limit, before=before)
 
+    def get_refused_supersessions(self, conversation_id, replacement_fact_id):
+        fn = getattr(self._facts, "get_refused_supersessions", None)
+        return fn(conversation_id, replacement_fact_id) if callable(fn) else []
+
     def get_fact_admission_snapshot(self, fact_id, *, tenant_id=None):
         return self._facts.get_fact_admission_snapshot(fact_id, tenant_id=tenant_id)
 

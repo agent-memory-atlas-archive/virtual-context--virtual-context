@@ -159,6 +159,8 @@ class FactMutationMixin:
                 conn.execute(trigger_sql)
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_decisions_owner
             ON fact_decisions (conversation_id,observed_at,decision_id)""")
+        conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_decisions_replacement
+            ON fact_decisions (conversation_id,replacement_fact_id)""")
 
     def _fact_guard(self, conn, facts, operation_id, owner_worker_id, lifecycle_epoch, site):
         supplied = sum(
@@ -468,6 +470,33 @@ class FactMutationMixin:
                 observed_fact_versions={fact.id: fact_version(fact)},
             )
             return True
+
+    def get_refused_supersessions(self, conversation_id, replacement_fact_id):
+        """Supersessions by ``replacement_fact_id`` this ledger already refused.
+
+        One entry per refusal: the fact it would have replaced, the source
+        versions and the fact versions the refusal was decided on. A refusal
+        for a stale snapshot is not listed; it was never judged on its merits.
+        """
+        p = self._placeholder
+        with self._relational_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT fact_id, policy_version, source_versions_json, observed_fact_versions_json
+                FROM fact_decisions WHERE conversation_id={p} AND replacement_fact_id={p}
+                AND action='supersede' AND accepted=0 AND reason<>'stale_proposal'""",
+                (conversation_id, replacement_fact_id),
+            ).fetchall()
+        return [
+            {
+                "fact_id": row["fact_id"],
+                "policy_version": row["policy_version"],
+                "source_versions": tuple(
+                    tuple(pair) for pair in json.loads(row["source_versions_json"] or "[]")
+                ),
+                "fact_versions": json.loads(row["observed_fact_versions_json"] or "{}"),
+            }
+            for row in rows
+        ]
 
     def get_fact_decisions(self, conversation_id, *, limit=100, before=None):
         self._page_limit(limit)

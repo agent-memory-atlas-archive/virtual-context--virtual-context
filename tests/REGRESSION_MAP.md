@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-111 — Refused supersessions were proposed again
+
+- **Symptom**: a supersession `fact_decisions` had refused was proposed and judged again on every later pass, with the same facts and sources, and refused again.
+- **Root cause**: nothing outside the storage layer read `fact_decisions`; candidate selection in `ingest/supersession.py` never consulted it.
+- **Fix**: `get_refused_supersessions` returns the refusals for a replacement fact, and `_admitted_snapshots` drops a candidate refused under the current policy for the same fact versions and source versions. A refusal for a stale snapshot does not count.
+- **Tests**:
+  - `test_refused_supersession.py`
+
 ### BUG-110 — MCP topic tool and resources served other conversations
 
 - **Symptom**: `domain_status`, `virtualcontext://domains` and `virtualcontext://domains/{tag}` listed topics and returned summaries from every conversation in the store, not only the one the MCP server's engine is bound to.
@@ -1168,6 +1176,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_fact_topic_pointer.py` | BUG-108 |
 | `test_chat_completions_paging_tools.py` | BUG-109 |
 | `test_mcp_conversation_scope.py` | BUG-110 |
+| `test_refused_supersession.py` | BUG-111 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
