@@ -128,3 +128,23 @@ def test_trust_state_is_not_part_of_the_fact_version(engine):
     before = fact_version(fact)
     fact.trust_state = "verified"
     assert fact_version(fact) == before
+
+
+@pytest.mark.parametrize("role", ["unattributed", "assistant"])
+def test_a_fact_with_no_human_author_is_verified_by_its_source_turns(engine, role):
+    engine._store.store_facts([Fact(id="noauthor", subject="assistant", verb="checks", object="the spec",
+                                    what="assistant checks the spec", segment_ref="seg-home",
+                                    conversation_id=CONV, tags=["home"], author_attribution_version=2,
+                                    author_source_role=role)])
+    engine._store.refresh_fact_trust(CONV, ["seg-home"])
+    assert _stored(engine)["assistant checks the spec"] == "verified"
+
+
+def test_a_fact_naming_a_human_speaker_must_reprove_them(engine):
+    engine._store.store_facts([Fact(id="claimed", subject="user", verb="likes", object="tea",
+                                    what="likes tea", segment_ref="seg-home", conversation_id=CONV,
+                                    tags=["home"], author_actor_id="actor:discord:9",
+                                    author_attribution_version=2, author_source_role="requester",
+                                    author_source_message_id="no-such-message")])
+    engine._store.refresh_fact_trust(CONV, ["seg-home"])
+    assert _stored(engine)["likes tea"] == "unverified"

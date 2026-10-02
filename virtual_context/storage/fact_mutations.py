@@ -181,8 +181,8 @@ class FactMutationMixin:
 
         ``rejected`` when an admin's latest verdict on the same statement from
         the same turns rejected it; otherwise ``verified`` when the segment's
-        source turns exist and re-prove the fact, ``unverified`` when they do
-        not. A retracted fact is left retracted: only the rebuild that replaces
+        source turns are complete and present, and re-prove the speaker for a
+        fact that names a human one, ``unverified`` when they do not. A retracted fact is left retracted: only the rebuild that replaces
         it clears it. Returns the count per state.
         """
         refs = sorted({ref for ref in segment_refs if ref})
@@ -203,7 +203,12 @@ class FactMutationMixin:
                 if rejected and self._fact_key(conn, fact) in rejected:
                     state = "rejected"
                 else:
-                    state = "verified" if self._fact_sources(conn, fact) else "unverified"
+                    # A fact that names a human speaker must re-prove that
+                    # speaker; one recorded as unattributed or as the
+                    # assistant's is supported when its source turns are intact.
+                    human_claim = fact.author_source_role not in ("unattributed", "assistant")
+                    sources = self._fact_sources(conn, fact, require_author=human_claim)
+                    state = "verified" if sources else "unverified"
                 if fact.trust_state != state:
                     conn.execute(
                         f"UPDATE facts SET trust_state={p} WHERE id={p}", (state, fact.id),
@@ -236,8 +241,12 @@ class FactMutationMixin:
         if not valid:
             self._enforce_or_observe_mismatch(operation_id=operation_id, write_site=site)
 
-    def _fact_sources(self, conn, fact, *, lock=False):
-        """Capture exact source versions under the mutation transaction's locks."""
+    def _fact_sources(self, conn, fact, *, lock=False, require_author=True):
+        """Capture exact source versions under the mutation transaction's locks.
+
+        With *require_author* the fact's human author must also be re-proved
+        from those rows; without it, the rows only need to be complete.
+        """
         if fact is None or not fact.segment_ref:
             return ()
         p = self._placeholder
@@ -270,7 +279,7 @@ class FactMutationMixin:
             return ()
         from ..core.fact_lifecycle import source_author_matches
 
-        if not source_author_matches(fact, [dict(row) for row in rows]):
+        if require_author and not source_author_matches(fact, [dict(row) for row in rows]):
             return ()
         return (
             ("segment:" + fact.segment_ref, hashlib.sha256(_json(meta).encode()).hexdigest()),

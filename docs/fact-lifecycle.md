@@ -67,8 +67,10 @@ fleet rather than starting a local database.
 ## Trust state
 
 Each fact carries `trust_state`, whether the record still supports it.
-`verified` means the fact's segment maps completely to its source turns and those
-turns re-prove it, including its author; `unverified` means no complete source
+`verified` means the fact's segment maps completely to its source turns, all of
+them are present, and a fact that names a human speaker re-proves that speaker from
+the exact message (a fact recorded as unattributed or as the assistant's needs only
+its turns); `unverified` means no complete source
 proof exists, as for legacy facts; `retracted` means an admin edit or removal
 changed a turn the fact's segment holds; `rejected` means an admin rejected the
 fact. No state is ever assigned by a model, and the state is not part of the fact
