@@ -90,7 +90,7 @@ def get_dashboard_html() -> str:
 
 
 def _check_dashboard_auth(request: Request, dashboard_token: str) -> JSONResponse | None:
-    """Validate ``X-VC-Dashboard-Token`` header (or ``?token=`` query param) for mutating endpoints.
+    """Validate ``X-VC-Dashboard-Token`` header (or ``?token=`` query param) for dashboard endpoints.
 
     Returns a 403 response if authentication fails, or ``None`` to allow access.
     If *dashboard_token* is empty, auth is skipped.
@@ -122,10 +122,25 @@ def register_dashboard_routes(
     _token = dashboard_token or os.environ.get("VC_DASHBOARD_TOKEN", "")
     if not _token:
         logger.warning(
-            "Dashboard token not configured — mutating endpoints "
-            "(shutdown, compact, replay, settings) are unprotected. "
-            "Set VC_DASHBOARD_TOKEN or pass dashboard_token to secure them."
+            "Dashboard token not configured — dashboard endpoints are "
+            "unprotected. Set VC_DASHBOARD_TOKEN or pass dashboard_token "
+            "to secure them."
         )
+    else:
+        @app.middleware("http")
+        async def _dashboard_token_guard(request: Request, call_next):
+            # Every dashboard data route needs the token once one is set; the
+            # page itself and its static assets carry no conversation data.
+            path = request.url.path
+            if (
+                path.startswith("/dashboard/")
+                and not path.startswith("/dashboard/static/")
+                and request.method != "OPTIONS"
+            ):
+                denied = _check_dashboard_auth(request, _token)
+                if denied is not None:
+                    return denied
+            return await call_next(request)
 
     def _registry_states() -> dict[str, ProxyState]:
         conversations = getattr(registry, "_conversations", None)

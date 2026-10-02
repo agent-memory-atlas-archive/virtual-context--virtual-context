@@ -2715,11 +2715,12 @@ class PagingConfig:
     """
     enabled: bool = False
     autonomous_models: list[str] = field(default_factory=lambda: [
+        "claude-fable", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
         "claude-sonnet-4", "claude-opus-4",
         "claude-3-5-sonnet", "claude-3.5-sonnet",
         "claude-3-7-sonnet", "claude-3.7-sonnet",
         "claude-3-opus",
-        "gpt-4o", "gpt-4-turbo", "gpt-4.1", "gpt-5",
+        "gpt-4o", "gpt-4-turbo", "gpt-4.1", "gpt-5", "gpt-6",
         "o1", "o3", "o4-mini",
         "gemini-2.5-pro", "gemini-2.5-flash",
         "gemini-3", "gemini-2.0-flash",

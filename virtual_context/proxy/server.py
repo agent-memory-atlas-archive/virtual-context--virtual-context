@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import replace
@@ -474,6 +475,12 @@ def _resolve_request_audience(
     return resolved.strip() if isinstance(resolved, str) else ""
 
 
+def model_from_path(path: str) -> str:
+    """The model a Gemini-style path names (``.../models/<model>:generateContent``), else ""."""
+    match = re.search(r"models/([^/:]+)", path or "")
+    return match.group(1) if match else ""
+
+
 def derived_user_message(raw_user_message: str) -> str:
     """The user's own words, for every input derived from the request.
 
@@ -600,8 +607,12 @@ async def prepare_payload(
     request_local_history: bool = False,
     log_dir: Path | None = None,
     log_prefix: str = "",
+    model_name: str = "",
 ) -> PreparedPayload:
     """Enrich a request body with virtual-context, returning a PreparedPayload.
+
+    *model_name* names the model when the body does not, as for a native
+    Gemini request, whose model is in the URL path.
 
     Encapsulates the passthrough and active enrichment paths previously inline
     in ``catch_all()``. Pure extraction — identical behaviour to the original.
@@ -1106,7 +1117,7 @@ async def prepare_payload(
     )
     from ..model_limits import resolve_upstream_limit
 
-    _model_name = body.get("model", "")
+    _model_name = body.get("model", "") or model_name
     if state:
         state._last_model = _model_name
     try:
@@ -1639,7 +1650,7 @@ async def prepare_payload(
                     state.engine.on_message_inbound,
                     user_message,
                     live_history,
-                    body.get("model", ""),
+                    _model_name,
                     request_roles=_request_roles,
                     speaker_context=_speaker_context,
                 )
@@ -2013,7 +2024,7 @@ async def prepare_payload(
         and state.engine.config.paging.enabled
     ):
         _paging_mode = state.engine._retrieval._resolve_paging_mode(
-            enriched_body.get("model", ""),
+            enriched_body.get("model", "") or _model_name,
         )
         if _paging_mode == "autonomous":
             tool_turn_count = len(state.engine._turn_tag_index.entries)
@@ -2054,7 +2065,7 @@ async def prepare_payload(
                 tool_turn_count, compacted_count,
             )
         else:
-            logger.info("PAGING Mode=%s for model=%s -- tools NOT injected", _paging_mode, enriched_body.get("model", "?"))
+            logger.info("PAGING Mode=%s for model=%s -- tools NOT injected", _paging_mode, _model_name or "?")
 
     # Inject vc_find_quote for tool output retrieval (when paging didn't already inject it)
     tool_output_find_quote = False
@@ -3394,6 +3405,7 @@ def create_app(
             inbound_conversation_id=inbound_conversation_id,
             log_dir=_effective_log_dir,
             log_prefix=_log_prefix,
+            model_name=model_from_path(path),
         )
 
         context = replace(

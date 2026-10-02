@@ -878,7 +878,9 @@ class VirtualContextEngine:
         if self.config.tag_generator.type == "llm":
             provider_name = self.config.tag_generator.provider
             provider_config = self.config.providers.get(provider_name, {})
-            llm_provider = self._build_provider(provider_name, provider_config)
+            llm_provider = self._build_provider(
+                provider_name, provider_config, model=self.config.tag_generator.model,
+            )
             if llm_provider:
                 llm_provider._llm_log_path = getattr(self.config.proxy, "llm_calls_log", "") or ""
 
@@ -2839,7 +2841,7 @@ class VirtualContextEngine:
         provider_name = sc.provider or self.config.summarization.provider
         model = sc.model or self.config.summarization.model
         provider_config = self.config.providers.get(provider_name, {})
-        llm = self._build_provider(provider_name, provider_config)
+        llm = self._build_provider(provider_name, provider_config, model=sc.model)
         if not llm:
             logger.warning("Supersession enabled but provider '%s' could not be built", provider_name)
             return
@@ -2878,7 +2880,7 @@ class VirtualContextEngine:
         provider_name = cc.provider or self.config.summarization.provider
         model = cc.model or self.config.summarization.model
         provider_config = self.config.providers.get(provider_name, {})
-        llm = self._build_provider(provider_name, provider_config)
+        llm = self._build_provider(provider_name, provider_config, model=cc.model)
         if not llm:
             logger.warning("Curation enabled but provider '%s' could not be built", provider_name)
             return
@@ -2892,8 +2894,14 @@ class VirtualContextEngine:
         )
         logger.info("Fact curator initialized (provider=%s, model=%s)", provider_name, model)
 
-    def _build_provider(self, provider_name: str, provider_config: dict):
+    def _build_provider(self, provider_name: str, provider_config: dict, *, model: str = ""):
+        """Build an LLM provider; *model* is the calling component's own model setting.
+
+        The component's model wins, then the provider block's, then the
+        summarization model.
+        """
         ptype = provider_config.get("type", provider_name)
+        model = model or provider_config.get("model") or self.config.summarization.model
 
         # Backwards compat: bare "ollama" or "local" without explicit type → generic_openai
         if ptype in ("ollama", "local"):
@@ -2913,7 +2921,7 @@ class VirtualContextEngine:
             )
             return GenericOpenAIProvider(
                 base_url=provider_config.get("base_url", default_url),
-                model=provider_config.get("model", self.config.summarization.model),
+                model=model,
                 temperature=self.config.summarization.temperature,
                 api_key=api_key,
             )
@@ -2925,7 +2933,7 @@ class VirtualContextEngine:
                 from .providers.anthropic import AnthropicProvider
                 return AnthropicProvider(
                     api_key=api_key,
-                    model=provider_config.get("model", self.config.summarization.model),
+                    model=model,
                     temperature=self.config.summarization.temperature,
                     base_url=provider_config.get("base_url"),
                     disable_thinking=bool(provider_config.get("disable_thinking", False)),
@@ -2939,7 +2947,7 @@ class VirtualContextEngine:
             from .providers.ollama_native import OllamaNativeProvider
             return OllamaNativeProvider(
                 base_url=provider_config.get("base_url", "http://127.0.0.1:11434"),
-                model=provider_config.get("model", self.config.summarization.model),
+                model=model,
                 temperature=self.config.summarization.temperature,
                 num_predict=provider_config.get("num_predict", 500),
                 force_json=provider_config.get("force_json", True),

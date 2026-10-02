@@ -673,6 +673,26 @@
 </div>
 
 <script>
+  // A dashboard opened as /dashboard?token=... sends the token with every
+  // dashboard request, which a server with VC_DASHBOARD_TOKEN set requires.
+  const VC_DASHBOARD_TOKEN = (() => {
+    const fromUrl = new URLSearchParams(location.search).get('token') || '';
+    try {
+      if (fromUrl) sessionStorage.setItem('vcDashboardToken', fromUrl);
+      return fromUrl || sessionStorage.getItem('vcDashboardToken') || '';
+    } catch (e) { return fromUrl; }
+  })();
+  if (VC_DASHBOARD_TOKEN) {
+    const _fetch = window.fetch.bind(window);
+    window.fetch = (url, opts = {}) => {
+      if (String(url).startsWith('/dashboard')) {
+        opts = {...opts, headers: {...(opts.headers || {}), 'X-VC-Dashboard-Token': VC_DASHBOARD_TOKEN}};
+      }
+      return _fetch(url, opts);
+    };
+  }
+</script>
+<script>
 (function() {
   const $ = id => document.getElementById(id);
 
@@ -1797,7 +1817,7 @@
   // SSE connection
   function connect() {
     $('conn-status').textContent = 'connecting...';
-    const es = new EventSource('/dashboard/events');
+    const es = new EventSource('/dashboard/events' + (VC_DASHBOARD_TOKEN ? '?token=' + encodeURIComponent(VC_DASHBOARD_TOKEN) : ''));
 
     es.onopen = () => {
       $('conn-status').textContent = 'connected';

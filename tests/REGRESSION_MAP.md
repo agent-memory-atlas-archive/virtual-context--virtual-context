@@ -5,6 +5,30 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-115 — Dashboard token left read routes open
+
+- **Symptom**: with `VC_DASHBOARD_TOKEN` set, request captures, export, events, telemetry, conversations and settings were still readable without the token; only mutating routes checked it, and the bundled page never sent it.
+- **Root cause**: `_check_dashboard_auth` was called per route, from the mutating handlers only.
+- **Fix**: a middleware requires the token on every `/dashboard/` route except static assets once a token is set; the page reads `?token=` and sends it on every dashboard request and the event stream.
+- **Tests**:
+  - `proxy/test_dashboard_token_reads.py`
+
+### BUG-114 — Native Gemini requests and current models got no paging tools
+
+- **Symptom**: paging tools were never injected for native Gemini requests, nor for Claude 5, Fable, Haiku 4.5 or GPT-6 model ids.
+- **Root cause**: the paging mode was resolved from the body's `model`, which a native Gemini request carries in its URL path; the default `autonomous_models` list predated those families.
+- **Fix**: `model_from_path` supplies the model from the request path when the body names none, and the default list includes the current families.
+- **Tests**:
+  - `test_paging_model_resolution.py`
+
+### BUG-113 — Component model settings were ignored
+
+- **Symptom**: `tag_generator.model`, `supersession.model` and `curation.model` had no effect; those components ran on `summarization.model`.
+- **Root cause**: `_build_provider` built every provider with the provider block's model or the summarization model, never the calling component's.
+- **Fix**: `_build_provider` takes the component's model, which wins over the provider block's and the summarization model.
+- **Tests**:
+  - `test_component_models.py`
+
 ### BUG-112 — Facts reached requests from another audience
 
 - **Symptom**: a fact extracted from a DM turn inside an owner conversation was returned by `vc_query_facts`, attached to `vc_find_quote` results, listed by `vc_remember_when` and injected before a guild request, although the summary of the same turn was withheld.
@@ -1186,6 +1210,9 @@ Use `pytest -m regression` to run all regression tests.
 | `test_mcp_conversation_scope.py` | BUG-110 |
 | `test_refused_supersession.py` | BUG-111 |
 | `test_fact_audience.py` | BUG-112 |
+| `test_component_models.py` | BUG-113 |
+| `test_paging_model_resolution.py` | BUG-114 |
+| `proxy/test_dashboard_token_reads.py` | BUG-115 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
