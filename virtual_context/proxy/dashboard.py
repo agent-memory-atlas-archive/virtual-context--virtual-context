@@ -246,6 +246,10 @@ def register_dashboard_routes(
         )
         return response
 
+    from .record_routes import register_record_routes
+
+    register_record_routes(app, lambda conversation_id: _dashboard_state(conversation_id))
+
     @app.get("/dashboard")
     async def dashboard_page():
         return HTMLResponse(get_dashboard_html())

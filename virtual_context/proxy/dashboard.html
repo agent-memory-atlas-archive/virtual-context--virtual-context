@@ -398,6 +398,36 @@
     .stats { grid-template-columns: repeat(3, 1fr); }
     .two-col { grid-template-columns: 1fr; }
   }
+  /* Memory review */
+  .review-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .review-controls select, .review-controls input, .review-edit textarea {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 12px;
+  }
+  .review-controls input { min-width: 140px; }
+  .review-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .review-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .review-btn.danger { border-color: var(--red); color: var(--red); }
+  .review-btn.danger:hover { background: var(--red); color: #fff; }
+  .review-status { font-size: 11px; color: var(--text-dim); min-height: 16px; margin-bottom: 6px; }
+  .review-fact { border-top: 1px solid var(--border); padding: 8px 0; }
+  .review-fact-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .review-fact-text { flex: 1; min-width: 240px; }
+  .trust { border-radius: 3px; padding: 1px 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+  .trust.verified { background: rgba(63,185,80,0.15); color: var(--green); }
+  .trust.unverified { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .trust.retracted { background: rgba(209,134,22,0.15); color: var(--orange); }
+  .trust.rejected { background: rgba(248,81,73,0.15); color: var(--red); }
+  .review-turn { margin: 6px 0 0 14px; padding: 6px 8px; background: var(--bg); border-radius: 4px; font-size: 12px; }
+  .review-turn .who { color: var(--text-dim); font-size: 10px; text-transform: uppercase; }
+  .review-turn .text { white-space: pre-wrap; word-break: break-word; }
+  .review-turn .actions { margin-top: 4px; display: flex; gap: 6px; }
+  .review-edit textarea { width: 100%; min-height: 60px; margin-top: 4px; }
+  .review-audit { font-size: 12px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
+  .review-audit-row { border-top: 1px solid var(--border); padding: 4px 0; }
 </style>
 </head>
 <body>
@@ -563,6 +593,37 @@
   <div class="session-list" id="session-list">
     <span class="empty-state">loading conversations...</span>
   </div>
+</div>
+
+<div class="panel" id="review-panel">
+  <div class="section-header"><h2>Memory Review</h2><button class="help-btn" data-help="review" onclick="toggleHelp(this)">?</button></div>
+  <div class="help-content" data-help-for="review" style="display:none">
+    <p>Review what this conversation's memory holds. Each fact is shown beside the turns it was extracted from and its trust state. Reject a fact to withhold it from every read; the same statement extracted again from the same turns stays rejected until it is restored. To correct the record itself, edit or remove a turn, or forget a topic: the facts and summaries drawn from it are retracted and rebuilt. Every decision is kept in the audit trail with who made it, when and why.</p>
+    <dl>
+      <dt>verified</dt><dd>The fact's source turns exist and prove it.</dd>
+      <dt>unverified</dt><dd>No complete source proof exists.</dd>
+      <dt>retracted</dt><dd>A source turn was edited or removed; the fact is withheld until its rebuild replaces it.</dd>
+      <dt>rejected</dt><dd>An admin rejected the fact; it is withheld until restored.</dd>
+    </dl>
+  </div>
+  <div class="review-controls">
+    <select id="review-conv" onfocus="reviewPopulateConversations()"></select>
+    <input id="review-topic" placeholder="topic (optional)">
+    <button class="review-btn" onclick="reviewLoad()">Load facts</button>
+    <button class="review-btn" onclick="reviewVerify()">Verify</button>
+    <input id="review-reason" placeholder="reason for changes">
+  </div>
+  <div class="review-status" id="review-status"></div>
+  <div id="review-facts"><span class="empty-state">choose a conversation and load its facts</span></div>
+  <div class="review-controls" style="margin-top:10px">
+    <input id="review-forget-topic" placeholder="topic to forget">
+    <button class="review-btn danger" onclick="reviewForget()">Forget topic</button>
+    <span style="flex:1"></span>
+    <button class="review-btn" onclick="reviewAudit('edits')">Edit history</button>
+    <button class="review-btn" onclick="reviewAudit('verdicts')">Verdicts</button>
+    <button class="review-btn" onclick="reviewAudit('operations')">Rebuilds</button>
+  </div>
+  <div class="review-audit" id="review-audit"></div>
 </div>
 
 <div class="panel">
@@ -2431,7 +2492,144 @@
   // Refresh live sessions periodically
   setInterval(fetchLiveConversations, 10000);
   connect();
+  // Memory review
+  function reviewEsc(v) {
+    return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function reviewBase() {
+    return '/dashboard/conversations/' + encodeURIComponent($('review-conv').value) + '/record';
+  }
+  function reviewSay(text, bad) {
+    var el = $('review-status');
+    el.textContent = text;
+    el.style.color = bad ? 'var(--red)' : 'var(--text-dim)';
+  }
+  function reviewSend(path, body) {
+    var payload = Object.assign({reason: $('review-reason').value || ''}, body || {});
+    return fetch(reviewBase() + path, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) throw new Error(data.message || data.error || ('HTTP ' + r.status));
+        return data;
+      });
+    });
+  }
+  window.reviewPopulateConversations = function() {
+    var select = $('review-conv');
+    var current = select.value;
+    var ids = [];
+    (liveConversations || []).concat(storedConversations || []).forEach(function(c) {
+      if (c.conversation_id && ids.indexOf(c.conversation_id) < 0) ids.push(c.conversation_id);
+    });
+    select.innerHTML = ids.map(function(id) {
+      return '<option value="' + reviewEsc(id) + '">' + reviewEsc(id.slice(0, 16)) + '</option>';
+    }).join('') || '<option value="">no conversations</option>';
+    if (current && ids.indexOf(current) >= 0) select.value = current;
+  };
+  window.reviewLoad = function() {
+    if (!$('review-conv').value) { reviewSay('choose a conversation', true); return; }
+    var topic = $('review-topic').value.trim();
+    reviewSay('loading facts...');
+    fetch(reviewBase() + '/facts' + (topic ? '?topic=' + encodeURIComponent(topic) : ''))
+      .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.message || d.error); return d; }); })
+      .then(function(data) { reviewRender(data.facts || []); reviewSay((data.facts || []).length + ' facts'); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  function reviewRender(facts) {
+    if (!facts.length) { $('review-facts').innerHTML = '<span class="empty-state">no facts</span>'; return; }
+    $('review-facts').innerHTML = facts.map(function(f, fi) {
+      var withheld = f.trust_state === 'rejected';
+      var verdict = withheld
+        ? '<button class="review-btn" onclick="reviewVerdict(\'' + reviewEsc(f.fact_id) + '\',\'restore\')">Restore</button>'
+        : '<button class="review-btn danger" onclick="reviewVerdict(\'' + reviewEsc(f.fact_id) + '\',\'reject\')">Reject</button>';
+      var turns = (f.source_turns || []).map(function(t, ti) {
+        var tid = reviewEsc(t.turn_id), key = 'rt-' + fi + '-' + ti;
+        return '<div class="review-turn" id="' + key + '">' +
+          (t.user ? '<div class="who">user</div><div class="text">' + reviewEsc(t.user) + '</div>' : '') +
+          (t.assistant ? '<div class="who">assistant</div><div class="text">' + reviewEsc(t.assistant) + '</div>' : '') +
+          '<div class="actions"><button class="review-btn" onclick="reviewEditTurn(\'' + key + '\',\'' + tid + '\')">Edit turn</button>' +
+          '<button class="review-btn danger" onclick="reviewRemoveTurn(\'' + tid + '\')">Remove turn</button></div>' +
+          '<div class="review-edit" style="display:none" data-user="' + reviewEsc(t.user) + '" data-assistant="' + reviewEsc(t.assistant) + '"></div>' +
+          '</div>';
+      }).join('');
+      return '<div class="review-fact"><div class="review-fact-head">' +
+        '<span class="review-fact-text">' + reviewEsc(f.fact) + '</span>' +
+        (f.topic ? '<span class="tag">' + reviewEsc(f.topic) + '</span>' : '') +
+        '<span class="trust ' + reviewEsc(f.trust_state) + '">' + reviewEsc(f.trust_state) + '</span>' +
+        verdict + '</div>' + (turns || '<div class="review-turn"><span class="who">no source turns</span></div>') + '</div>';
+    }).join('');
+  }
+  window.reviewVerdict = function(factId, verdict) {
+    reviewSend('/facts/' + encodeURIComponent(factId) + '/' + verdict)
+      .then(function(d) { reviewSay('fact ' + d.verdict); reviewLoad(); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  window.reviewEditTurn = function(key, turnId) {
+    var box = document.querySelector('#' + key + ' .review-edit');
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    var user = box.getAttribute('data-user'), assistant = box.getAttribute('data-assistant');
+    box.innerHTML = (user ? '<div class="who">user</div><textarea data-side="user_content">' + reviewEsc(user) + '</textarea>' : '') +
+      (assistant ? '<div class="who">assistant</div><textarea data-side="assistant_content">' + reviewEsc(assistant) + '</textarea>' : '') +
+      '<div class="actions"><button class="review-btn" onclick="reviewSaveTurn(\'' + key + '\',\'' + reviewEsc(turnId) + '\')">Save edit</button></div>';
+    box.style.display = 'block';
+  };
+  window.reviewSaveTurn = function(key, turnId) {
+    var body = {};
+    document.querySelectorAll('#' + key + ' .review-edit textarea').forEach(function(t) {
+      body[t.getAttribute('data-side')] = t.value;
+    });
+    reviewSend('/turns/' + encodeURIComponent(turnId) + '/edit', body)
+      .then(function(d) { reviewSay('turn edited; ' + d.segments_to_rebuild + ' segment(s) rebuilding'); reviewLoad(); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  window.reviewRemoveTurn = function(turnId) {
+    if (!confirm('Remove this exchange from the record? Its text is kept in the audit trail.')) return;
+    reviewSend('/turns/' + encodeURIComponent(turnId) + '/remove')
+      .then(function(d) { reviewSay(d.turns_removed + ' turn(s) removed; ' + d.segments_to_rebuild + ' segment(s) rebuilding'); reviewLoad(); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  window.reviewForget = function() {
+    var topic = $('review-forget-topic').value.trim();
+    if (!topic) { reviewSay('enter a topic to forget', true); return; }
+    if (!confirm('Forget "' + topic + '" from this conversation\'s memory?')) return;
+    reviewSend('/forget', {topic: topic})
+      .then(function(d) { reviewSay('forgot ' + d.topic + ': ' + d.turns_removed + ' turn(s) removed, ' + d.turns_untagged + ' untagged'); reviewLoad(); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  window.reviewVerify = function() {
+    reviewSend('/verify')
+      .then(function(d) { var t = d.trust_states || {}; reviewSay('verified ' + (t.verified || 0) + ', unverified ' + (t.unverified || 0) + ', rejected ' + (t.rejected || 0)); reviewLoad(); })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  window.reviewAudit = function(kind) {
+    fetch(reviewBase() + '/' + kind)
+      .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.message || d.error); return d; }); })
+      .then(function(data) {
+        var rows = data[kind] || [];
+        $('review-audit').innerHTML = rows.length ? rows.map(function(r) {
+          if (kind === 'edits') {
+            return '<div class="review-audit-row"><b>' + reviewEsc(r.action) + '</b> ' + reviewEsc(r.canonical_turn_id.slice(0, 8)) +
+              ' by ' + reviewEsc(r.actor) + ' at ' + reviewEsc(r.created_at) + (r.reason ? ' — ' + reviewEsc(r.reason) : '') +
+              '<div class="text" style="color:var(--text-dim)">before: ' + reviewEsc(r.before_user_content || r.before_assistant_content) + '</div></div>';
+          }
+          if (kind === 'verdicts') {
+            var fact = {};
+            try { fact = JSON.parse(r.fact_json || '{}'); } catch (e) {}
+            return '<div class="review-audit-row"><b>' + reviewEsc(r.verdict) + '</b> "' + reviewEsc(fact.what || (fact.subject + ' ' + fact.verb + ' ' + fact.object)) +
+              '" by ' + reviewEsc(r.actor) + ' at ' + reviewEsc(r.created_at) + (r.reason ? ' — ' + reviewEsc(r.reason) : '') + '</div>';
+          }
+          return '<div class="review-audit-row"><b>' + reviewEsc(r.action) + '</b> ' + reviewEsc(r.target) + ' by ' + reviewEsc(r.actor) +
+            ': ' + reviewEsc(r.status) + ', ' + (r.done || []).length + '/' + (r.segments || []).length + ' segments rebuilt</div>';
+        }).join('') : '<span class="empty-state">nothing recorded</span>';
+      })
+      .catch(function(e) { reviewSay(e.message, true); });
+  };
+  setTimeout(window.reviewPopulateConversations, 1500);
+
 })();
+
 </script>
 </body>
 </html>

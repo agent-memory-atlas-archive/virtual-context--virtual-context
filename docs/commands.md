@@ -127,6 +127,11 @@ available, not required: nothing waits in a pending queue, because a fact is a c
 copy of the conversation and its trust state already says whether the conversation
 still supports it (see [fact lifecycle](fact-lifecycle.md#trust-state)).
 
+The dashboard's **Memory Review** panel does all of this in the browser: it lists a
+conversation's facts with their trust state beside the turns they came from, with
+buttons to reject or restore a fact, edit or remove a turn, forget a topic, and read
+the edit history, verdicts and rebuilds. The same operations are on the command line:
+
 ```
 virtual-context admin record facts   <conversation_id> [<topic>]
 virtual-context admin record verify  <conversation_id>
