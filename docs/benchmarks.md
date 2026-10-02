@@ -253,6 +253,17 @@ prompt is fixed for the session, so `vc_expand_topic` returns the re-assembled
 context in its tool result; and `vc_find_session` is offered from the start.
 Sampling temperature is the CLI's, not 0.
 
+### Using a deployment's memory configuration
+
+`--engine-config <file.yaml>` takes the VC memory configuration from a YAML file
+instead of the harness defaults: tagging and summarization models, compaction,
+assembly, retrieval, curation and judgment seams. The run keeps its own
+per-question SQLite storage, session id and `--context-window`, drops
+deployment-only keys (telemetry pricing files, agent actor ids), and drops
+in-database vector ranking when the store is not PostgreSQL, ranking the same
+candidates in process. Judgment seams in `jev` or `shadow` mode need
+`TYPESAFE_API_KEY`.
+
 ## Interpreting Results
 
 **Accuracy by question type** is the primary metric. Overall accuracy can mask weaknesses: a system might score 90% overall but 40% on temporal questions.

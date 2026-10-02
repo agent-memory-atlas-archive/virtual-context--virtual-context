@@ -68,3 +68,27 @@ def test_relayed_calls_run_on_the_engine_and_expand_returns_the_context(monkeypa
     assert calls == [("vc_expand_topic", {"tag": "bike"}, "the question")]
     assert text.endswith("<virtual-context>full topic</virtual-context>")
     assert host.calls[0]["tool"] == "vc_expand_topic"
+
+
+def test_an_engine_config_supplies_memory_settings_and_the_run_keeps_its_own(tmp_path):
+    import yaml
+
+    from benchmarks.longmemeval.vc_runner import _build_vc_config, _with_engine_config
+
+    path = tmp_path / "prod.yaml"
+    path.write_text(yaml.safe_dump({
+        "context_window": 200000,
+        "tag_generator": {"type": "llm", "provider": "openrouter", "model": "google/gemini-2.5-flash-lite"},
+        "storage": {"backend": "postgres"},
+        "retrieval": {"vector_search_enabled": True},
+        "telemetry": {"models_file": "/app/models.yaml"},
+        "judgment": {"seams": {"fact_curation": "jev"}},
+    }))
+    harness = _build_vc_config(context_window=65536, storage_dir=str(tmp_path), session_id="bench-q",
+                               tagger_provider="openrouter", tagger_model="other")
+    cfg = _with_engine_config(str(path), harness)
+
+    assert cfg["tag_generator"]["model"] == "google/gemini-2.5-flash-lite"
+    assert cfg["judgment"]["seams"]["fact_curation"] == "jev"
+    assert (cfg["context_window"], cfg["storage"]["backend"], cfg["session_id"]) == (65536, "sqlite", "bench-q")
+    assert "telemetry" not in cfg and "vector_search_enabled" not in cfg["retrieval"]

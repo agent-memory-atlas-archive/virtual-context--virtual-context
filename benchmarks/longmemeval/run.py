@@ -315,6 +315,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Optional output prefix for Autopsy report files (without extension).",
     )
     parser.add_argument("--download-only", action="store_true", help="Just download the dataset and exit")
+    parser.add_argument("--engine-config", type=str, default=None,
+                        help="YAML memory config to use for VC ingestion, compaction and retrieval; "
+                             "the run still owns storage, session id and --context-window")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="Dataset JSON to load instead of data/longmemeval_s_cleaned.json")
     parser.add_argument(
         "--tagger-mode",
         type=str,
@@ -430,13 +435,14 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     # Download dataset
-    download_dataset()
+    if not args.dataset:
+        download_dataset()
     if args.download_only:
         print("Dataset downloaded. Exiting.")
         return
 
     # Load and select questions
-    dataset = load_dataset()
+    dataset = load_dataset(Path(args.dataset) if args.dataset else None)
     questions = select_questions(
         dataset,
         count=args.count,
@@ -677,6 +683,7 @@ def main(argv: list[str] | None = None) -> None:
                     supersession_provider=args.supersession_provider,
                     supersession_model=args.supersession_model,
                     verbose_reasoning=args.verbose_reasoning,
+                    engine_config=args.engine_config,
                 )
                 vc_result["elapsed_s"] = round(time.time() - t0, 1)
                 print(f"  VC: \"{vc_result['hypothesis'][:100]}...\"  (${vc_result['cost']:.4f})")

@@ -159,6 +159,34 @@ def clear_cache(question_ids: list[str] | None = None) -> int:
     return count
 
 
+# Keys a benchmark run owns even when an engine config file supplies the rest:
+# per-question SQLite storage, the session identity and the window under test.
+_HARNESS_OWNED_KEYS = ("storage_root", "storage", "session_id", "context_window")
+
+
+def _with_engine_config(path: str, harness_cfg: dict) -> dict:
+    """The memory configuration from *path*, with the benchmark-owned keys kept.
+
+    Deployment-only keys (telemetry pricing files, agent actor ids) are
+    dropped, and so is in-database vector ranking off Postgres; every other
+    memory setting, model and judgment seam comes from the file.
+    """
+    import yaml
+
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+    for key in ("telemetry", "agent_actor_ids"):
+        cfg.pop(key, None)
+    for key in _HARNESS_OWNED_KEYS:
+        if key in harness_cfg:
+            cfg[key] = harness_cfg[key]
+    # In-database vector ranking needs Postgres; on per-question SQLite the
+    # same candidates are ranked in process.
+    if cfg.get("storage", {}).get("backend") != "postgres":
+        cfg.get("retrieval", {}).pop("vector_search_enabled", None)
+    return cfg
+
+
 def _build_vc_config(
     context_window: int = 65536,
     storage_dir: str | None = None,
@@ -600,6 +628,7 @@ def run_vc(
     supersession_provider: str | None = None,
     supersession_model: str | None = None,
     verbose_reasoning: bool = False,
+    engine_config: str | None = None,
 ) -> dict:
     """Run the VC pipeline for a single question.
 
@@ -685,6 +714,8 @@ def run_vc(
         supersession_provider=supersession_provider,
         supersession_model=supersession_model,
     )
+    if engine_config:
+        cfg_dict = _with_engine_config(engine_config, cfg_dict)
     pipeline_manifest = build_manifest(question, cfg_dict)
     q_cache_dir, cache_complete = prepare_cache(
         question_cache_dir, pipeline_manifest, fresh=fresh, recompact=recompact,
