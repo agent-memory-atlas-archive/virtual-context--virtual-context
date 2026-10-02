@@ -64,6 +64,15 @@ rejected writes and immutable source statements. PostgreSQL shares the domain
 operation; database-specific locking and rollback validation runs on the remote
 fleet rather than starting a local database.
 
+## Dates
+
+A fact carries two dates. `when_date` is when the thing happened: the date
+extraction stated, or a relative phrase in the fact resolved against the session
+date. A fact with neither keeps an empty `when_date`. `session_date` is when it
+was said. Readers that need a date for every fact, such as date windows and
+chronology checks, use `when_date` and fall back to `session_date` in the query,
+so a stored fact always shows whether its event date was known.
+
 ## Trust state
 
 Each fact carries `trust_state`, whether the record still supports it.

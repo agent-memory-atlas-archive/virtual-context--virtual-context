@@ -1939,7 +1939,10 @@ class DomainCompactor:
                         _status_reason, str(f.get("status", ""))[:32], status or "-",
                     )
 
-                # Resolve when_date: LLM first, then deterministic fallback
+                # Resolve when_date: LLM first, then a relative date in the
+                # fact text. A fact with neither keeps an empty when_date: the
+                # session date is when it was said, not when it happened, and
+                # stays in session_date for readers that need a fallback.
                 raw_when = _str(f.get("when", ""))
                 sess_date = segment.session_date or ""
                 raw_what = _str(f.get("what", ""))
@@ -1950,9 +1953,10 @@ class DomainCompactor:
                 # LLMs sometimes echo the field name (e.g. "when") or other
                 # garbage; treat those as blank so the fallback kicks in.
                 raw_when_valid = raw_when and any(c.isdigit() for c in raw_when)
-                if not raw_when_valid or raw_when == sess_date:
-                    resolved = resolve_relative_date(raw_what, sess_date)
-                    when_date = resolved or sess_date
+                if not raw_when_valid:
+                    when_date = resolve_relative_date(raw_what, sess_date) or ""
+                elif raw_when == sess_date:
+                    when_date = resolve_relative_date(raw_what, sess_date) or raw_when
                 else:
                     when_date = raw_when
                 # Always normalize relative terms in the fact text
@@ -2161,7 +2165,7 @@ class DomainCompactor:
                 status=status,
                 what=_str(f.get("what", "")),
                 who=_str(f.get("who", "")),
-                when_date=_str(f.get("when", "")) or (segment.session_date or ""),
+                when_date=_str(f.get("when", "")),
                 where=_str(f.get("where", "")),
                 why=_str(f.get("why", "")),
                 fact_type=f.get("fact_type", "personal"),

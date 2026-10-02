@@ -15896,12 +15896,13 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
     ) -> list[Fact]:
         with self.pool.connection() as conn:
             sql = """SELECT * FROM facts
-                     WHERE when_date >= %s AND when_date <= %s"""
+                     WHERE COALESCE(NULLIF(when_date, ''), session_date) >= %s
+                   AND COALESCE(NULLIF(when_date, ''), session_date) <= %s"""
             params: list = [start_date, end_date + "~"]
             if conversation_id:
                 sql += " AND conversation_id = %s"
                 params.append(conversation_id)
-            sql += " ORDER BY when_date ASC LIMIT %s"
+            sql += " ORDER BY COALESCE(NULLIF(when_date, ''), session_date) ASC LIMIT %s"
             params.append(limit)
             rows = conn.execute(sql, params).fetchall()
             return [self._row_to_fact(row) for row in rows]

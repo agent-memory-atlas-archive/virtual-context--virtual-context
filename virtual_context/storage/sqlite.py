@@ -14865,12 +14865,13 @@ CREATE TABLE IF NOT EXISTS request_captures (
     ) -> list[Fact]:
         conn = self._get_conn()
         sql = """SELECT * FROM facts
-                 WHERE when_date >= ? AND when_date <= ?"""
+                 WHERE COALESCE(NULLIF(when_date, ''), session_date) >= ?
+                   AND COALESCE(NULLIF(when_date, ''), session_date) <= ?"""
         params: list = [start_date, end_date + "~"]
         if conversation_id:
             sql += " AND conversation_id = ?"
             params.append(conversation_id)
-        sql += " ORDER BY when_date ASC LIMIT ?"
+        sql += " ORDER BY COALESCE(NULLIF(when_date, ''), session_date) ASC LIMIT ?"
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
         return [self._row_to_fact(row) for row in rows]

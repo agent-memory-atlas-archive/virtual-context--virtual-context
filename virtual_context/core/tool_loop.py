@@ -1885,6 +1885,7 @@ def _execute_vc_tool_unescaped(
                     "what": f.what,
                     "who": f.who,
                     "when": f.when_date,
+                    "session_date": f.session_date,
                     "where": f.where,
                     "why": f.why,
                     "conversation_id": f.conversation_id,

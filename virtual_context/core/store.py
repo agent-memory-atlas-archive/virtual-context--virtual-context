@@ -2108,11 +2108,12 @@ class ContextStore(ABC):
         limit: int = 50,
         conversation_id: str | None = None,
     ) -> list[Fact]:
-        """Return facts within a when_date range.
+        """Return facts whose event date falls within a range.
 
-        *start_date* and *end_date* are ``YYYY-MM-DD`` ISO strings compared
-        lexicographically against the ``when_date`` column.  Returns
-        facts ordered by when_date ASC.
+        The event date is ``when_date``, or ``session_date`` for a fact
+        extraction gave no date. *start_date* and *end_date* are
+        ``YYYY-MM-DD`` ISO strings compared lexicographically. Returns facts
+        ordered by that date ascending.
         """
         return []
 

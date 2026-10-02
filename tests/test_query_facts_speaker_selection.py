@@ -38,7 +38,7 @@ AUDIENCE = "sk:agent:a:discord:guild:9"
 def _fact(fact_id: str, subject: str, actor: str, *, version: int, role: str):
     return SimpleNamespace(
         id=fact_id, subject=subject, verb="says", object="x", status="active",
-        fact_type="personal", what=f"{subject} fact", who="", when_date="",
+        fact_type="personal", what=f"{subject} fact", who="", when_date="", session_date="",
         where="", why="", conversation_id=AUDIENCE, tags=[],
         segment_ref=f"seg-{fact_id}",
         author_actor_id=actor,
