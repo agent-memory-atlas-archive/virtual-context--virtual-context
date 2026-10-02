@@ -40,6 +40,18 @@ class ContinuationError(Exception):
         self.status_code = status_code
 
 
+def tool_found(result: str) -> bool | None:
+    """Whether a VC tool's JSON result reports finding anything, if it says."""
+    try:
+        data = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or "found" not in data:
+        return None
+    found = data["found"]
+    return found if isinstance(found, bool) else bool(found)
+
+
 def adapter_for(api_format):
     return {"anthropic": AnthropicAdapter, "openai": OpenAIAdapter,
             "openai_responses": OpenAIResponsesAdapter, "gemini": GeminiAdapter}[api_format](api_key="")
@@ -455,7 +467,7 @@ class ContinuationSession:
             elapsed = round((time.monotonic() - started) * 1000, 1)
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False)
-            event = {"conversation_id": self.context.conversation_id, "request_turn": self.context.request_turn or self.context.turn, "round": self.round, "tool_name": call["name"], "tool_input": call["input"], "tool_result": result, "result_length": len(result), "duration_ms": elapsed, "timestamp": datetime.now(timezone.utc).isoformat()}
+            event = {"conversation_id": self.context.conversation_id, "request_turn": self.context.request_turn or self.context.turn, "round": self.round, "tool_name": call["name"], "tool_input": call["input"], "tool_result": result, "result_length": len(result), "duration_ms": elapsed, "found": tool_found(result), "timestamp": datetime.now(timezone.utc).isoformat()}
             if self.context.metrics:
                 self.context.metrics.record({"type": "tool_intercept", "turn": self.context.turn, "conversation_id": self.context.conversation_id, "tool_name": call["name"], "tool_input": call["input"], "result": result[:200], "duration_ms": elapsed, "continuation_count": self.round})
             try:

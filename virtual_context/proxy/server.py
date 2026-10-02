@@ -2733,6 +2733,7 @@ async def prepare_payload(
             _request_turn = int(state.engine._store.save_request_context({
                 "conversation_id": _conversation_id,
                 "request_turn": 0,
+                "turn": turn,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "user_message": user_message[:500],
                 "inbound_tags": assembled.matched_tags or [],

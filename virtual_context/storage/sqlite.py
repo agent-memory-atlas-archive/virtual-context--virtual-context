@@ -1703,6 +1703,10 @@ class SQLiteStore(RelationalStoreMixin, ContextStore):
             pass
         # Migrations: add columns that didn't exist in earlier schema versions
         try:
+            conn.execute("ALTER TABLE request_context ADD COLUMN turn INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
             conn.execute("ALTER TABLE tag_summaries ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # Column already exists
@@ -2130,7 +2134,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 pool_budget INTEGER NOT NULL,
                 total_context_tokens INTEGER NOT NULL,
                 non_virtualizable_floor INTEGER NOT NULL,
-                tool_call_count INTEGER NOT NULL DEFAULT 0
+                tool_call_count INTEGER NOT NULL DEFAULT 0,
+                turn INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_request_context_conv ON request_context(conversation_id);
         """)
@@ -16025,8 +16030,8 @@ CREATE TABLE IF NOT EXISTS request_captures (
                  retrieval_method, candidates_found, candidates_selected,
                  segments_injected, facts_injected, facts_count, facts_tags,
                  pool_used, pool_budget, total_context_tokens,
-                 non_virtualizable_floor, tool_call_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 non_virtualizable_floor, tool_call_count, turn)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     conv_id,
                     request_turn,
@@ -16045,6 +16050,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
                     context.get("total_context_tokens", 0),
                     context.get("non_virtualizable_floor", 0),
                     context.get("tool_call_count", 0),
+                    int(context.get("turn", 0) or 0),
                 ),
             )
             conn.execute(

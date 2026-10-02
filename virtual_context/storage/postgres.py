@@ -441,7 +441,8 @@ CREATE TABLE IF NOT EXISTS request_context (
     pool_budget INTEGER NOT NULL,
     total_context_tokens INTEGER NOT NULL,
     non_virtualizable_floor INTEGER NOT NULL,
-    tool_call_count INTEGER NOT NULL DEFAULT 0
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    turn INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_request_context_conv ON request_context(conversation_id);
 
@@ -1650,6 +1651,18 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 """)
             except Exception:
                 logger.warning("engine_state column migration failed", exc_info=True)
+            # request_context.turn: the conversation turn a request served.
+            # Probe first; ADD COLUMN locks the table even when it is a no-op.
+            try:
+                if not conn.execute(
+                    """SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'request_context' AND column_name = 'turn'"""
+                ).fetchone():
+                    conn.execute(
+                        "ALTER TABLE request_context ADD COLUMN IF NOT EXISTS turn INTEGER NOT NULL DEFAULT 0"
+                    )
+            except Exception:
+                logger.warning("request_context column migration failed", exc_info=True)
             # Lifecycle/phase-tracked conversations table. Mirrors the SQLite
             # schema (see sqlite.py) — carries lifecycle_epoch (for
             # delete+resurrect invariants), a phase state machine
@@ -16363,8 +16376,8 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                      retrieval_method, candidates_found, candidates_selected,
                      segments_injected, facts_injected, facts_count, facts_tags,
                      pool_used, pool_budget, total_context_tokens,
-                     non_virtualizable_floor, tool_call_count)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                     non_virtualizable_floor, tool_call_count, turn)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
                         conv_id,
                         request_turn,
@@ -16383,6 +16396,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                         context.get("total_context_tokens", 0),
                         context.get("non_virtualizable_floor", 0),
                         context.get("tool_call_count", 0),
+                        int(context.get("turn", 0) or 0),
                     ),
                 )
                 conn.execute(
