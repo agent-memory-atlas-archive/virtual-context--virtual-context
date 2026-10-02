@@ -11,6 +11,7 @@ resume after an interruption.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import uuid
 
@@ -80,6 +81,36 @@ class RecordEditMixin:
                 BEGIN SELECT RAISE(ABORT, 'turn edit records are immutable'); END""")
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_turn_edits_turn
             ON turn_edits (conversation_id, canonical_turn_id, created_at)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS fact_verdicts (
+            verdict_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+            fact_key TEXT NOT NULL, fact_id TEXT NOT NULL, verdict TEXT NOT NULL,
+            actor TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+            fact_json TEXT NOT NULL, source_turn_ids_json TEXT NOT NULL)""")
+        verdict_columns = ("verdict_id", "fact_key", "fact_id", "verdict", "actor", "reason",
+                           "created_at", "fact_json", "source_turn_ids_json")
+        if self._relational_dialect == "postgres":
+            conn.execute("""CREATE OR REPLACE FUNCTION guard_fact_verdict_content()
+                RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+                IF (to_jsonb(NEW) - 'conversation_id') IS DISTINCT FROM
+                   (to_jsonb(OLD) - 'conversation_id') THEN
+                    RAISE EXCEPTION 'fact verdicts are immutable';
+                END IF;
+                RETURN NEW;
+                END $$""")
+            if not conn.execute("""SELECT 1 FROM pg_trigger WHERE
+                    tgrelid='fact_verdicts'::regclass AND tgname='guard_fact_verdict_content'""").fetchone():
+                conn.execute("""CREATE TRIGGER guard_fact_verdict_content
+                    BEFORE UPDATE ON fact_verdicts FOR EACH ROW
+                    EXECUTE FUNCTION guard_fact_verdict_content()""")
+        elif not conn.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='trigger' AND name='guard_fact_verdict_content'"
+        ).fetchone():
+            changed = " OR ".join(f"NEW.{key} IS NOT OLD.{key}" for key in verdict_columns)
+            conn.execute(f"""CREATE TRIGGER guard_fact_verdict_content
+                BEFORE UPDATE ON fact_verdicts WHEN {changed}
+                BEGIN SELECT RAISE(ABORT, 'fact verdicts are immutable'); END""")
+        conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_verdicts_key
+            ON fact_verdicts (conversation_id, fact_key, created_at)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS record_edit_operations (
             operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
             action TEXT NOT NULL, target TEXT NOT NULL, actor TEXT NOT NULL,
@@ -400,6 +431,80 @@ class RecordEditMixin:
             )
         return {"operation_id": operation_id, "turns_removed": len(ids),
                 "segments_to_rebuild": len(held)}
+
+    # -- fact verdicts ----------------------------------------------------
+
+    def _fact_source_turn_ids(self, conn, fact):
+        if not fact.segment_ref:
+            return []
+        p = self._placeholder
+        row = conn.execute(
+            f"SELECT metadata_json FROM segments WHERE ref={p} AND conversation_id={p}",
+            (fact.segment_ref, fact.conversation_id),
+        ).fetchone()
+        return sorted(_turn_ids(row["metadata_json"])) if row else []
+
+    def _fact_key(self, conn, fact):
+        """What a verdict is about: the fact's statement and the turns it came from."""
+        statement = [(getattr(fact, k) or "").strip().casefold() for k in ("subject", "verb", "object")]
+        payload = json.dumps([statement, self._fact_source_turn_ids(conn, fact)])
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _rejected_fact_keys(self, conn, conversation_id):
+        """Keys whose latest admin verdict is a rejection."""
+        p = self._placeholder
+        rows = conn.execute(
+            f"""SELECT fact_key, verdict FROM fact_verdicts WHERE conversation_id={p}
+            ORDER BY created_at, verdict_id""",
+            (conversation_id,),
+        ).fetchall()
+        latest = {}
+        for row in rows:
+            latest[row["fact_key"]] = row["verdict"]
+        return {key for key, verdict in latest.items() if verdict == "rejected"}
+
+    def record_fact_verdict(self, conversation_id, fact_id, verdict, *, actor, reason=""):
+        """Record an admin's verdict on a fact and apply it to every copy of it.
+
+        ``rejected`` withholds the fact, and any later extraction of the same
+        statement from the same turns, from every read; ``restored`` lifts a
+        rejection. Returns the fact key and how many current facts changed state.
+        """
+        if verdict not in ("rejected", "restored"):
+            raise ValueError("verdict must be 'rejected' or 'restored'")
+        p = self._placeholder
+        with self._relational_connection(write=True, scope=f"vc-fact-trust:{conversation_id}") as conn:
+            row = conn.execute(
+                f"SELECT * FROM facts WHERE id={p} AND conversation_id={p}", (fact_id, conversation_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"fact {fact_id} not found")
+            fact = self._row_to_fact(row)
+            key = self._fact_key(conn, fact)
+            conn.execute(
+                f"""INSERT INTO fact_verdicts (verdict_id,conversation_id,fact_key,fact_id,verdict,
+                actor,reason,created_at,fact_json,source_turn_ids_json)
+                VALUES ({','.join([p] * 10)})""",
+                (str(uuid.uuid4()), conversation_id, key, fact_id, verdict, actor, reason, _now(),
+                 json.dumps({k: getattr(fact, k) for k in ("subject", "verb", "object", "what", "when_date")}),
+                 json.dumps(self._fact_source_turn_ids(conn, fact))),
+            )
+            refs = [r["segment_ref"] for r in conn.execute(
+                f"""SELECT DISTINCT segment_ref FROM facts WHERE conversation_id={p}
+                AND superseded_by IS NULL""", (conversation_id,),
+            ).fetchall() if r["segment_ref"]]
+        counts = self.refresh_fact_trust(conversation_id, refs)
+        return {"fact_key": key, "verdict": verdict, "trust_states": counts}
+
+    def get_fact_verdicts(self, conversation_id, *, limit=100):
+        p = self._placeholder
+        with self._relational_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM fact_verdicts WHERE conversation_id={p}
+                ORDER BY created_at DESC, verdict_id LIMIT {int(limit)}""",
+                (conversation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     # -- reads and progress ---------------------------------------------
 

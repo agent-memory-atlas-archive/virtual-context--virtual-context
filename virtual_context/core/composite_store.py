@@ -2753,6 +2753,12 @@ class CompositeStore:
     def get_fact_decisions(self, conversation_id, *, limit=100, before=None):
         return self._facts.get_fact_decisions(conversation_id, limit=limit, before=before)
 
+    def record_fact_verdict(self, conversation_id, fact_id, verdict, **kwargs):
+        return self._segments.record_fact_verdict(conversation_id, fact_id, verdict, **kwargs)
+
+    def get_fact_verdicts(self, conversation_id, **kwargs):
+        return self._segments.get_fact_verdicts(conversation_id, **kwargs)
+
     def refresh_fact_trust(self, conversation_id, segment_refs):
         fn = getattr(self._facts, "refresh_fact_trust", None)
         return fn(conversation_id, segment_refs) if callable(fn) else {}

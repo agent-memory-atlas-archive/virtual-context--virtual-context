@@ -85,7 +85,7 @@ def _served(engine):
 
 def test_new_facts_are_unverified_until_their_sources_prove_them(engine):
     assert _stored(engine) == {"lives in Boston": "unverified"}
-    assert engine._store.refresh_fact_trust(CONV, ["seg-home"]) == {"verified": 1, "unverified": 0}
+    assert engine._store.refresh_fact_trust(CONV, ["seg-home"]) == {"verified": 1, "unverified": 0, "rejected": 0}
     assert _stored(engine) == {"lives in Boston": "verified"}
 
 

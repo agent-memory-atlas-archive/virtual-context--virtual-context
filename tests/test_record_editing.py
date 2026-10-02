@@ -190,7 +190,7 @@ def test_review_lists_facts_with_their_source_turns_and_verifies_them(engine):
     assert listed[0]["source_turns"][0]["user"] == "I write Python daily"
     assert editor.facts("docker") == []
 
-    assert editor.verify_facts() == {"verified": 1, "unverified": 0}
+    assert editor.verify_facts() == {"verified": 1, "unverified": 0, "rejected": 0}
     assert editor.facts()[0]["trust_state"] == "verified"
 
 

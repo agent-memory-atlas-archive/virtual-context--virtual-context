@@ -6149,6 +6149,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
             "segments", "canonical_turn_anchors", "canonical_turn_chunks",
             "ingest_batches", "facts",
                 "fact_decisions", "fact_embeddings", "turn_edits", "record_edit_operations",
+                "fact_verdicts",
             "segment_tool_outputs",
         )
         # Tables whose natural key can legitimately collide across sibling
@@ -6587,7 +6588,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
 
             # Per-table moves
             for tbl in TABLES_SIMPLE:
-                if tbl in ("fact_decisions", "turn_edits", "record_edit_operations"):
+                if tbl in ("fact_decisions", "turn_edits", "record_edit_operations", "fact_verdicts"):
                     # Audit payload and original owner stay immutable. Older
                     # records may honestly have an unknown (empty) origin.
                     cur = conn.execute(
@@ -8058,6 +8059,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
                 "fact_decisions",
                 "turn_edits",
                 "record_edit_operations",
+                "fact_verdicts",
                 "fact_embeddings",
                 "facts",
                 "canonical_turns",

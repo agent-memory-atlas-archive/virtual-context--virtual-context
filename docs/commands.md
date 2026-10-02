@@ -130,6 +130,9 @@ still supports it (see [fact lifecycle](fact-lifecycle.md#trust-state)).
 ```
 virtual-context admin record facts   <conversation_id> [<topic>]
 virtual-context admin record verify  <conversation_id>
+virtual-context admin record reject  <conversation_id> <fact_id> --reason "<why>"
+virtual-context admin record restore <conversation_id> <fact_id>
+virtual-context admin record verdicts <conversation_id>
 virtual-context admin record forget  <conversation_id> <topic>
 virtual-context admin record edit    <conversation_id> <turn_id> --user "<text>" [--assistant "<text>"]
 virtual-context admin record remove  <conversation_id> <turn_id>
@@ -139,7 +142,10 @@ virtual-context admin record process <conversation_id> <operation_id>
 ```
 
 `facts` lists current facts with their trust state and source turns; `verify`
-re-derives every fact's trust state from its source turns. `forget`, `edit` and
+re-derives every fact's trust state from its source turns. `reject` withholds a fact
+from every read, together with the same statement extracted again from the same
+turns, and `restore` lifts the rejection; `verdicts` lists them with who decided,
+when and why. `forget`, `edit` and
 `remove` change the turns, write the audit trail, retract the facts of the affected
 segments, then rebuild the segments, facts and topic summaries derived from them.
 `history` is the audit trail: for each edited, untagged or removed turn, its text

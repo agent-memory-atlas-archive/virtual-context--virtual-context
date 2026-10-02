@@ -70,13 +70,21 @@ Each fact carries `trust_state`, whether the record still supports it.
 `verified` means the fact's segment maps completely to its source turns and those
 turns re-prove it, including its author; `unverified` means no complete source
 proof exists, as for legacy facts; `retracted` means an admin edit or removal
-changed a turn the fact's segment holds. The state is derived from the record,
-never assigned by a model, and it is not part of the fact fingerprint.
+changed a turn the fact's segment holds; `rejected` means an admin rejected the
+fact. No state is ever assigned by a model, and the state is not part of the fact
+fingerprint.
+
+An admin verdict is keyed on the fact's statement (subject, verb and object) and
+the turns its segment covers. A rejection therefore holds for every copy of the
+fact, including the same statement extracted again from the same turns by a later
+rebuild, and a `restored` verdict lifts it. Verdicts are kept in `fact_verdicts`, an
+append-only table whose rows a database trigger keeps from being changed, with the
+fact as it read, who decided, when and why.
 
 Rebuilt facts start `unverified` and are set to `verified` or `unverified` from
 their source proof once stored. A record edit retracts the facts of every segment
 it queues for rebuild in the same transaction as the edit, and the rebuild
-replaces them. Retracted facts are withheld from `vc_query_facts` and its linked
+replaces them. Retracted and rejected facts are withheld from `vc_query_facts` and its linked
 facts, the facts attached to `vc_find_quote`, `vc_remember_when`, the facts
 injected before a model call, and supersession candidates. If a rebuild fails,
 the facts stay retracted and withheld.

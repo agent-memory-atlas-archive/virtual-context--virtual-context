@@ -183,7 +183,7 @@ def _admitted_snapshots(store, new, candidates, *, snapshot_cache=None):
     accepted, old_snapshots = [], {}
     refused = _refused_supersessions(store, new)
     for old in candidates:
-        if old.id == new.id or getattr(old, "trust_state", "") == "retracted":
+        if old.id == new.id or getattr(old, "trust_state", "") in ("retracted", "rejected"):
             continue
         snapshot = _proposal_snapshot(store, old, cache=cache)
         if snapshot is None:

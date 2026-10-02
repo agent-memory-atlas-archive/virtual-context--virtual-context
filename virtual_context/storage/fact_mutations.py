@@ -179,15 +179,17 @@ class FactMutationMixin:
     def refresh_fact_trust(self, conversation_id, segment_refs):
         """Set each current fact of these segments to what its sources prove.
 
-        ``verified`` when the segment's source turns exist and re-prove the
-        fact, ``unverified`` otherwise. A retracted fact is left retracted:
-        only the rebuild that replaces it clears it. Returns the count per state.
+        ``rejected`` when an admin's latest verdict on the same statement from
+        the same turns rejected it; otherwise ``verified`` when the segment's
+        source turns exist and re-prove the fact, ``unverified`` when they do
+        not. A retracted fact is left retracted: only the rebuild that replaces
+        it clears it. Returns the count per state.
         """
         refs = sorted({ref for ref in segment_refs if ref})
         if not refs:
             return {}
         p = self._placeholder
-        counts = {"verified": 0, "unverified": 0}
+        counts = {"verified": 0, "unverified": 0, "rejected": 0}
         with self._relational_connection(write=True, scope=f"vc-fact-trust:{conversation_id}") as conn:
             rows = conn.execute(
                 f"""SELECT * FROM facts WHERE conversation_id={p}
@@ -195,9 +197,13 @@ class FactMutationMixin:
                 AND trust_state <> 'retracted'""",
                 [conversation_id, *refs],
             ).fetchall()
+            rejected = self._rejected_fact_keys(conn, conversation_id)
             for row in rows:
                 fact = self._row_to_fact(row)
-                state = "verified" if self._fact_sources(conn, fact) else "unverified"
+                if rejected and self._fact_key(conn, fact) in rejected:
+                    state = "rejected"
+                else:
+                    state = "verified" if self._fact_sources(conn, fact) else "unverified"
                 if fact.trust_state != state:
                     conn.execute(
                         f"UPDATE facts SET trust_state={p} WHERE id={p}", (state, fact.id),

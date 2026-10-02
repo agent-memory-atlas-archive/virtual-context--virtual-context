@@ -28,8 +28,10 @@ def fact_version(fact: Fact) -> str:
 
 
 def servable_facts(facts):
-    """``facts`` without the retracted ones: the record no longer supports them."""
-    return [fact for fact in facts if getattr(fact, "trust_state", "") != "retracted"]
+    """``facts`` without the retracted and rejected ones, which are never served."""
+    from ..types import WITHHELD_TRUST_STATES
+
+    return [fact for fact in facts if getattr(fact, "trust_state", "") not in WITHHELD_TRUST_STATES]
 
 
 @dataclass(frozen=True)

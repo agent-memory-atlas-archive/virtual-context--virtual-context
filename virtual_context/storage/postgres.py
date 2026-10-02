@@ -6229,6 +6229,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                 "segments", "canonical_turn_anchors", "canonical_turn_chunks",
                 "ingest_batches", "facts",
                 "fact_decisions", "fact_embeddings", "turn_edits", "record_edit_operations",
+                "fact_verdicts",
                 "segment_tool_outputs",
             )
             # Tables whose natural key can legitimately collide across
@@ -6723,7 +6724,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
 
                 # Step 5: per-table moves.
                 for tbl in TABLES_SIMPLE:
-                    if tbl in ("fact_decisions", "turn_edits", "record_edit_operations"):
+                    if tbl in ("fact_decisions", "turn_edits", "record_edit_operations", "fact_verdicts"):
                         # Audit payload and original owner stay immutable. Older
                         # records may honestly have an unknown (empty) origin.
                         cur = conn.execute(
@@ -8223,6 +8224,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
                     "fact_decisions",
                     "turn_edits",
                     "record_edit_operations",
+                    "fact_verdicts",
                     "fact_embeddings",
                     "facts",
                     "canonical_turns",

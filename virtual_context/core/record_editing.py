@@ -151,6 +151,18 @@ class RecordEditor:
             for f in facts
         ]
 
+    def reject_fact(self, fact_id: str, *, actor: str, reason: str = "") -> dict:
+        """Reject a fact: it, and the same statement extracted again from the same turns, is never served."""
+        return self._store.record_fact_verdict(
+            self._conversation_id, fact_id, "rejected", actor=actor, reason=reason,
+        )
+
+    def restore_fact(self, fact_id: str, *, actor: str, reason: str = "") -> dict:
+        """Lift a rejection, so the fact is served again."""
+        return self._store.record_fact_verdict(
+            self._conversation_id, fact_id, "restored", actor=actor, reason=reason,
+        )
+
     def verify_facts(self) -> dict:
         """Re-derive every current fact's trust state from its source turns."""
         refs = {

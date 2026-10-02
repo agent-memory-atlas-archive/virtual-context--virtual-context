@@ -1179,7 +1179,7 @@ class TemporalResolver:
 
         results: list[dict] = []
         for idx, item in enumerate(selected):
-            if getattr(item["fact"], "trust_state", "") == "retracted":
+            if getattr(item["fact"], "trust_state", "") in ("retracted", "rejected"):
                 continue
             result = {
                 "type": "fact",

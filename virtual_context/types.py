@@ -103,7 +103,9 @@ class FactSignal:
     what: str = ""               # full-sentence memory with ALL specifics
 
 
-FACT_TRUST_STATES = ("verified", "unverified", "retracted")
+FACT_TRUST_STATES = ("verified", "unverified", "retracted", "rejected")
+# Trust states whose facts are never served.
+WITHHELD_TRUST_STATES = frozenset({"retracted", "rejected"})
 
 
 @dataclass
@@ -156,8 +158,9 @@ class Fact:
     # Whether the record still supports this fact (FACT_TRUST_STATES):
     # ``verified`` when its source turns exist and prove it, ``unverified``
     # when no complete source proof exists, ``retracted`` when an admin edit
-    # changed a source turn and the fact awaits its rebuild. A retracted fact
-    # is never served.
+    # changed a source turn and the fact awaits its rebuild, ``rejected`` when
+    # an admin rejected the statement. Retracted and rejected facts are never
+    # served.
     trust_state: str = "unverified"
 
     @classmethod
