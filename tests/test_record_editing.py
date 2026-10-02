@@ -201,3 +201,18 @@ def test_verify_leaves_retracted_facts_retracted(engine):
     engine.record_editor.verify_facts()
     states = {f.trust_state for f in engine._store.query_facts(conversation_id=CONV, limit=10)}
     assert states == {"retracted"}
+
+
+def test_review_lists_named_facts_from_their_segments(engine):
+    _turn(engine, 0, ["python"], "I write Python daily")
+    _turn(engine, 1, ["docker"], "docker at work")
+    _segment(engine, "seg-python", "python", ["python"], [0])
+    _segment(engine, "seg-docker", "docker", ["docker"], [1])
+    editor = engine.record_editor
+    wanted = engine._store.get_facts_by_segment("seg-python")[0].id
+
+    listed = editor.facts(segment_refs=["seg-python", "seg-docker"], fact_ids=[wanted])
+
+    assert [f["fact_id"] for f in listed] == [wanted]
+    assert listed[0]["source_turns"][0]["user"] == "I write Python daily"
+    assert editor.facts(segment_refs=["seg-unknown"], fact_ids=[wanted]) == []

@@ -112,18 +112,37 @@ class RecordEditor:
 
     # -- review ------------------------------------------------------------
 
-    def facts(self, topic: str | None = None, *, limit: int = 200) -> list[dict]:
+    def facts(
+        self,
+        topic: str | None = None,
+        *,
+        limit: int = 200,
+        segment_refs: list[str] | None = None,
+        fact_ids: list[str] | None = None,
+    ) -> list[dict]:
         """Current facts with their trust state and the source turns behind them.
 
         This is what an admin reviews before deciding to edit or remove the
-        turn a fact came from.
+        turn a fact came from. ``segment_refs`` lists the facts of those
+        segments of this conversation instead, narrowed to ``fact_ids`` when
+        given.
         """
-        tags = self.resolve_topic(topic) if topic else None
-        if topic and not tags:
-            return []
-        facts = self._store.query_facts(
-            conversation_id=self._conversation_id, tags=tags or None, limit=limit,
-        )
+        if segment_refs is not None:
+            wanted = set(fact_ids or [])
+            facts = [
+                f
+                for ref in dict.fromkeys(segment_refs)
+                if self._store.get_segment(ref, conversation_id=self._conversation_id)
+                for f in self._store.get_facts_by_segment(ref)
+                if f.conversation_id == self._conversation_id and (not wanted or f.id in wanted)
+            ]
+        else:
+            tags = self.resolve_topic(topic) if topic else None
+            if topic and not tags:
+                return []
+            facts = self._store.query_facts(
+                conversation_id=self._conversation_id, tags=tags or None, limit=limit,
+            )
         refs = {f.segment_ref for f in facts if f.segment_ref}
         turn_ids: dict[str, list[str]] = {}
         for ref in refs:

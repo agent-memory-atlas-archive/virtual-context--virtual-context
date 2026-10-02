@@ -37,6 +37,13 @@ async def _body(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def _id_list(value: str | None) -> list[str] | None:
+    """A comma-separated query parameter as a list, or None when absent."""
+    if value is None:
+        return None
+    return [part for part in (p.strip() for p in value.split(",")) if part]
+
+
 def register_record_routes(
     app: "FastAPI", resolve_state: Callable[[str], "ProxyState | None"],
 ) -> None:
@@ -76,8 +83,11 @@ def register_record_routes(
     @app.get(BASE + "/facts")
     async def record_facts(conversation_id: str, request: Request):
         topic = request.query_params.get("topic") or None
+        segments = _id_list(request.query_params.get("segments"))
+        ids = _id_list(request.query_params.get("ids"))
         return await asyncio.to_thread(
-            _read, conversation_id, lambda engine: {"facts": engine.record_editor.facts(topic)},
+            _read, conversation_id,
+            lambda engine: {"facts": engine.record_editor.facts(topic, segment_refs=segments, fact_ids=ids)},
         )
 
     @app.post(BASE + "/verify")

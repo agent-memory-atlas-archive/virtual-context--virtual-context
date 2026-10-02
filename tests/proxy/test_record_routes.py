@@ -73,3 +73,12 @@ def test_editing_a_turn_queues_its_rebuild_and_is_audited(setup):
 def test_an_unloaded_conversation_is_not_found(setup):
     client, _, _ = setup
     assert client.get("/dashboard/conversations/other/record/facts").status_code == 404
+
+
+def test_review_lists_named_facts_by_segment(setup):
+    client, _, _ = setup
+    base = f"/dashboard/conversations/{CONV}/record"
+    facts = client.get(base + "/facts", params={"segments": "seg-home", "ids": "keys"}).json()["facts"]
+    assert [f["fact_id"] for f in facts] == ["keys"]
+    assert facts[0]["source_turns"][0]["user"] == "I keep my keys under the mat"
+    assert client.get(base + "/facts", params={"segments": "seg-home", "ids": "other"}).json()["facts"] == []
