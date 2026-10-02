@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
         "--baseline-provider",
         type=str,
         default=None,
-        choices=["anthropic", "openai", "openai-codex", "gemini", "gemini-cli", "gemini-oauth"],
+        choices=["anthropic", "openai", "openai-codex", "gemini", "gemini-cli", "gemini-oauth", "claude-cli"],
         help="Provider for baseline run (REQUIRED if running baseline)",
     )
     parser.add_argument(
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> None:
         "--judge-provider",
         type=str,
         default=None,
-        choices=["anthropic", "openai", "openai-codex", "gemini", "gemini-cli", "gemini-oauth"],
+        choices=["anthropic", "openai", "openai-codex", "gemini", "gemini-cli", "gemini-oauth", "claude-cli"],
         help="Provider for judge model (REQUIRED)",
     )
     parser.add_argument(
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
         help="Provider for compaction summarization (default: same as tagger-provider)",
     )
     parser.add_argument("--reader-provider", type=str, default=None,
-                        choices=["anthropic", "openai", "openai-responses", "openai-codex", "openrouter", "gemini"],
+                        choices=["anthropic", "openai", "openai-responses", "openai-codex", "openrouter", "gemini", "claude-cli"],
                         help="LLM provider for reader model (REQUIRED if running VC)")
     parser.add_argument(
         "--reader-auth-mode",

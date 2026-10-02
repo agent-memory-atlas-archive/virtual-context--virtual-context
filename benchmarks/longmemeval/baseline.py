@@ -311,6 +311,30 @@ def run_baseline(
 
     Returns dict with: hypothesis, input_tokens, output_tokens, cost, elapsed_s.
     """
+    if provider == "claude-cli":
+        from .claude_cli import NEUTRAL_SYSTEM, run_claude_cli
+
+        formatted = _format_haystack(question)
+        t0 = time.time()
+        cli = run_claude_cli(formatted, model=model, system=NEUTRAL_SYSTEM)
+        elapsed = time.time() - t0
+        entry = budget.record(
+            label=f"baseline:{question.question_id}", model=model,
+            input_tokens=cli["input_tokens"], output_tokens=cli["output_tokens"],
+        )
+        logger.info(
+            "Baseline [%s]: %d in / %d out tokens via claude-cli (%s), %.1fs",
+            question.question_id, cli["input_tokens"], cli["output_tokens"], model, elapsed,
+        )
+        return {
+            "hypothesis": cli["hypothesis"],
+            "input_tokens": cli["input_tokens"],
+            "output_tokens": cli["output_tokens"],
+            "cost": entry.cost_usd,
+            "list_cost_usd": cli["raw"].get("total_cost_usd"),
+            "elapsed_s": round(elapsed, 1),
+        }
+
     if provider in {"gemini-cli", "gemini-oauth"}:
         formatted = _format_haystack(question)
         logger.info(

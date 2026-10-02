@@ -219,6 +219,13 @@ python -m benchmarks.locomo.run --config virtual-context.yaml
 # Run with a specific provider
 python -m benchmarks.locomo.run --provider anthropic --model claude-sonnet-4-20250514
 
+# Run LongMemEval with Claude through the Claude Code CLI
+python -m benchmarks.longmemeval.run --count 20 \
+  --reader-provider claude-cli --reader-model claude-sonnet-5 \
+  --baseline-provider claude-cli --baseline-model claude-sonnet-5 \
+  --judge-provider claude-cli --judge-model claude-sonnet-5 \
+  --tagger-provider openrouter --tagger-model xiaomi/mimo-v2-flash
+
 # Run stress tests via the proxy dashboard
 # 1. Start the proxy
 virtual-context proxy --upstream https://api.anthropic.com
@@ -226,6 +233,25 @@ virtual-context proxy --upstream https://api.anthropic.com
 # 2. Open http://localhost:5757/dashboard
 # 3. Use the Replay panel with a stress test file
 ```
+
+### Claude through the Claude Code CLI
+
+The `claude-cli` provider runs a Claude model with `claude -p`, which signs in
+with the Claude subscription. It drops `ANTHROPIC_API_KEY` from the CLI's
+environment, runs from an empty working directory, and turns off settings,
+skills, built-in tools and every MCP server but its own, so the prompt carries
+nothing of the local Claude Code setup. Baseline and judge calls send a one-line
+system prompt where the API path sends none, because the CLI substitutes its own
+otherwise.
+
+The VC reader reaches the paging tools through a `vc` MCP server that relays
+each call to the benchmark process, where it runs on the question's engine with
+the same arguments the API tool loop passes. Three things differ from the API
+path, and each result lists them under `reader_notes`: tool use is not required
+on the first call, because the CLI has no tool-choice setting; the CLI's system
+prompt is fixed for the session, so `vc_expand_topic` returns the re-assembled
+context in its tool result; and `vc_find_session` is offered from the start.
+Sampling temperature is the CLI's, not 0.
 
 ## Interpreting Results
 

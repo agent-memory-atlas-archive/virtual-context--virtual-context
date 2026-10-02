@@ -113,6 +113,17 @@ def judge_answer(
     template = _get_judge_prompt(question_type)
     prompt = template.format(question=question, answer=answer, hypothesis=hypothesis)
 
+    if provider == "claude-cli":
+        from .claude_cli import NEUTRAL_SYSTEM, run_claude_cli
+
+        cli = run_claude_cli(prompt, model=model, system=NEUTRAL_SYSTEM, timeout=300)
+        explanation = cli["hypothesis"]
+        entry = budget.record(label=f"judge:{label}", model=model,
+                              input_tokens=cli["input_tokens"], output_tokens=cli["output_tokens"])
+        correct = "yes" in explanation.lower().split("\n")[0].lower()
+        logger.info("Judge [%s]: %s via claude-cli", label, "CORRECT" if correct else "WRONG")
+        return {"correct": correct, "explanation": explanation.strip(), "cost": entry.cost_usd}
+
     if provider == "gemini-cli":
         result = subprocess.run(
             ["gemini", "-p", prompt, "--model", model, "--output-format", "json"],

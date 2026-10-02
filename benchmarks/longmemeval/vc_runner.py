@@ -639,7 +639,7 @@ def run_vc(
     internal_openai_token = ""
     if needs_openai:
         internal_openai_token = _resolve_openai_bearer_token(internal_openai_auth_mode)
-    if not api_key:
+    if not api_key and reader_provider != "claude-cli":
         if reader_provider in {"openai", "openai-codex", "openai-responses"}:
             if reader_auth_mode == "oauth":
                 raise ValueError(
@@ -951,20 +951,46 @@ def run_vc(
         engine._engine_state.compacted_prefix_messages,
     )
     speaker_context = benchmark_speaker_context(engine, question.question)
-    loop_result = engine.query_with_tools(
-        messages=[{"role": "user", "content": user_prompt}],
-        model=reader_model,
-        system=system_prompt,
-        max_tokens=8192,
-        api_key=api_key,
-        api_url=reader_api_url,
-        temperature=0.0,
-        force_tools=True,
-        require_tools=require_tools,
-        provider=reader_provider,
-        extended_thinking=verbose_reasoning and reader_provider in ("anthropic", "openai-responses"),
-        speaker_context=speaker_context,
-    )
+    reader_notes: list[str] = []
+    if reader_provider == "claude-cli":
+        from types import SimpleNamespace
+
+        from .claude_cli_reader import run_cli_reader
+
+        cli = run_cli_reader(
+            engine, model=reader_model, system=system_prompt,
+            user_prompt=user_prompt, speaker_context=speaker_context,
+        )
+        reader_notes = cli["reader_notes"]
+        loop_result = SimpleNamespace(
+            text=cli["hypothesis"],
+            input_tokens=cli["input_tokens"],
+            output_tokens=cli["output_tokens"],
+            tool_calls=[
+                SimpleNamespace(tool_name=c["tool"], tool_input=c["input"],
+                                result_json=c["result"], duration_ms=c["duration_ms"])
+                for c in cli["tool_calls"]
+            ],
+            continuation_count=max(0, cli["num_turns"] - 1),
+            stop_reason="end_turn",
+            raw_requests=[],
+            raw_responses=[cli["raw"]],
+        )
+    else:
+        loop_result = engine.query_with_tools(
+            messages=[{"role": "user", "content": user_prompt}],
+            model=reader_model,
+            system=system_prompt,
+            max_tokens=8192,
+            api_key=api_key,
+            api_url=reader_api_url,
+            temperature=0.0,
+            force_tools=True,
+            require_tools=require_tools,
+            provider=reader_provider,
+            extended_thinking=verbose_reasoning and reader_provider in ("anthropic", "openai-responses"),
+            speaker_context=speaker_context,
+        )
 
     timings["query_s"] = round(time.time() - t0, 1)
 
@@ -1081,6 +1107,7 @@ def run_vc(
         "tool_calls": tool_calls_log,
         "continuation_count": loop_result.continuation_count,
         "stop_reason": loop_result.stop_reason,
+        "reader_notes": reader_notes,
     }
 
 
