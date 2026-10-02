@@ -860,6 +860,9 @@ class CompositeStore:
         lifecycle_epoch: int | None = None,
         expected_lifecycle_epoch: int | None = None,
     ) -> tuple[int, int]:
+        drop_rejected = getattr(self._facts, "drop_rejected_facts", None)
+        if drop_rejected is not None:
+            facts = drop_rejected(conversation_id, facts)
         return self._facts.replace_facts_for_segment(
             conversation_id,
             segment_ref,

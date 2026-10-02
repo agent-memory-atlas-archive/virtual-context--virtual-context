@@ -76,12 +76,15 @@ changed a turn the fact's segment holds; `rejected` means an admin rejected the
 fact. No state is ever assigned by a model, and the state is not part of the fact
 fingerprint.
 
-An admin verdict is keyed on the fact's statement (subject, verb and object) and
-the turns its segment covers. A rejection therefore holds for every copy of the
-fact, including the same statement extracted again from the same turns by a later
-rebuild, and a `restored` verdict lifts it. Verdicts are kept in `fact_verdicts`, an
-append-only table whose rows a database trigger keeps from being changed, with the
-fact as it read, who decided, when and why.
+An admin verdict is keyed on the fact's statement (subject, verb and object,
+normalized) and the turns its segment covers. A rejection withholds every copy of
+the fact, and the verdicts are read before a segment's facts are written, so the
+same statement extracted again from the same turns by a later rebuild is not
+stored. The same statement drawn from other turns is new evidence and is judged
+on its own. A `restored` verdict lifts the rejection and stores the fact again
+from the verdict if no copy of it remains. Verdicts are kept in `fact_verdicts`,
+an append-only table whose rows a database trigger keeps from being changed, with
+the whole fact as it read, who decided, when and why.
 
 `fact_decisions`, `fact_verdicts`, `turn_edits` and `record_edit_operations` also
 refuse a row deletion while the row's conversation exists. Deleting a

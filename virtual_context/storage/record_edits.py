@@ -10,6 +10,7 @@ resume after an interruption.
 
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -470,35 +471,78 @@ class RecordEditMixin:
     def record_fact_verdict(self, conversation_id, fact_id, verdict, *, actor, reason=""):
         """Record an admin's verdict on a fact and apply it to every copy of it.
 
-        ``rejected`` withholds the fact, and any later extraction of the same
-        statement from the same turns, from every read; ``restored`` lifts a
-        rejection. Returns the fact key and how many current facts changed state.
+        ``rejected`` withholds the fact from every read, and a later extraction
+        of the same statement from the same turns is not stored; ``restored``
+        lifts a rejection, and stores the fact again from its verdict if no copy
+        of it remains. Returns the fact key and how many current facts changed
+        state.
         """
         if verdict not in ("rejected", "restored"):
             raise ValueError("verdict must be 'rejected' or 'restored'")
         p = self._placeholder
+        reinstate = None
         with self._relational_connection(write=True, scope=f"vc-fact-trust:{conversation_id}") as conn:
             row = conn.execute(
                 f"SELECT * FROM facts WHERE id={p} AND conversation_id={p}", (fact_id, conversation_id),
             ).fetchone()
-            if row is None:
-                raise KeyError(f"fact {fact_id} not found")
-            fact = self._row_to_fact(row)
-            key = self._fact_key(conn, fact)
+            if row is not None:
+                fact = self._row_to_fact(row)
+                key = self._fact_key(conn, fact)
+                source_turns = self._fact_source_turn_ids(conn, fact)
+            else:
+                prior = conn.execute(
+                    f"""SELECT fact_key, fact_json, source_turn_ids_json FROM fact_verdicts
+                    WHERE conversation_id={p} AND fact_id={p}
+                    ORDER BY created_at DESC, verdict_id DESC""",
+                    (conversation_id, fact_id),
+                ).fetchone()
+                if prior is None or verdict != "restored":
+                    raise KeyError(f"fact {fact_id} not found")
+                key, source_turns = prior["fact_key"], json.loads(prior["source_turn_ids_json"])
+                fact = _fact_from_verdict(json.loads(prior["fact_json"]), fact_id, conversation_id)
+                if fact is not None and not any(
+                    self._fact_key(conn, self._row_to_fact(other)) == key
+                    for other in conn.execute(
+                        f"SELECT * FROM facts WHERE conversation_id={p} AND segment_ref={p}",
+                        (conversation_id, fact.segment_ref),
+                    ).fetchall()
+                ):
+                    reinstate = fact
             conn.execute(
                 f"""INSERT INTO fact_verdicts (verdict_id,conversation_id,fact_key,fact_id,verdict,
                 actor,reason,created_at,fact_json,source_turn_ids_json)
                 VALUES ({','.join([p] * 10)})""",
                 (str(uuid.uuid4()), conversation_id, key, fact_id, verdict, actor, reason, _now(),
-                 json.dumps({k: getattr(fact, k) for k in ("subject", "verb", "object", "what", "when_date")}),
-                 json.dumps(self._fact_source_turn_ids(conn, fact))),
+                 json.dumps(_fact_record(fact), default=str), json.dumps(source_turns)),
             )
+        if reinstate is not None:
+            self.store_facts([reinstate])
+        with self._relational_connection() as conn:
             refs = [r["segment_ref"] for r in conn.execute(
                 f"""SELECT DISTINCT segment_ref FROM facts WHERE conversation_id={p}
                 AND superseded_by IS NULL""", (conversation_id,),
             ).fetchall() if r["segment_ref"]]
         counts = self.refresh_fact_trust(conversation_id, refs)
         return {"fact_key": key, "verdict": verdict, "trust_states": counts}
+
+    def drop_rejected_facts(self, conversation_id, facts):
+        """The facts whose statement and source turns no admin has rejected.
+
+        Consulted before a segment's facts are written, so a statement an admin
+        rejected is not stored again when the same turns are extracted again.
+        """
+        facts = list(facts)
+        if not facts:
+            return facts
+        with self._relational_connection() as conn:
+            rejected = self._rejected_fact_keys(conn, conversation_id)
+            if not rejected:
+                return facts
+            return [
+                f for f in facts
+                if self._fact_key(conn, replace(f, conversation_id=f.conversation_id or conversation_id))
+                not in rejected
+            ]
 
     def get_fact_verdicts(self, conversation_id, *, limit=100):
         p = self._placeholder
@@ -634,3 +678,21 @@ class RecordEditMixin:
                  op["status"], op["error"], _now(), operation_id),
             )
         return op
+
+
+def _fact_record(fact):
+    """The whole fact, kept on a verdict so a restore can store it again."""
+    record = asdict(fact)
+    record.pop("embedding", None)
+    return record
+
+
+def _fact_from_verdict(record, fact_id, conversation_id):
+    """The fact a verdict kept, or None when the verdict predates whole-fact records."""
+    if "segment_ref" not in record:
+        return None
+    from ..types import Fact
+
+    fact = Fact.from_dict({**record, "id": fact_id, "conversation_id": conversation_id},
+                          dt_parser=datetime.fromisoformat)
+    return replace(fact, trust_state="unverified", superseded_by=None)

@@ -148,8 +148,8 @@ virtual-context admin record process <conversation_id> <operation_id>
 
 `facts` lists current facts with their trust state and source turns; `verify`
 re-derives every fact's trust state from its source turns. `reject` withholds a fact
-from every read, together with the same statement extracted again from the same
-turns, and `restore` lifts the rejection; `verdicts` lists them with who decided,
+from every read, and the same statement extracted again from the same turns is not
+stored; `restore` lifts the rejection and brings the fact back; `verdicts` lists them with who decided,
 when and why. `forget`, `edit` and
 `remove` change the turns, write the audit trail, retract the facts of the affected
 segments, then rebuild the segments, facts and topic summaries derived from them.
