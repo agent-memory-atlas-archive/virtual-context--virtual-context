@@ -15,6 +15,8 @@ import hashlib
 import json
 import uuid
 
+from .ledger_guard import ensure_ledger_delete_guard
+
 GENERAL_TAG = "_general"
 _ACTIVE = ("pending", "running")
 
@@ -121,6 +123,8 @@ class RecordEditMixin:
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_record_edit_operations_owner
             ON record_edit_operations (conversation_id, status)""")
+        for table in ("turn_edits", "fact_verdicts", "record_edit_operations"):
+            ensure_ledger_delete_guard(conn, self._relational_dialect, table)
 
     # -- shared helpers --------------------------------------------------
 

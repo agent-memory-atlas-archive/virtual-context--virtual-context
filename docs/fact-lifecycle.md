@@ -83,6 +83,10 @@ rebuild, and a `restored` verdict lifts it. Verdicts are kept in `fact_verdicts`
 append-only table whose rows a database trigger keeps from being changed, with the
 fact as it read, who decided, when and why.
 
+`fact_decisions`, `fact_verdicts`, `turn_edits` and `record_edit_operations` also
+refuse a row deletion while the row's conversation exists. Deleting a
+conversation marks it deleted first, and its ledger rows go with it.
+
 Rebuilt facts start `unverified` and are set to `verified` or `unverified` from
 their source proof once stored. A record edit retracts the facts of every segment
 it queues for rebuild in the same transaction as the edit, and the rebuild

@@ -8,6 +8,8 @@ import hashlib
 import json
 import uuid
 
+from .ledger_guard import ensure_ledger_delete_guard
+
 
 # Only content and provenance can invalidate source evidence. Re-ingestion and
 # background maintenance update timestamps without changing what was said.
@@ -120,8 +122,13 @@ class FactMutationMixin:
             observed_fact_versions_json TEXT NOT NULL DEFAULT '{}',
             origin_conversation_id TEXT NOT NULL DEFAULT '')""")
         if self._relational_dialect == "postgres":
-            conn.execute("""ALTER TABLE fact_decisions ADD COLUMN IF NOT EXISTS
-                observed_fact_versions_json TEXT NOT NULL DEFAULT '{}'""")
+            # ADD COLUMN locks the table even when it is a no-op; look first.
+            if not conn.execute(
+                """SELECT 1 FROM information_schema.columns WHERE table_name='fact_decisions'
+                   AND column_name='observed_fact_versions_json'"""
+            ).fetchone():
+                conn.execute("""ALTER TABLE fact_decisions ADD COLUMN IF NOT EXISTS
+                    observed_fact_versions_json TEXT NOT NULL DEFAULT '{}'""")
             conn.execute("""CREATE OR REPLACE FUNCTION guard_fact_decision_content()
                 RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
                 IF (to_jsonb(NEW) - 'conversation_id') IS DISTINCT FROM
@@ -157,6 +164,7 @@ class FactMutationMixin:
                 if existing is not None:
                     conn.execute("DROP TRIGGER guard_fact_decision_content")
                 conn.execute(trigger_sql)
+        ensure_ledger_delete_guard(conn, self._relational_dialect, "fact_decisions")
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_decisions_owner
             ON fact_decisions (conversation_id,observed_at,decision_id)""")
         conn.execute("""CREATE INDEX IF NOT EXISTS idx_fact_decisions_replacement
