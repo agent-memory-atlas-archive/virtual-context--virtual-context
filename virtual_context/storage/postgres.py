@@ -12537,6 +12537,18 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             return 0
         return int(row[0] if not hasattr(row, "keys") else list(row.values())[0])
 
+    def newest_canonical_turn_at(self, conversation_id: str) -> str | None:
+        """MAX of canonical_turn ``created_at`` under the literal id."""
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM canonical_turns WHERE conversation_id = %s",
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        value = row[0] if not hasattr(row, "keys") else list(row.values())[0]
+        return str(value) if value else None
+
     def get_uncompacted_canonical_turns(
         self,
         conversation_id: str,

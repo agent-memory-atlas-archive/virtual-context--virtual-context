@@ -494,6 +494,9 @@ class CompositeStore:
     def count_canonical_turns(self, conversation_id: str) -> int:
         return self._segments.count_canonical_turns(conversation_id)
 
+    def newest_canonical_turn_at(self, conversation_id: str) -> str | None:
+        return self._segments.newest_canonical_turn_at(conversation_id)
+
     def get_uncompacted_canonical_turns(
         self,
         conversation_id: str,

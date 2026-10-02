@@ -11690,6 +11690,15 @@ CREATE TABLE IF NOT EXISTS request_captures (
         ).fetchone()
         return int(row[0]) if row else 0
 
+    def newest_canonical_turn_at(self, conversation_id: str) -> str | None:
+        """Indexed MAX of canonical_turn ``created_at`` under the literal id."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT MAX(created_at) FROM canonical_turns WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
     def get_uncompacted_canonical_turns(
         self,
         conversation_id: str,

@@ -639,6 +639,15 @@ class ContextStore(ABC):
         """
         return len(self.get_all_canonical_turns(conversation_id))
 
+    def newest_canonical_turn_at(self, conversation_id: str) -> str | None:
+        """ISO time the newest canonical turn under the literal id was stored.
+
+        ``None`` when the conversation has no turns. Backends override with an
+        indexed MAX; this default derives from ``get_all_canonical_turns``.
+        """
+        times = [t.created_at for t in self.get_all_canonical_turns(conversation_id) if t.created_at]
+        return max(times) if times else None
+
     def get_uncompacted_canonical_turns(
         self,
         conversation_id: str,
