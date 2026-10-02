@@ -684,6 +684,33 @@ def summarize_payload_accounting(
 # ABC
 # ---------------------------------------------------------------------------
 
+def catalog_tool_names(body: dict) -> list[str]:
+    """Names a Responses client declares in its ``additional_tools`` input items.
+
+    Codex sends its tool catalog as an input item (namespaces of tools) rather
+    than in ``tools``; those tools are the client's and must not be declared a
+    second time.
+    """
+    names: list[str] = []
+    items = body.get("input") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        return names
+    pending = [
+        tool for item in items
+        if isinstance(item, dict) and item.get("type") == "additional_tools"
+        for tool in item.get("tools") or []
+    ]
+    while pending:
+        tool = pending.pop(0)
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "namespace":
+            pending.extend(tool.get("tools") or [])
+        elif tool.get("name"):
+            names.append(tool["name"])
+    return names
+
+
 class PayloadFormat(ABC):
     """Strategy interface for provider-specific request/response handling."""
 
@@ -3921,6 +3948,7 @@ class OpenAIResponsesFormat(PayloadFormat):
         body = dict(body)
         tools = list(body.get("tools") or [])
         existing_names = {t.get("name") for t in tools if isinstance(t, dict)}
+        existing_names.update(catalog_tool_names(body))
         for td in tool_defs:
             if td["name"] not in existing_names:
                 tools.append({

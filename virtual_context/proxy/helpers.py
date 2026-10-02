@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from ..types import Message
 from .formats import (
+    catalog_tool_names,
     detect_format,
     extract_ingestible_messages,
     get_format,
@@ -277,6 +278,7 @@ def tool_names(body: dict) -> list[str]:
             names.append(tool["name"])
         elif isinstance(tool.get("function"), dict) and tool["function"].get("name"):
             names.append(tool["function"]["name"])
+    names.extend(catalog_tool_names(body))
     return names
 
 

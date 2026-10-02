@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-116 — Codex catalog tools were declared twice
+
+- **Symptom**: a client whose Codex tool catalog already carried `vc_*` tools would also get VC's copies as top-level tools, two definitions of one name; the workaround of denying the client's own copies left scripted calls such as `tools.vc_find_quote(...)` failing with "is not a function".
+- **Root cause**: the Responses `inject_tools` and `tool_names` read only the body's `tools` array, not the tools a client declares in `additional_tools` input items.
+- **Fix**: `catalog_tool_names` reads the client catalog; injection skips names the client already declares and `tool_names` reports them. Direct calls to those tools are still intercepted by name.
+- **Tests**:
+  - `test_responses_catalog_tools.py`
+
 ### BUG-115 — Dashboard token left read routes open
 
 - **Symptom**: with `VC_DASHBOARD_TOKEN` set, request captures, export, events, telemetry, conversations and settings were still readable without the token; only mutating routes checked it, and the bundled page never sent it.
@@ -1213,6 +1221,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_component_models.py` | BUG-113 |
 | `test_paging_model_resolution.py` | BUG-114 |
 | `proxy/test_dashboard_token_reads.py` | BUG-115 |
+| `test_responses_catalog_tools.py` | BUG-116 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |
 | `test_embedding_model_device.py` | BUG-087 |
