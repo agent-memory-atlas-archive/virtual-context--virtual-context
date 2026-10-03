@@ -92,3 +92,21 @@ def test_an_engine_config_supplies_memory_settings_and_the_run_keeps_its_own(tmp
     assert cfg["judgment"]["seams"]["fact_curation"] == "jev"
     assert (cfg["context_window"], cfg["storage"]["backend"], cfg["session_id"]) == (65536, "sqlite", "bench-q")
     assert "telemetry" not in cfg and "vector_search_enabled" not in cfg["retrieval"]
+
+
+def test_a_tool_chain_is_summarized_for_the_payload_log():
+    from benchmarks.longmemeval.chain_analysis import analyze_tool_chain
+
+    chain = analyze_tool_chain([
+        {"tool": "vc_find_quote", "input": {"query": "5K"}, "result": json.dumps({"found": False, "results": []})},
+        {"tool": "vc_find_quote", "input": {"query": "charity run"}, "result": json.dumps({"found": False})},
+        {"tool": "vc_expand_topic", "input": {"tag": "running", "collapse_tags": ["cooking"]},
+         "result": json.dumps({"tag": "running", "tokens_added": 900, "total_tokens_freed": 300})},
+    ])
+
+    assert chain["total_calls"] == 3
+    assert chain["chain_pattern"] == "vc_find_quote x2 -> vc_expand_topic"
+    assert (chain["useful_calls"], chain["wasted_calls"]) == (1, 2)
+    assert (chain["tokens_added_total"], chain["tokens_freed_total"]) == (900, 300)
+    assert chain["has_strategy_pivot"] and chain["has_collapse_then_expand"]
+    assert analyze_tool_chain([])["chain_pattern"] == "none"
