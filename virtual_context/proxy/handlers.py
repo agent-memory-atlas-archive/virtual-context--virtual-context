@@ -39,7 +39,6 @@ from .helpers import (
     _extract_assistant_text,
     _extract_assistant_raw_content,
     _inject_conversation_marker,
-    _dump_session_state,
 )
 from .metrics import ProxyMetrics
 from .state import ProxyState
@@ -627,7 +626,6 @@ async def _handle_streaming(
     conversation_id: str = "",
     passthrough: bool = False,
     response_log_path: object | None = None,
-    session_log_path: object | None = None,
     paging_enabled: bool = False,
     request_log_dir: object | None = None,
     log_prefix: str = "",
@@ -734,7 +732,7 @@ async def _handle_streaming(
                     request_turn=request_turn, turn_id=turn_id,
                     conversation_id=conversation_id, overhead_ms=overhead_ms,
                     passthrough=passthrough, skip_marker_injection=skip_marker_injection,
-                    response_log_path=response_log_path, session_log_path=session_log_path,
+                    response_log_path=response_log_path,
                     request_log_dir=request_log_dir, log_prefix=log_prefix,
             )
         except PayloadBudgetExceeded as exc:
@@ -969,10 +967,6 @@ async def _handle_streaming(
                 if completion_live and state and assistant_text and not skip_marker_injection and not state.is_conversation_deleted():
                     yield get_format(api_format).emit_conversation_marker_sse(context.conversation_id)
 
-            # Session state dump (after response + history update)
-            if session_log_path and state:
-                _dump_session_state(state, session_log_path)
-
     async def stream_generator():
         client_chunks: list[bytes] = [] if request_log_dir else None
         async for chunk in _inner_stream():
@@ -1011,7 +1005,6 @@ async def _handle_non_streaming(
     conversation_id: str = "",
     passthrough: bool = False,
     response_log_path: object | None = None,
-    session_log_path: object | None = None,
     request_log_dir: object | None = None,
     log_prefix: str = "",
     skip_marker_injection: bool = False,
@@ -1154,10 +1147,6 @@ async def _handle_non_streaming(
         turn, int(upstream_ms), int(round(overhead_ms + upstream_ms)),
         len(assistant_text or ""),
     )
-
-    # Session state dump
-    if session_log_path and state:
-        _dump_session_state(state, session_log_path)
 
     # Forward response headers (filter hop-by-hop)
     resp_headers = _forward_headers(dict(resp.headers))

@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### PROXY-039 — Per-response memory dump stalled every logged request
+
+- **Symptom**: with a request log directory configured, each provider response returned about 3 seconds after the model finished; the delay matched the write time of a 12-13 MB `*.session.json` file beside the request log.
+- **Root cause**: both response handlers called `_dump_session_state` before returning, which serialized the whole turn-tag index, every tag summary, tag stats and history on the event loop for every request.
+- **Fix**: the session dump is removed; the request log keeps its payload stages (`1-inbound` through `4-to-client`).
+- **Tests**:
+  - `test_request_log_no_session_dump.py`
+
 ### BUG-117 — GPT-6 requests capped at the default context window
 
 - **Symptom**: requests for `gpt-6-astra` were rejected with `413 Payload Too Large: Protected input requires 211704 tokens; only 195904 tokens remain after reserving output.` while the same conversation size on `gpt-5.6-sol` was admitted.
@@ -1229,6 +1237,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_component_models.py` | BUG-113 |
 | `test_paging_model_resolution.py` | BUG-114 |
 | `proxy/test_dashboard_token_reads.py` | BUG-115 |
+| `test_request_log_no_session_dump.py` | PROXY-039 |
 | `test_model_limits.py` | BUG-117 |
 | `test_responses_catalog_tools.py` | BUG-116 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |

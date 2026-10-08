@@ -96,7 +96,6 @@ from .helpers import (  # noqa: F401 — re-exported for tests
     _emit_text_as_responses_sse,
     _emit_tool_use_as_responses_sse,
     _emit_response_done_sse,
-    _dump_session_state,
 )
 from .message_filter import filter_body_messages as _filter_body_messages  # noqa: F401
 from .message_filter import PayloadBudgetExceeded, admit_provider_payload
@@ -3240,7 +3239,6 @@ def create_app(
             _base_log_dir = None
         _effective_log_dir: Path | None = None
         _response_log_path: Path | None = None
-        _session_log_path: Path | None = None
         _log_prefix = ""
 
         try:
@@ -3276,7 +3274,6 @@ def create_app(
             # 1-inbound: raw request from client
             req_log = _effective_log_dir / f"{_log_prefix}.1-inbound.json"
             _response_log_path = _effective_log_dir / f"{_log_prefix}.3-from-llm.json"
-            _session_log_path = _effective_log_dir / f"{_log_prefix}.session.json"
             try:
                 req_log.write_bytes(body_bytes)
             except Exception as _log_err:
@@ -3383,7 +3380,6 @@ def create_app(
                     client, url, fwd_headers, body, api_format, state,
                     request_context=context, metrics=request_metrics, turn=_skip_turn, request_turn=0, turn_id=_skip_turn_id,
                     conversation_id=_skip_sid, response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
                     speaker_context=SpeakerRetrievalContext.ineligible(),
                 )
@@ -3392,7 +3388,6 @@ def create_app(
                     client, url, fwd_headers, body, api_format, state,
                     request_context=context, metrics=request_metrics, turn=_skip_turn, request_turn=0, turn_id=_skip_turn_id,
                     conversation_id=_skip_sid, response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
                     speaker_context=SpeakerRetrievalContext.ineligible(),
                 )
@@ -3433,7 +3428,6 @@ def create_app(
                     request_context=context, metrics=request_metrics, turn=result.turn, request_turn=result.request_turn, turn_id=result.turn_id,
                     conversation_id=result.conversation_id,
                     passthrough=True, response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
                     skip_marker_injection=_skip_marker(),
                     speaker_context=result.speaker_context,
@@ -3446,7 +3440,6 @@ def create_app(
                     request_context=context, metrics=request_metrics, turn=result.turn, request_turn=result.request_turn, turn_id=result.turn_id,
                     conversation_id=result.conversation_id,
                     passthrough=True, response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
                     skip_marker_injection=_skip_marker(),
                     speaker_context=result.speaker_context,
@@ -3463,7 +3456,6 @@ def create_app(
                     overhead_ms=result.overhead_ms,
                     conversation_id=result.conversation_id,
                     response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     paging_enabled=_intercept_vc_tools,
                     request_log_dir=_effective_log_dir,
                     log_prefix=_log_prefix if _effective_log_dir else "",
@@ -3480,7 +3472,6 @@ def create_app(
                     overhead_ms=result.overhead_ms,
                     conversation_id=result.conversation_id,
                     response_log_path=_response_log_path,
-                    session_log_path=_session_log_path,
                     request_log_dir=_effective_log_dir, log_prefix=_log_prefix,
                     skip_marker_injection=_skip_marker(),
                     speaker_context=result.speaker_context,
