@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-117 — GPT-6 requests capped at the default context window
+
+- **Symptom**: requests for `gpt-6-astra` were rejected with `413 Payload Too Large: Protected input requires 211704 tokens; only 195904 tokens remain after reserving output.` while the same conversation size on `gpt-5.6-sol` was admitted.
+- **Root cause**: `MODEL_CONTEXT_LIMITS` had no `gpt-6` prefix, so `resolve_upstream_limit` returned `DEFAULT_UPSTREAM_LIMIT` (200,000) for every GPT-6 model.
+- **Fix**: `gpt-6` resolves to the same limit as `gpt-5`; the two families share one context window.
+- **Tests**:
+  - `test_model_limits.py::TestResolveUpstreamLimit::test_gpt6_family_matches_gpt5`
+
 ### BUG-116 — Codex catalog tools were declared twice
 
 - **Symptom**: a client whose Codex tool catalog already carried `vc_*` tools would also get VC's copies as top-level tools, two definitions of one name; the workaround of denying the client's own copies left scripted calls such as `tools.vc_find_quote(...)` failing with "is not a function".
@@ -1221,6 +1229,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_component_models.py` | BUG-113 |
 | `test_paging_model_resolution.py` | BUG-114 |
 | `proxy/test_dashboard_token_reads.py` | BUG-115 |
+| `test_model_limits.py` | BUG-117 |
 | `test_responses_catalog_tools.py` | BUG-116 |
 | `test_session_state_version_roundtrip.py` | BUG-089 |
 | `test_tag_index_restore_without_state.py` | BUG-088 |

@@ -1,5 +1,7 @@
 # tests/test_model_limits.py
 """Tests for model-aware upstream context limit resolution."""
+import pytest
+
 from virtual_context.model_limits import resolve_upstream_limit
 
 
@@ -27,6 +29,11 @@ class TestResolveUpstreamLimit:
 
     def test_gpt5_4(self):
         assert resolve_upstream_limit("gpt-5.4") == 1_000_000
+
+    @pytest.mark.regression("BUG-117")
+    def test_gpt6_family_matches_gpt5(self):
+        for model in ("gpt-6-astra", "openai/gpt-6-sol", "gpt-6.1-sol"):
+            assert resolve_upstream_limit(model) == resolve_upstream_limit("gpt-5.6-sol")
 
     def test_gpt4o(self):
         assert resolve_upstream_limit("gpt-4o") == 128_000

@@ -14,6 +14,7 @@ MODEL_CONTEXT_LIMITS: list[tuple[str, int]] = [
     ("claude-3-opus", 200_000),
     ("claude-", 200_000),
     # OpenAI
+    ("gpt-6", 1_000_000),
     ("gpt-5", 1_000_000),
     ("gpt-4.1", 1_000_000),
     ("gpt-4o", 128_000),
