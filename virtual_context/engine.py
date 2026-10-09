@@ -171,6 +171,9 @@ class VirtualContextEngine:
     ) -> None:
         self._config_path = str(config_path) if config_path else None
         self.config = config or load_config(config_path)
+        import time as _init_time
+        _init_marks: list[tuple[str, float]] = [("start", _init_time.monotonic())]
+
         from .core.judgment import build_runtime as _build_judgment_runtime
         # Engine-owned: never installed process-wide, so engines in one process keep their own modes.
         self.judgment_runtime = _build_judgment_runtime(self.config.judgment)
@@ -192,6 +195,7 @@ class VirtualContextEngine:
                 model_name=self.config.retriever.embedding_model,
             )
 
+        _init_marks.append(("judgment+tokens+embeddings", _init_time.monotonic()))
         self._conversation_generation = 0
         # One bus per Engine instance. Downstream tasks (A31-A33) publish
         # IngestionProgressEvent / CompactionProgressEvent onto this bus;
@@ -213,6 +217,7 @@ class VirtualContextEngine:
         from .core.exceptions import EngineConstructionError
 
         _raw_store = self._build_raw_store()
+        _init_marks.append(("raw_store", _init_time.monotonic()))
         self._validate_actor_card_store(_raw_store)
         _raw_conv_id = self.config.conversation_id
         if _raw_conv_id:
@@ -296,6 +301,7 @@ class VirtualContextEngine:
 
         # Wrap the raw store now that conversation_id is final.
         self._init_store_view(_raw_store)
+        _init_marks.append(("alias+store_view", _init_time.monotonic()))
 
         # Cross-channel-mirror Tier 1 gate (see spec §1.1). Set the
         # cached participation bool BEFORE any delegate construction
@@ -315,14 +321,19 @@ class VirtualContextEngine:
             self._is_merge_participant = False
 
         self._init_telemetry()
+        _init_marks.append(("telemetry", _init_time.monotonic()))
         self._init_canonicalizer()
         self._init_tag_generator()
+        _init_marks.append(("tag_generator", _init_time.monotonic()))
         self._init_monitor()
         self._init_segmenter()
         self._init_assembler()
         self._init_retriever()
+        _init_marks.append(("monitor+segmenter+assembler+retriever", _init_time.monotonic()))
         self._init_compactor()
+        _init_marks.append(("compactor", _init_time.monotonic()))
         self._init_tag_splitter()
+        _init_marks.append(("tag_splitter", _init_time.monotonic()))
         self._engine_state = EngineState()  # mutable shared state for delegates
         self._engine_state.conversation_generation = self._conversation_generation
         self._load_lifecycle_epoch_into_engine_state()
@@ -420,6 +431,7 @@ class VirtualContextEngine:
             except Exception:
                 logger.warning("Turn-tag index restore from canonical rows failed", exc_info=True)
 
+        _init_marks.append(("state_restore", _init_time.monotonic()))
         # Create delegates with the (possibly restored) turn_tag_index
         self._semantic = SemanticSearchManager(
             store=self._store, config=self.config,
@@ -461,6 +473,7 @@ class VirtualContextEngine:
         self._fact_curator = None
         self._init_fact_curator()
         _tool_tag_cb = None
+        _init_marks.append(("search+facts+paging+curator", _init_time.monotonic()))
         if self._session_state_provider:
             _conv_id = self.config.conversation_id
             _provider = self._session_state_provider
@@ -521,6 +534,7 @@ class VirtualContextEngine:
         self._retrieval._is_merge_participant = self._is_merge_participant
 
         self._apply_persisted_state_to_delegates()
+        _init_marks.append(("pipelines+persisted_state", _init_time.monotonic()))
 
         # ------------------------------------------------------------------
         # Self-hydrate on alias-resolver rebind (provider mode only).
@@ -571,6 +585,16 @@ class VirtualContextEngine:
                 )
 
         self._bootstrap_vocabulary()
+        _init_marks.append(("vocabulary", _init_time.monotonic()))
+        logger.info(
+            "ENGINE_INIT_BREAKDOWN conv=%s total=%.1fms %s",
+            self.config.conversation_id[:12],
+            (_init_marks[-1][1] - _init_marks[0][1]) * 1000,
+            " ".join(
+                f"{name}={(t - _init_marks[i][1]) * 1000:.1f}ms"
+                for i, (name, t) in enumerate(_init_marks[1:])
+            ),
+        )
 
     # ------------------------------------------------------------------
     # E1.1 Engine.merge_conversation entry point (per )
