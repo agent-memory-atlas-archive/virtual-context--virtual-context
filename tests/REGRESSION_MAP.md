@@ -5,6 +5,22 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-125 — Facts were gathered and curated after the summaries
+
+- **Symptom**: prepare ran topic selection, summary rerank and fact curation one after another, three judgment-model round trips in sequence.
+- **Root cause**: `retrieve` fetched facts only after choosing summaries, and the caller curated them only after `retrieve` returned, although facts depend only on the expanded tags.
+- **Fix**: `retrieve` gathers facts on a worker thread once the tags are known and passes them through the caller's `facts_transform` (request filtering and curation) while the summaries are chosen.
+- **Tests**:
+  - `test_retrieve_facts_in_parallel.py`
+
+### BUG-124 — Regrouping rewrote every turn of the conversation
+
+- **Symptom**: each ingest that wrote a row spent about 360 ms in `regroup` on a conversation of about 1,800 turns.
+- **Root cause**: `recompute_canonical_turn_groups` issued one UPDATE per stored turn, although appending a turn leaves every earlier group unchanged.
+- **Fix**: only turns whose computed group differs from the stored one are written; PostgreSQL sends them in one batch.
+- **Tests**:
+  - `test_regroup_writes_only_changes.py`
+
 ### BUG-123 — Each engine rebuilt its token counter
 
 - **Symptom**: engine construction spent 150-600 ms in `create_token_counter` with the `tiktoken` counter.
@@ -1290,6 +1306,8 @@ Use `pytest -m regression` to run all regression tests.
 | `test_hint_search_rule.py` | BUG-121 |
 | `test_postgres_schema_once.py` | BUG-122 |
 | `test_token_counter_shared.py` | BUG-123 |
+| `test_regroup_writes_only_changes.py` | BUG-124 |
+| `test_retrieve_facts_in_parallel.py` | BUG-125 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |

@@ -8,6 +8,8 @@ import hashlib
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable
 
 from .store import ContextStore
 from .tag_generator import TagGenerator, detect_temporal_heuristic
@@ -30,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 _RETRIEVAL_BREAKDOWN_LOG_THRESHOLD_MS = 500.0
 
+
+
+# Gathers a request's facts while its summaries are being chosen.
+_FACTS_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="vc-facts")
 
 class ContextRetriever:
     judgment_runtime = None  # engine-owned JudgmentRuntime; None = module default
@@ -589,6 +595,7 @@ class ContextRetriever:
         *,
         entries_snapshot: list | None = None,
         query_text: str | None = None,
+        facts_transform: Callable[[list], list] | None = None,
     ) -> RetrievalResult:
         """Tag inbound message, fetch relevant summaries by tag overlap.
 
@@ -803,6 +810,32 @@ class ContextRetriever:
         ]
         expanded_tags = list(set(query_tags) | set(related_query_tags))
         query_tag_set = set(query_tags)
+
+        # Facts depend only on the expanded tags, not on topic selection or
+        # rerank, so they are gathered, and passed through *facts_transform*,
+        # while the summaries are chosen. The job runs in a fresh context: the
+        # store's context variables scope write transactions, never reads.
+        def _gather_facts() -> list:
+            _facts_stage = time.monotonic()
+            if getattr(self.config, "fact_dense_retrieval", False):
+                gathered = self._fetch_facts_dense(
+                    lookup_text, context_turns, expanded_tags, retrieval_metadata,
+                )
+            elif self.config.prefetch_facts and expanded_tags:
+                gathered = self._fetch_facts_by_tags(expanded_tags)
+                logger.info("Retriever: facts=%d (prefetch tags=%s)", len(gathered), expanded_tags)
+            else:
+                gathered = self._fetch_all_facts()
+                logger.info("Retriever: facts=%d (all, prefetch=%s)", len(gathered),
+                            "off" if not self.config.prefetch_facts else "no-tags")
+            _note("fetch_facts", _facts_stage)
+            if facts_transform is not None:
+                _transform_stage = time.monotonic()
+                gathered = facts_transform(gathered)
+                _note("facts_transform", _transform_stage)
+            return gathered
+
+        _facts_future = _FACTS_POOL.submit(_gather_facts)
 
         from .retrieval_scoring import score_candidates
 
@@ -1058,20 +1091,12 @@ class ContextRetriever:
             "query_expanded": len(related_query_tags) > 0,
         })
 
-        # Fetch facts: dense-augmented (gated), tag prefetch, or fetch all
-        _facts_stage = time.monotonic()
-        if getattr(self.config, "fact_dense_retrieval", False):
-            facts = self._fetch_facts_dense(
-                lookup_text, context_turns, expanded_tags, retrieval_metadata,
-            )
-        elif self.config.prefetch_facts and expanded_tags:
-            facts = self._fetch_facts_by_tags(expanded_tags)
-            logger.info("Retriever: facts=%d (prefetch tags=%s)", len(facts), expanded_tags)
-        else:
-            facts = self._fetch_all_facts()
-            logger.info("Retriever: facts=%d (all, prefetch=%s)", len(facts),
-                        "off" if not self.config.prefetch_facts else "no-tags")
-        _note("fetch_facts", _facts_stage)
+        # Facts: dense-augmented (gated), tag prefetch, or fetch all, gathered above.
+        _facts_wait_stage = time.monotonic()
+        facts = _facts_future.result()
+        _note("facts_wait", _facts_wait_stage)
+        if facts_transform is not None:
+            retrieval_metadata["facts_prepared"] = True
 
         total_ms = round((time.monotonic() - start_time) * 1000, 1)
         if total_ms >= _RETRIEVAL_BREAKDOWN_LOG_THRESHOLD_MS:

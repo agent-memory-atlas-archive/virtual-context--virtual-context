@@ -526,6 +526,16 @@ class RetrievalAssembler:
         # bounded snapshot so retriever fallback paths (working-set
         # tags on tagger failure, inherit-from-previous on _general)
         # see the same index view as the rest of this inbound call.
+        def _prepare_facts(facts: list) -> list:
+            # D2: keep the facts this request may see, curated down to the
+            # query-relevant subset before assembly.
+            facts = self._facts_for_request(facts, speaker_context)
+            if self._fact_curator and facts:
+                _curate_stage = time.monotonic()
+                facts = self._curate_facts(facts, retrieval_query)
+                _note("fact_curate_primary", _curate_stage)
+            return facts
+
         _retrieve_stage = time.monotonic()
         retrieval_result = self._retriever.retrieve(
             message=message,
@@ -534,18 +544,14 @@ class RetrievalAssembler:
             post_compaction=_post_compaction,
             context_turns=context,
             entries_snapshot=_tti_entries_snapshot,
+            facts_transform=_prepare_facts,
             **query_options,
         )
         _note("retrieve_primary", _retrieve_stage)
-        retrieval_result.facts = self._facts_for_request(retrieval_result.facts, speaker_context)
-
-        # D2: Curate facts down to query-relevant subset before assembly
-        if self._fact_curator and retrieval_result.facts:
-            _curate_stage = time.monotonic()
-            retrieval_result.facts = self._curate_facts(
-                retrieval_result.facts, retrieval_query,
-            )
-            _note("fact_curate_primary", _curate_stage)
+        # Retrieval prepares the facts alongside choosing the summaries; a
+        # result that returned before gathering facts is prepared here.
+        if not (retrieval_result.retrieval_metadata or {}).get("facts_prepared"):
+            retrieval_result.facts = _prepare_facts(retrieval_result.facts)
 
         # Build context awareness hint (post-compaction only)
         _hint_stage = time.monotonic()
