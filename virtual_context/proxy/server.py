@@ -96,6 +96,7 @@ from .helpers import (  # noqa: F401 — re-exported for tests
     _emit_text_as_responses_sse,
     _emit_tool_use_as_responses_sse,
     _emit_response_done_sse,
+    conversation_prompt_cache_key,
 )
 from .message_filter import filter_body_messages as _filter_body_messages  # noqa: F401
 from .message_filter import PayloadBudgetExceeded, admit_provider_payload
@@ -2583,6 +2584,7 @@ async def prepare_payload(
     turn = len(state.engine._turn_tag_index.entries) if state else 0
     _turn_id = uuid.uuid4().hex[:12]
     _conversation_id = state.engine.config.conversation_id if state else ""
+    enriched_body = conversation_prompt_cache_key(enriched_body, _conversation_id)
     _context_tokens_stage = time.monotonic()
     context_tokens = _vc_tokens if state else (fmt._count(prepend_text) if prepend_text else 0)
     _note_prep("context_token_count", _context_tokens_stage)

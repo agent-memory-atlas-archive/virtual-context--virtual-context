@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### PROXY-040 — Provider cache reset whenever a client started a new thread
+
+- **Symptom**: Responses requests for a long conversation reported zero cached input tokens on every turn, although the instructions, tool catalog and system items at the head of the payload were unchanged.
+- **Root cause**: the client sets `prompt_cache_key` to its own thread id and starts a new thread each turn, so every turn was routed to an empty provider cache.
+- **Fix**: `conversation_prompt_cache_key` replaces a client-supplied key with one derived from the VC conversation id before the request is sent upstream.
+- **Tests**:
+  - `test_prompt_cache_key.py`
+
 ### PROXY-039 — Per-response memory dump stalled every logged request
 
 - **Symptom**: with a request log directory configured, each provider response returned about 3 seconds after the model finished; the delay matched the write time of a 12-13 MB `*.session.json` file beside the request log.
@@ -1237,6 +1245,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_component_models.py` | BUG-113 |
 | `test_paging_model_resolution.py` | BUG-114 |
 | `proxy/test_dashboard_token_reads.py` | BUG-115 |
+| `test_prompt_cache_key.py` | PROXY-040 |
 | `test_request_log_no_session_dump.py` | PROXY-039 |
 | `test_model_limits.py` | BUG-117 |
 | `test_responses_catalog_tools.py` | BUG-116 |

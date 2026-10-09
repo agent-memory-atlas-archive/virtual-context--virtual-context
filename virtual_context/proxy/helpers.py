@@ -600,3 +600,18 @@ def _emit_message_end_sse(
     ms = _json.dumps({"type": "message_stop"})
     events.append(f"event: message_stop\ndata: {ms}\n\n".encode())
     return events
+
+
+def conversation_prompt_cache_key(body: dict, conversation_id: str) -> dict:
+    """Return *body* with its ``prompt_cache_key`` tied to the VC conversation.
+
+    A client that keys provider caching to its own thread loses every cache
+    entry when it starts a new thread, although VC sends the same stable
+    prefix for the conversation. Requests that carry no key are left alone.
+    """
+    if not conversation_id or not isinstance(body, dict) or not body.get("prompt_cache_key"):
+        return body
+    import hashlib
+
+    digest = hashlib.sha256(f"vc-cache:{conversation_id}".encode("utf-8")).hexdigest()[:32]
+    return {**body, "prompt_cache_key": f"vc-{digest}"}
