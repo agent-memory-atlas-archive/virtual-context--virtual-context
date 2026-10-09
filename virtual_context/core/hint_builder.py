@@ -6,9 +6,15 @@ Pure functions — no engine state mutation. Extracted from engine.py.
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Callable
 
 from ..types import DepthLevel, TagSummary, WorkingSetEntry
+
+# Fingerprint of this module's source. Stored hints are keyed on it, so a
+# change to the rendered text replaces hints cached before the change.
+TEMPLATE_FINGERPRINT = hashlib.sha1(Path(__file__).read_bytes()).hexdigest()[:16]
 
 
 def _minimal_hint(

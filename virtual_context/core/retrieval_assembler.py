@@ -13,6 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 from .engine_utils import get_recent_context
+from . import hint_builder
 from .hint_builder import build_autonomous_hint, build_supervised_hint, build_default_hint
 from .protected_window import _slice_payload_prefix_preserving_db_recent
 from .reply_context import reply_retrieval_query
@@ -1015,6 +1016,7 @@ class RetrievalAssembler:
             "tag_context_max_tokens": self.config.assembler.tag_context_max_tokens,
             "max_tool_rounds": self.config.paging.max_tool_loops,
             "working_set": working_set,
+            "template": hint_builder.TEMPLATE_FINGERPRINT,
         }
         return hashlib.sha1(
             json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")

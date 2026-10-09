@@ -9,7 +9,7 @@ Use `pytest -m regression` to run all regression tests.
 
 - **Symptom**: a greeting such as "can you hear me" made the model call `vc_find_quote` or `vc_query_facts` before replying, adding a second provider round to the turn.
 - **Root cause**: the supervised hint's tool rules, and the compact rules used under a tight hint budget, ended with "Never answer without searching first", which applies to every message once the VC tools are offered.
-- **Fix**: the rules ask for a search when the answer depends on earlier conversations and to reply directly to greetings, acknowledgements and small talk.
+- **Fix**: the rules ask for a search when the answer depends on earlier conversations and to reply directly to greetings, acknowledgements and small talk. The stored-hint cache key now includes a fingerprint of the hint builder, so hints cached before a wording change are rebuilt.
 - **Tests**:
   - `test_hint_search_rule.py`
 

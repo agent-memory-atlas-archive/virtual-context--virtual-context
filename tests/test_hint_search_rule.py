@@ -19,3 +19,17 @@ def test_hints_do_not_require_a_search_before_every_answer():
     for hint in (supervised, compact, build_autonomous_hint(_summaries(), {}, 1000, 5000, count)):
         assert "Never answer without searching first" not in hint
     assert "greetings" in supervised
+
+
+@pytest.mark.regression("BUG-121")
+def test_a_change_to_the_hint_text_invalidates_stored_hints(tmp_path, monkeypatch):
+    from virtual_context.core import hint_builder
+    from virtual_context.engine import VirtualContextEngine
+    from virtual_context.types import StorageConfig, VirtualContextConfig
+
+    engine = VirtualContextEngine(config=VirtualContextConfig(
+        storage=StorageConfig(backend="sqlite", sqlite_path=str(tmp_path / "t.db")),
+    ))
+    before = engine._retrieval._build_context_hint_cache_key("supervised")
+    monkeypatch.setattr(hint_builder, "TEMPLATE_FINGERPRINT", "changed-template")
+    assert engine._retrieval._build_context_hint_cache_key("supervised") != before
