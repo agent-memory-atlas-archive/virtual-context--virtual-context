@@ -11480,7 +11480,7 @@ CREATE TABLE IF NOT EXISTS request_captures (
         if not rows:
             return 0
 
-        assignments: list[tuple[int, str]] = []
+        assignments: list[tuple[int, str, int]] = []
         current_group = -1
         pending_user_group = -1
         for row in rows:
@@ -11489,35 +11489,44 @@ CREATE TABLE IF NOT EXISTS request_captures (
             if has_user and has_assistant:
                 current_group += 1
                 pending_user_group = -1
-                assignments.append((current_group, row.canonical_turn_id))
+                assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             if has_user:
                 current_group += 1
                 pending_user_group = current_group
-                assignments.append((current_group, row.canonical_turn_id))
+                assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             if has_assistant:
                 if pending_user_group >= 0:
-                    assignments.append((pending_user_group, row.canonical_turn_id))
+                    assignments.append((pending_user_group, row.canonical_turn_id, row.turn_group_number))
                     pending_user_group = -1
                 else:
                     current_group += 1
-                    assignments.append((current_group, row.canonical_turn_id))
+                    assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             current_group += 1
             pending_user_group = -1
-            assignments.append((current_group, row.canonical_turn_id))
+            assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
 
+        # Appending a turn leaves every earlier group where it was; only rows
+        # whose group actually moved are written.
+        moved = [
+            (group, conversation_id, canonical_turn_id, group)
+            for group, canonical_turn_id, stored in assignments
+            if group != stored
+        ]
+        if not moved:
+            return 0
         conn = self._get_conn()
         changed = 0
-        for turn_group_number, canonical_turn_id in assignments:
+        for params in moved:
             cursor = conn.execute(
                 """UPDATE canonical_turns
                    SET turn_group_number = ?
                    WHERE conversation_id = ?
                      AND canonical_turn_id = ?
                      AND turn_group_number <> ?""",
-                (turn_group_number, conversation_id, canonical_turn_id, turn_group_number),
+                params,
             )
             changed += int(cursor.rowcount or 0)
         self._commit_if_unlocked(conn)

@@ -12345,7 +12345,7 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         if not rows:
             return 0
 
-        assignments: list[tuple[int, str]] = []
+        assignments: list[tuple[int, str, int]] = []
         current_group = -1
         pending_user_group = -1
         for row in rows:
@@ -12354,38 +12354,45 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
             if has_user and has_assistant:
                 current_group += 1
                 pending_user_group = -1
-                assignments.append((current_group, row.canonical_turn_id))
+                assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             if has_user:
                 current_group += 1
                 pending_user_group = current_group
-                assignments.append((current_group, row.canonical_turn_id))
+                assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             if has_assistant:
                 if pending_user_group >= 0:
-                    assignments.append((pending_user_group, row.canonical_turn_id))
+                    assignments.append((pending_user_group, row.canonical_turn_id, row.turn_group_number))
                     pending_user_group = -1
                 else:
                     current_group += 1
-                    assignments.append((current_group, row.canonical_turn_id))
+                    assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
                 continue
             current_group += 1
             pending_user_group = -1
-            assignments.append((current_group, row.canonical_turn_id))
+            assignments.append((current_group, row.canonical_turn_id, row.turn_group_number))
 
+        # Appending a turn leaves every earlier group where it was; only rows
+        # whose group actually moved are written.
+        moved = [
+            (group, conversation_id, canonical_turn_id, group)
+            for group, canonical_turn_id, stored in assignments
+            if group != stored
+        ]
+        if not moved:
+            return 0
         with self.pool.connection() as conn:
-            changed = 0
-            for turn_group_number, canonical_turn_id in assignments:
-                cursor = conn.execute(
+            with conn.cursor() as cur:
+                cur.executemany(
                     """UPDATE canonical_turns
                        SET turn_group_number = %s
                        WHERE conversation_id = %s
                          AND canonical_turn_id = %s
                          AND turn_group_number <> %s""",
-                    (turn_group_number, conversation_id, canonical_turn_id, turn_group_number),
+                    moved,
                 )
-                changed += int(cursor.rowcount or 0)
-            return changed
+            return len(moved)
 
     def get_canonical_turn_rows(
         self,
