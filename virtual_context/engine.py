@@ -182,7 +182,9 @@ class VirtualContextEngine:
             self.config.conversation_id[:8], self.judgment_runtime.mode.value,
             ",".join(f"{k}:{v.value}" for k, v in sorted(self.judgment_runtime.seam_modes.items())) or "-",
         )
+        _init_marks.append(("judgment", _init_time.monotonic()))
         self._token_counter = create_token_counter(self.config.token_counter)
+        _init_marks.append(("token_counter", _init_time.monotonic()))
         self._session_cache = session_cache
         self._session_state_provider = session_state_provider
 
@@ -195,7 +197,7 @@ class VirtualContextEngine:
                 model_name=self.config.retriever.embedding_model,
             )
 
-        _init_marks.append(("judgment+tokens+embeddings", _init_time.monotonic()))
+        _init_marks.append(("embeddings", _init_time.monotonic()))
         self._conversation_generation = 0
         # One bus per Engine instance. Downstream tasks (A31-A33) publish
         # IngestionProgressEvent / CompactionProgressEvent onto this bus;
