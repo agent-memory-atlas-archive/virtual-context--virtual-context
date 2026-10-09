@@ -102,3 +102,13 @@ def test_redis_latest_slot_round_trip_and_generation_guard():
     assert p.load_latest_context_hint("conv", 1, "autonomous") == "<context-topics>a</context-topics>"
     assert p.load_latest_context_hint("conv", 2, "autonomous") is None
     assert p.load_latest_context_hint("conv", 1, "supervised") is None
+
+
+@pytest.mark.regression("BUG-121")
+def test_redis_latest_slot_ignores_hints_rendered_by_another_hint_builder(monkeypatch):
+    from virtual_context.core import hint_builder
+
+    p = SessionStateProvider(fakeredis.FakeRedis(decode_responses=False))
+    p.save_latest_context_hint("conv", 1, "supervised", "<context-topics>old</context-topics>")
+    monkeypatch.setattr(hint_builder, "TEMPLATE_FINGERPRINT", "changed-template")
+    assert p.load_latest_context_hint("conv", 1, "supervised") is None
