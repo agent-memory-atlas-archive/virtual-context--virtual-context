@@ -31,6 +31,13 @@ def _describe(response, size, head):
 _SSE_FIELD_PREFIXES = (b"event:", b"data:", b"id:", b"retry:", b":")
 
 
+def _log_provider_failure(kind, event):
+    """Log what the provider said when it ended a stream without an answer."""
+    nested = event.get("response") if isinstance(event.get("response"), dict) else {}
+    detail = event.get("error") or nested.get("error") or nested.get("incomplete_details") or event
+    logger.warning("PROVIDER_STREAM_ERROR type=%s detail=%s", kind or "?", json.dumps(detail, ensure_ascii=False)[:500])
+
+
 async def _peek(chunks, minimum=8, limit=65536):
     """Return the first bytes of an async byte stream and a stream that replays them.
 
@@ -121,6 +128,7 @@ async def collect_response(response, api_format):
                 raise ContinuationError("The provider returned malformed SSE data.", 422) from exc
             kind = event.get("type", "")
             if kind == "error" or event.get("error"):
+                _log_provider_failure(kind, event)
                 raise ContinuationError("The provider interrupted the response with an error.", 422)
             if api_format == "anthropic":
                 if kind == "message_start":
@@ -167,6 +175,7 @@ async def collect_response(response, api_format):
                         result["output"] = [blocks[index] for index in sorted(blocks)]
                     terminal = True
                 elif kind in ("response.failed", "response.incomplete"):
+                    _log_provider_failure(kind, event)
                     raise ContinuationError("The provider did not complete the response.", 422)
             elif api_format == "openai":
                 result.update({key: value for key, value in event.items() if key != "choices"})

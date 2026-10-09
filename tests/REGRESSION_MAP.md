@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### PROXY-041 — Provider stream failures were logged without the provider's reason
+
+- **Symptom**: a request whose upstream stream ended in an error event returned `422 "The provider interrupted the response with an error."` and the logs carried no trace of what the provider reported.
+- **Root cause**: `collect_response` raised on `error`, `response.failed` and `response.incomplete` events without recording the event.
+- **Fix**: those events are logged as `PROVIDER_STREAM_ERROR` with the provider's error or incomplete details before the request fails.
+- **Tests**:
+  - `test_stream_error_logged.py`
+
 ### PROXY-040 — Provider cache reset whenever a client started a new thread
 
 - **Symptom**: Responses requests for a long conversation reported zero cached input tokens on every turn, although the instructions, tool catalog and system items at the head of the payload were unchanged.
@@ -1245,6 +1253,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_component_models.py` | BUG-113 |
 | `test_paging_model_resolution.py` | BUG-114 |
 | `proxy/test_dashboard_token_reads.py` | BUG-115 |
+| `test_stream_error_logged.py` | PROXY-041 |
 | `test_prompt_cache_key.py` | PROXY-040 |
 | `test_request_log_no_session_dump.py` | PROXY-039 |
 | `test_model_limits.py` | BUG-117 |
