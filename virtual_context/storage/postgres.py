@@ -1271,6 +1271,13 @@ def _merge_canonical_turn_rows(rows: list[CanonicalTurnRow]) -> dict[int, Canoni
     return merged
 
 
+# Databases whose schema this process has already prepared. Schema
+# preparation runs every bootstrap and migration statement, so it runs once per
+# database per process rather than once per store.
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_LOCK = threading.Lock()
+
+
 class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStore):
     """PostgreSQL storage backend with tsvector FTS and full protocol support."""
 
@@ -1340,7 +1347,11 @@ class PostgresStore(PostgresVectorSearchMixin, RelationalStoreMixin, ContextStor
         self.search_config = None  # set by engine after construction
         if initialize_schema:
             try:
-                self._ensure_schema()
+                if self.dsn not in _SCHEMA_READY:
+                    with _SCHEMA_LOCK:
+                        if self.dsn not in _SCHEMA_READY:
+                            self._ensure_schema()
+                            _SCHEMA_READY.add(self.dsn)
             except BaseException:
                 # An orphaned pool keeps reconnecting in the background and
                 # holds server slots no store will ever use.

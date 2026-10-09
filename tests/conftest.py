@@ -193,3 +193,17 @@ def _fresh_process_tag_vector_cache():
     if cache is not None:
         cache.clear()
 
+
+
+@pytest.fixture(autouse=True)
+def _fresh_postgres_schema_guard():
+    """Postgres tests recreate schemas between tests in one process, so each
+    test prepares its schema again instead of trusting an earlier test's."""
+    try:
+        from virtual_context.storage import postgres as _pg
+    except Exception:
+        yield
+        return
+    _pg._SCHEMA_READY.clear()
+    yield
+    _pg._SCHEMA_READY.clear()

@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-122 — Every Postgres store re-ran schema preparation
+
+- **Symptom**: building an engine for a conversation spent about 450 ms constructing its Postgres store, on every request that landed on a worker without the conversation loaded.
+- **Root cause**: `PostgresStore.__init__` called `_ensure_schema()`, which runs every bootstrap and migration statement, for each new store.
+- **Fix**: schema preparation runs once per database per process; a failed preparation is retried by the next store.
+- **Tests**:
+  - `test_postgres_schema_once.py`
+
 ### BUG-121 — The context hint required a search before every answer
 
 - **Symptom**: a greeting such as "can you hear me" made the model call `vc_find_quote` or `vc_query_facts` before replying, adding a second provider round to the turn.
@@ -1272,6 +1280,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_curation_memo.py` | BUG-096 |
 | `test_vc_tools_fixed_catalogue.py` | PROXY-042 |
 | `test_hint_search_rule.py` | BUG-121 |
+| `test_postgres_schema_once.py` | BUG-122 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |
