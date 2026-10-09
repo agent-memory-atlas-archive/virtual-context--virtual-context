@@ -58,13 +58,6 @@ def test_intent_jev_mode_low_confidence_falls_back_to_regex():
         assert _detect_query_intent("find quote about magnesium") == "default"
 
 
-def test_intent_shadow_mode_returns_regex_answer_and_calls_jev():
-    rt, seen = _runtime("shadow", lambda b: _choice("intent", "current_state", 0.9, ["current_state", "default"]))
-    with judgment.override(rt):
-        assert _detect_query_intent("find quote about magnesium") == "default"
-    assert len(seen) == 1
-
-
 def _noul(key, p):
     return {key: {"type": "noul", "noul": p}}
 
@@ -87,13 +80,6 @@ def test_temporal_jev_mode_uses_noul_threshold():
     rt2, _ = _runtime("jev", lambda b: _noul("temporal", 0.2))
     with judgment.override(rt2):
         assert _retriever()._detect_temporal("what was the very first thing we discussed") is False
-
-
-def test_temporal_shadow_mode_keeps_legacy():
-    rt, seen = _runtime("shadow", lambda b: _noul("temporal", 0.8))
-    with judgment.override(rt):
-        assert _retriever()._detect_temporal("how much protein should I eat") is False
-    assert len(seen) == 1
 
 
 def test_safety_legacy_wrapper_matches_original():

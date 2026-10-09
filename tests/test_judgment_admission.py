@@ -104,14 +104,6 @@ def test_judge_admission_jev_mode_produces_validator_compatible_text():
     assert "candidate_id 'e1'" in body["questions"]["reason__e1"]["instructions"]
 
 
-def test_judge_admission_shadow_mode_also_returns_judgment_for_comparison():
-    rt, _ = _runtime("shadow", "greeting_only", {"e1": "not_durable", "e2": "durable"})
-    req = build_admission_request(candidates=CANDS, compact_facts=[], actor_turns=[], evidence_segments=[], curator_substantive=False)
-    with judgment.override(rt):
-        out = judge_admission(req["payload"], ["e1", "e2"])
-    assert out is not None and out.substantive is False and out.decisions["e1"]["reason"] == "not_durable"
-
-
 def test_judge_admission_failure_returns_none():
     http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
     rt = build_runtime(JudgmentConfig(mode="jev"), environ={"TYPESAFE_API_KEY": "k"}, http_client=http)

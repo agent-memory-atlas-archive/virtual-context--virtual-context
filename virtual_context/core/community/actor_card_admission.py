@@ -173,7 +173,7 @@ class ActorCardAdmissionService:
             evidence_segments=evidence_segments, curator_substantive=curator_substantive,
         )
         request_kwargs = {k: request[k] for k in ("system", "user", "max_tokens")}
-        from ..judgment import JudgmentMode, current as _judgment_current, judge_admission, log_admission_shadow
+        from ..judgment import JudgmentMode, current as _judgment_current, judge_admission
         _judgment_rt = self._judgment_runtime if self._judgment_runtime is not None else _judgment_current()
         jev_judgment = judge_admission(request["payload"], list(eligible), runtime=_judgment_rt)
         if jev_judgment is not None and _judgment_rt.mode_for("admission") is JudgmentMode.JEV:
@@ -197,8 +197,6 @@ class ActorCardAdmissionService:
             independently_substantive, decisions = _parse_admission(
                 response_text,
             )
-            if jev_judgment is not None and _judgment_rt.mode_for("admission") is JudgmentMode.SHADOW:
-                log_admission_shadow(jev_judgment, independently_substantive, decisions)
         except _ActorCardAdmissionError as primary_exc:
             complete_fallback = getattr(provider, "complete_fallback", None)
             if admission_source == "fallback" or not callable(complete_fallback):

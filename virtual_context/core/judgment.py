@@ -1,10 +1,8 @@
 """Typed-judgment layer: route selected engine decisions through TypeSafe Jev.
 
-Three modes (``JudgmentConfig.mode`` / ``VC_JUDGMENT_MODE``):
+Two modes (``JudgmentConfig.mode`` / ``VC_JUDGMENT_MODE``), set per seam:
 
-* ``legacy`` - Jev is never called; every seam behaves exactly as before.
-* ``shadow`` - the legacy answer is used; the Jev answer is logged as
-  ``JUDGMENT_SHADOW`` for comparison.
+* ``legacy`` - Jev is never called; the seam behaves exactly as before.
 * ``jev`` - the Jev answer is used; any failure falls back to legacy and logs
   ``JUDGMENT_FALLBACK``.
 
@@ -18,7 +16,6 @@ engine.
 from __future__ import annotations
 
 import contextlib
-import copy
 import difflib
 import json
 import logging
@@ -47,7 +44,6 @@ class JudgmentUnavailable(RuntimeError):
 
 class JudgmentMode(str, Enum):
     LEGACY = "legacy"
-    SHADOW = "shadow"
     JEV = "jev"
 
     @classmethod
@@ -280,7 +276,7 @@ def override(runtime: JudgmentRuntime) -> Iterator[JudgmentRuntime]:
         install(previous)
 
 
-# --- three-mode decision -----------------------------------------------------
+# --- decision ----------------------------------------------------------------
 
 def _format_detail(detail: Mapping[str, Any]) -> str:
     return " ".join(f"{k}={v}" for k, v in detail.items())
@@ -295,65 +291,17 @@ def _run_jev(seam: str, jev: Callable[[JevClient], JevOutcome | None], client: J
         return None
 
 
-_shadow_pool = None
-_shadow_pool_lock = threading.Lock()
-
-
-def _submit_shadow_background(task: Callable[[], None]) -> None:
-    """Run a shadow comparison off the caller's thread.
-
-    A shadow seam's Jev answer is only logged, so the caller never waits for it.
-    """
-    global _shadow_pool
-    with _shadow_pool_lock:
-        if _shadow_pool is None:
-            from concurrent.futures import ThreadPoolExecutor
-            _shadow_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="jev-shadow")
-    _shadow_pool.submit(task)
-
-
-_submit_shadow = _submit_shadow_background
-
-
 def decide(
     seam: str,
     legacy: Callable[[], T],
     jev: Callable[[JevClient], JevOutcome | None],
     *,
     runtime: JudgmentRuntime | None = None,
-    agree: Callable[[T, T], bool] | None = None,
-    describe: Callable[[T], str] = repr,
 ) -> T:
     rt = runtime if runtime is not None else current()
     if not rt.enabled_for(seam):
         return legacy()
     assert rt.client is not None
-    if rt.mode_for(seam) is JudgmentMode.SHADOW:
-        legacy_value = legacy()
-        try:
-            compared = copy.deepcopy(legacy_value)
-        except Exception:
-            compared = legacy_value
-        client = rt.client
-
-        def compare() -> None:
-            outcome = _run_jev(seam, jev, client)
-            if outcome is None or outcome.fallback_reason:
-                reason = outcome.fallback_reason if outcome else "jev_unavailable"
-                logger.info("JUDGMENT_SHADOW seam=%s agree=None legacy=%s jev=None reason=%s",
-                            seam, describe(compared), reason)
-                return
-            same = agree(compared, outcome.value) if agree else (describe(compared) == describe(outcome.value))
-            resp = outcome.response
-            logger.info(
-                "JUDGMENT_SHADOW seam=%s agree=%s legacy=%s jev=%s %s ms=%.0f tokens=%d/%d",
-                seam, same, describe(compared), describe(outcome.value), _format_detail(outcome.detail),
-                resp.latency_ms if resp else 0.0,
-                resp.input_tokens if resp else 0, resp.output_tokens if resp else 0,
-            )
-
-        _submit_shadow(compare)
-        return legacy_value
     outcome = _run_jev(seam, jev, rt.client)
     if outcome is None or outcome.fallback_reason:
         reason = outcome.fallback_reason if outcome else "jev_unavailable"
@@ -397,7 +345,7 @@ def jev_query_intent(client: JevClient, query: str, *, min_confidence: float = 0
 
 
 def judge_query_intent(query: str, legacy: Callable[[], str], *, runtime: JudgmentRuntime | None = None) -> str:
-    return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), runtime=runtime, describe=str)
+    return decide("query_intent", legacy, lambda c: jev_query_intent(c, query), runtime=runtime)
 
 
 # --- seam S3: inbound temporal intent ----------------------------------------
@@ -425,7 +373,7 @@ def judge_temporal_intent(message: str, legacy: Callable[[], bool], *, runtime: 
     rt = runtime if runtime is not None else current()
     return decide("temporal_intent", legacy,
                   lambda c: jev_temporal_intent(c, message, threshold=rt.config.noul_threshold),
-                  runtime=rt, describe=str)
+                  runtime=rt)
 
 
 # --- seam S4: safety-critical personal evidence ------------------------------
@@ -456,7 +404,7 @@ def judge_safety_critical(text: str, legacy: Callable[[], bool], *, runtime: Jud
     rt = runtime if runtime is not None else current()
     return decide("safety_critical", legacy,
                   lambda c: jev_safety_critical(c, text, threshold=rt.config.noul_threshold),
-                  runtime=rt, describe=str)
+                  runtime=rt)
 
 
 # --- seam S1: retrieval shortlist rerank -------------------------------------
@@ -499,7 +447,7 @@ def jev_rerank(
 
 
 def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | None = None) -> list:
-    """Reorder the retriever's candidate summaries in shadow/jev mode.
+    """Reorder the retriever's candidate summaries in jev mode.
 
     Stable sort by descending relevance probability; candidates below
     ``rerank_min_probability`` move to the end. Nothing is dropped. Returns
@@ -538,8 +486,6 @@ def rerank_summaries(query: str, summaries: list, *, runtime: JudgmentRuntime | 
 
     return decide(
         "rerank", legacy, jev, runtime=rt,
-        agree=lambda a, b: a[0].ref == b[0].ref,
-        describe=lambda items: ",".join(s.ref for s in items[:5]),
     )
 
 
@@ -608,8 +554,6 @@ def select_topics(
 
     return decide(
         "topic_select", legacy, jev, runtime=rt,
-        agree=lambda a, b: a[0][:3] == b[0][:3],
-        describe=lambda value: ",".join(value[2][:5] or value[0][:5]),
     )
 
 
@@ -699,7 +643,7 @@ def jev_admission(client: JevClient, payload: dict, eligible: list[str], *, subj
 
 
 def judge_admission(payload: dict, eligible: list[str], *, runtime: JudgmentRuntime | None = None) -> AdmissionJudgment | None:
-    """Return the Jev admission judgment in shadow or jev mode; None in legacy or on failure."""
+    """Return the Jev admission judgment in jev mode; None in legacy or on failure."""
     rt = runtime if runtime is not None else current()
     if not rt.enabled_for("admission"):
         return None
@@ -729,23 +673,6 @@ def judge_admission(payload: dict, eligible: list[str], *, runtime: JudgmentRunt
         coverage_reason=value["coverage_reason"],
         decisions={d["candidate_id"]: d for d in value["decisions"]},
         response=outcome.response,
-    )
-
-
-def log_admission_shadow(judgment: AdmissionJudgment, legacy_substantive: bool, legacy_decisions: dict[str, dict]) -> None:
-    ids = sorted(set(legacy_decisions) | set(judgment.decisions))
-    agree = sum(
-        1 for cid in ids
-        if legacy_decisions.get(cid, {}).get("reason") == judgment.decisions.get(cid, {}).get("reason")
-    )
-    resp = judgment.response
-    logger.info(
-        "JUDGMENT_SHADOW seam=admission agree=%s coverage_agree=%s candidates=%d reason_agree=%d legacy=%s jev=%s ms=%.0f tokens=%d/%d",
-        agree == len(ids) and legacy_substantive == judgment.substantive,
-        legacy_substantive == judgment.substantive, len(ids), agree,
-        ",".join(f"{cid}:{legacy_decisions.get(cid, {}).get('reason', '-')}" for cid in ids),
-        ",".join(f"{cid}:{judgment.decisions.get(cid, {}).get('reason', '-')}" for cid in ids),
-        resp.latency_ms if resp else 0.0, resp.input_tokens if resp else 0, resp.output_tokens if resp else 0,
     )
 
 
@@ -899,8 +826,7 @@ def judge_tag_reuse(
     return decide(
         "tag_reuse", lambda: dict(legacy_value),
         lambda c: jev_tag_reuse(c, text, proposed, candidates_by_tag),
-        runtime=runtime, agree=lambda a, b: a == b,
-        describe=lambda m: ",".join(f"{k}->{v or 'new'}" for k, v in m.items()),
+        runtime=runtime,
     )
 
 
@@ -981,8 +907,7 @@ def judge_supersession(
             return out
         return JevOutcome(value=_superseded_ids(candidates, out.value), detail=out.detail, response=out.response)
 
-    return decide("supersession", legacy, jev, runtime=runtime,
-                  agree=lambda a, b: set(a) == set(b), describe=lambda ids: ",".join(ids) or "-")
+    return decide("supersession", legacy, jev, runtime=runtime)
 
 
 def judge_fact_links(
@@ -1010,13 +935,7 @@ def judge_fact_links(
         return JevOutcome(value=(links, _superseded_ids(candidates, out.value)), detail=out.detail,
                           response=out.response)
 
-    def describe(value: tuple[list[FactLink], list[str]]) -> str:
-        links, superseded = value
-        return (f"sup={','.join(superseded) or '-'}|links="
-                f"{';'.join(f'{link.target_fact_id}:{link.relation_type}' for link in links) or '-'}")
-
-    return decide("supersession", legacy, jev, runtime=runtime,
-                  agree=lambda a, b: set(a[1]) == set(b[1]), describe=describe)
+    return decide("supersession", legacy, jev, runtime=runtime)
 
 
 # --- seam S8: tag consolidation ----------------------------------------------
@@ -1243,8 +1162,6 @@ def judge_tag_consolidation(
 
     return decide(
         "tag_consolidation", legacy, jev, runtime=rt,
-        agree=lambda a, b: _group_pairs(a) == _group_pairs(b),
-        describe=lambda gs: ";".join(f"{g['canonical']}<-{'+'.join(g['aliases'])}" for g in gs) or "-",
     )
 
 
@@ -1344,9 +1261,7 @@ def judge_fact_curation(
         keep = [i for i in range(len(facts)) if out.value[i] >= floor]
         return JevOutcome(value=keep, detail={"n": len(facts), "kept": len(keep)}, response=out.response)
 
-    return decide("fact_curation", legacy, jev, runtime=rt,
-                  agree=lambda a, b: set(a or []) == set(b or []),
-                  describe=lambda idx: ",".join(map(str, idx or [])) or "-")
+    return decide("fact_curation", legacy, jev, runtime=rt)
 
 
 # --- seam S10: tag split -----------------------------------------------------
@@ -1390,7 +1305,7 @@ def judge_tag_split(
     rt = runtime if runtime is not None else current()
     return decide("tag_split", legacy,
                   lambda c: jev_tag_split(c, tag, turns, threshold=rt.config.noul_threshold),
-                  runtime=rt, describe=str)
+                  runtime=rt)
 
 
 # --- seam S13: tag select ---------------------------------------------------
@@ -1474,5 +1389,5 @@ def judge_summary_grounding(
         "summary_grounding", legacy,
         lambda c: jev_summary_grounding(c, summary, source, threshold=rt.config.noul_threshold,
                                         max_state_bytes=rt.config.grounding_max_state_bytes),
-        runtime=rt, describe=str,
+        runtime=rt,
     )

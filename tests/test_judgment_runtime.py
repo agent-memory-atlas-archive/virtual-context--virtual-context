@@ -35,7 +35,9 @@ def _ok_handler(request):
 
 def test_mode_parse_and_env_resolution():
     assert JudgmentMode.parse("jev") is JudgmentMode.JEV
-    assert JudgmentMode.resolve("shadow", environ={}) is JudgmentMode.SHADOW
+    assert JudgmentMode.resolve("jev", environ={}) is JudgmentMode.JEV
+    with pytest.raises(ValueError):
+        JudgmentMode.parse("shadow")
     assert JudgmentMode.resolve("legacy", environ={"VC_JUDGMENT_MODE": "jev"}) is JudgmentMode.JEV
     with pytest.raises(ValueError):
         JudgmentMode.resolve("legacy", environ={"VC_JUDGMENT_MODE": "sometimes"})
@@ -92,7 +94,7 @@ def test_build_runtime_env_pin_wins_over_yaml():
 def test_install_current_override_reset():
     judgment.reset()
     assert judgment.current().mode is JudgmentMode.LEGACY
-    rt = build_runtime(JudgmentConfig(mode="shadow"), environ={"TYPESAFE_API_KEY": "k"})
+    rt = build_runtime(JudgmentConfig(mode="jev"), environ={"TYPESAFE_API_KEY": "k"})
     judgment.install(rt)
     assert judgment.current() is rt
     legacy = build_runtime(JudgmentConfig(), environ={})
@@ -118,21 +120,6 @@ def test_decide_legacy_never_calls_jev():
     assert calls == []
 
 
-def test_decide_shadow_returns_legacy_and_logs_agreement(caplog):
-    with caplog.at_level(logging.INFO):
-        out = decide("s", lambda: "L", lambda c: JevOutcome(value="J", detail={"p": 0.9}), runtime=_rt("shadow"))
-    assert out == "L"
-    line = next(r.message for r in caplog.records if "JUDGMENT_SHADOW" in r.message)
-    assert "seam=s" in line and "agree=False" in line and "legacy='L'" in line and "jev='J'" in line and "p=0.9" in line
-
-
-def test_decide_shadow_uses_custom_agree(caplog):
-    with caplog.at_level(logging.INFO):
-        decide("s", lambda: [1, 2], lambda c: JevOutcome(value=[1, 3], detail={}),
-               runtime=_rt("shadow"), agree=lambda a, b: a[0] == b[0])
-    assert any("agree=True" in r.message for r in caplog.records)
-
-
 def test_decide_jev_uses_jev_value():
     assert decide("s", lambda: "L", lambda c: JevOutcome(value="J", detail={}), runtime=_rt("jev")) == "J"
 
@@ -155,11 +142,11 @@ def test_decide_jev_swallows_exceptions_from_jev_fn(caplog):
 
 def test_per_seam_modes_override_the_global_mode():
     http = httpx.Client(transport=httpx.MockTransport(_ok_handler))
-    rt = build_runtime(JudgmentConfig(mode="legacy", seams={"admission": "shadow", "rerank": "jev"}),
+    rt = build_runtime(JudgmentConfig(mode="legacy", seams={"admission": "jev", "rerank": "jev"}),
                        environ={"TYPESAFE_API_KEY": "k"}, http_client=http)
     assert rt.client is not None and rt.enabled
     assert rt.mode is JudgmentMode.LEGACY
-    assert rt.mode_for("admission") is JudgmentMode.SHADOW
+    assert rt.mode_for("admission") is JudgmentMode.JEV
     assert rt.mode_for("rerank") is JudgmentMode.JEV
     assert rt.mode_for("query_intent") is JudgmentMode.LEGACY
     assert rt.enabled_for("query_intent") is False and rt.enabled_for("rerank") is True
@@ -169,11 +156,11 @@ def test_per_seam_modes_override_the_global_mode():
         return JevOutcome(value="J", detail={})
     assert decide("query_intent", lambda: "L", jev, runtime=rt) == "L" and calls == []
     assert decide("rerank", lambda: "L", jev, runtime=rt) == "J"
-    assert decide("admission", lambda: "L", jev, runtime=rt) == "L" and len(calls) == 2
+    assert decide("admission", lambda: "L", jev, runtime=rt) == "J" and len(calls) == 2
 
 
 def test_env_override_changes_global_mode_only():
     http = httpx.Client(transport=httpx.MockTransport(_ok_handler))
-    rt = build_runtime(JudgmentConfig(mode="jev", seams={"admission": "legacy"}),
-                       environ={"TYPESAFE_API_KEY": "k", "VC_JUDGMENT_MODE": "shadow"}, http_client=http)
-    assert rt.mode is JudgmentMode.SHADOW and rt.mode_for("admission") is JudgmentMode.LEGACY
+    rt = build_runtime(JudgmentConfig(mode="jev", seams={"admission": "jev"}),
+                       environ={"TYPESAFE_API_KEY": "k", "VC_JUDGMENT_MODE": "legacy"}, http_client=http)
+    assert rt.mode is JudgmentMode.LEGACY and rt.mode_for("admission") is JudgmentMode.JEV

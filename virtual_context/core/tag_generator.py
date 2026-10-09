@@ -534,8 +534,6 @@ class LLMTagGenerator:
         try:
             tags = decide(
                 "tag_select", lambda: list(result.tags), jev, runtime=rt,
-                agree=lambda a, b: set(a) == set(b),
-                describe=lambda t: ",".join(t) or "-",
             )
         except Exception:
             logger.debug("tag select judgment failed", exc_info=True)

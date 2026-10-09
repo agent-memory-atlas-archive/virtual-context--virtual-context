@@ -77,16 +77,6 @@ def test_state_size_guard_skips_jev(caplog):
     assert any("JUDGMENT_SKIP seam=rerank reason=state_size" in r.message for r in caplog.records)
 
 
-def test_shadow_keeps_legacy_order_and_logs_rank_metrics(caplog):
-    rt, seen = _runtime("shadow", {"c0": 0.1, "c1": 0.9})
-    items = [_s("a", "A"), _s("b", "B")]
-    with caplog.at_level(logging.INFO):
-        out = rerank_summaries("q", items, runtime=rt)
-    assert [s.ref for s in out] == ["a", "b"] and len(seen) == 1
-    line = next(r.message for r in caplog.records if "JUDGMENT_SHADOW seam=rerank" in r.message)
-    assert "agree=False" in line and "spearman=-1.0" in line and "top1_legacy=a" in line and "top1_jev=b" in line
-
-
 def test_jev_failure_keeps_legacy_order():
     def boom(request):
         return httpx.Response(500)

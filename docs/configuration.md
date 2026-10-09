@@ -393,7 +393,7 @@ tag_rules:
 ### judgment
 
 Routes thirteen internal decisions through a typed-judgment model when mode is
-`shadow` or `jev`: retrieval shortlist order (`rerank`), query intent
+`jev`: retrieval shortlist order (`rerank`), query intent
 (`query_intent`), inbound temporal intent (`temporal_intent`), safety-critical
 evidence (`safety_critical`), actor-card admission (`admission`), whether a freshly
 minted tag duplicates an existing one (`tag_reuse`), which stored facts a new fact
@@ -402,14 +402,13 @@ same topic (`tag_consolidation`), which facts stay in the curated facts block
 (`fact_curation`), whether a broad tag spans several topics (`tag_split`), and
 whether a segment summary is grounded in its source (`summary_grounding`), which topics and
 segments a request retrieves (`topic_select`), and which existing topics a stored turn is
-tagged with (`tag_select`). `shadow` keeps legacy
-behavior and logs `JUDGMENT_SHADOW` lines for comparison. `jev` uses the model's
+tagged with (`tag_select`). `jev` uses the model's
 answer and falls back to legacy on any failure (`JUDGMENT_FALLBACK`). The
 default `legacy` never calls the model.
 
 ```yaml
 judgment:
-  mode: legacy                    # legacy | shadow | jev (VC_JUDGMENT_MODE env overrides)
+  mode: legacy                    # legacy | jev (VC_JUDGMENT_MODE env overrides)
   model: jev-latest               # TypeSafe System One model
   api_key_env: TYPESAFE_API_KEY   # env var holding the TypeSafe API key
   timeout_s: 3.0                  # per-call timeout; any failure falls back to legacy
@@ -429,8 +428,8 @@ judgment:
   tag_select_min_probability: 0.5 # a topic at or above this is kept for the turn
   tag_select_max_tags: 6          # most topics kept per turn, likeliest first
   seams:                          # optional per-seam override of mode
-    admission: shadow
-    tag_reuse: shadow
+    tag_reuse: jev
+    topic_select: jev
 ```
 
 `seams` lets each decision run in its own mode; a seam not listed follows `mode`. Seam
@@ -491,8 +490,8 @@ Reports missing required fields, invalid types, and cross-field constraint viola
 | `DATABASE_URL` | Postgres DSN fallback for the CLI. Storage precedence: explicit storage flag (`--postgres-dsn` / `--sqlite-path`) > `-c` config > `DATABASE_URL`, consulted only when neither flag nor config was given. Lets `admin` subcommands run bare inside a container that has the environment but no mounted config file |
 | `VC_DATA_DIR` | Data directory for deployments whose store has no local database path (default `/data/tenants`). Media originals saved by image compression land under `$VC_DATA_DIR/media/`, per conversation, and are cleaned up when a conversation is deleted |
 | `VIRTUAL_CONTEXT_CONFIG` | Config file path override, read by the MCP server only; the CLI uses `-c` and auto-discovery |
-| `VC_JUDGMENT_MODE` | Overrides `judgment.mode` (`legacy`, `shadow`, `jev`); read once at engine construction and pinned; an invalid value raises |
-| `TYPESAFE_API_KEY` | API key for the typed-judgment model when `judgment.mode` is `shadow` or `jev` (name configurable via `judgment.api_key_env`) |
+| `VC_JUDGMENT_MODE` | Overrides `judgment.mode` (`legacy`, `jev`); read once at engine construction and pinned; an invalid value raises |
+| `TYPESAFE_API_KEY` | API key for the typed-judgment model when `judgment.mode` is `jev` (name configurable via `judgment.api_key_env`) |
 
 ### Native semantic ranking
 

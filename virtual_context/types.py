@@ -3248,7 +3248,7 @@ class CurationConfig:
     max_response_tokens: int = 2048
 
 
-JUDGMENT_MODES: tuple[str, ...] = ("legacy", "shadow", "jev")
+JUDGMENT_MODES: tuple[str, ...] = ("legacy", "jev")
 JUDGMENT_SEAMS: tuple[str, ...] = (
     "rerank", "query_intent", "temporal_intent", "safety_critical", "admission",
     "tag_reuse", "supersession", "tag_consolidation", "fact_curation", "tag_split",
@@ -3260,9 +3260,8 @@ JUDGMENT_SEAMS: tuple[str, ...] = (
 class JudgmentConfig:
     """Typed-judgment layer (TypeSafe Jev) switch.
 
-    ``mode``: ``legacy`` (default, Jev never called), ``shadow`` (legacy answer
-    used, Jev answer logged for comparison), ``jev`` (Jev answer used, legacy
-    fallback on any failure). ``VC_JUDGMENT_MODE`` overrides ``mode`` at engine
+    ``mode``: ``legacy`` (default, Jev never called) or ``jev`` (Jev answer
+    used, legacy fallback on any failure). ``VC_JUDGMENT_MODE`` overrides ``mode`` at engine
     construction. ``seams`` overrides the mode per seam (keys from
     ``JUDGMENT_SEAMS``); the env override applies to the global mode only.
     Not tenant-settable in cloud.

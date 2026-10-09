@@ -74,11 +74,11 @@ def test_new_seams_are_registered_and_parsed():
     from virtual_context.config import _parse_judgment
     cfg = _parse_judgment({
         "mode": "legacy",
-        "seams": {"tag_reuse": "shadow", "supersession": "shadow", "summary_grounding": "jev"},
+        "seams": {"tag_reuse": "jev", "supersession": "legacy", "summary_grounding": "jev"},
         "admission_max_state_bytes": 5000, "tag_reuse_candidates": 5,
         "curation_min_probability": 0.25, "grounding_max_state_bytes": 7000,
     })
-    assert cfg.seams == {"tag_reuse": "shadow", "supersession": "shadow", "summary_grounding": "jev"}
+    assert cfg.seams == {"tag_reuse": "jev", "supersession": "legacy", "summary_grounding": "jev"}
     assert (cfg.admission_max_state_bytes, cfg.tag_reuse_candidates, cfg.curation_min_probability,
             cfg.grounding_max_state_bytes) == (5000, 5, 0.25, 7000)
     rt = build_runtime(cfg, environ={"TYPESAFE_API_KEY": "k"})
@@ -100,16 +100,14 @@ def test_tag_reuse_legacy_keeps_every_proposed_tag_new():
     assert judge_tag_reuse("text", ["new-tag"], {"new-tag": ["old-tag"]}, runtime=judgment.current()) == {"new-tag": None}
 
 
-def test_tag_reuse_shadow_logs_and_returns_all_new(caplog):
-    rt, seen = _runtime("shadow", lambda b: _choice("reuse__0", "data-visualization", 0.92, ["data-visualization", "none"]))
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        out = judge_tag_reuse("charts about sales", ["data-visualization-tools"],
-                              {"data-visualization-tools": ["data-visualization"]}, runtime=rt)
-    assert out == {"data-visualization-tools": None}
+def test_tag_reuse_jev_sends_proposed_and_existing_tags():
+    rt, seen = _runtime("jev", lambda b: _choice("reuse__0", "data-visualization", 0.92, ["data-visualization", "none"]))
+    out = judge_tag_reuse("charts about sales", ["data-visualization-tools"],
+                          {"data-visualization-tools": ["data-visualization"]}, runtime=rt)
+    assert out == {"data-visualization-tools": "data-visualization"}
     assert seen[0]["state"]["proposed_tags"] == {"0": "data-visualization-tools"}
     assert seen[0]["state"]["existing_tags"] == {"0": ["data-visualization"]}
     assert set(seen[0]["questions"]["reuse__0"]["criteria"]) == {"data-visualization", "none"}
-    assert any("JUDGMENT_SHADOW seam=tag_reuse agree=False" in r.getMessage() for r in caplog.records)
 
 
 def test_tag_reuse_jev_maps_to_existing_when_confident_else_new():
@@ -144,15 +142,6 @@ def test_supersession_jev_marks_supersedes_duplicates_and_contradicts():
     assert seen[0]["state"]["new_fact"] == "user | lives_in | Seattle"
     assert seen[0]["state"]["candidates"]["f1"]["session_date"] == "2024/01/01"
     assert set(seen[0]["questions"]["rel__f1"]["criteria"]) == set(opts)
-
-
-def test_supersession_shadow_returns_legacy_and_logs_set_agreement(caplog):
-    opts = list(SUPERSESSION_CRITERIA)
-    rt, _ = _runtime("shadow", lambda b: _choice("rel__f1", "supersedes", 0.9, opts))
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        got = judge_supersession("n", [("f1", "c", "")], legacy=lambda: ["f1"], runtime=rt)
-    assert got == ["f1"]
-    assert any("JUDGMENT_SHADOW seam=supersession agree=True" in r.getMessage() for r in caplog.records)
 
 
 def test_supersession_jev_low_confidence_relation_counts_as_independent():
@@ -204,16 +193,6 @@ def test_tag_consolidation_jev_groups_from_pairwise_nouls():
     assert all(k.startswith("same__") for k in seen[0]["questions"])
 
 
-def test_tag_consolidation_shadow_returns_legacy_groups(caplog):
-    rt, _ = _runtime("shadow", lambda b: {k: {"type": "noul", "noul": 0.2} for k in b["questions"]})
-    legacy_groups = [{"canonical": "model-kit", "aliases": ["model-tanks"], "reason": "llm"}]
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        got = judge_tag_consolidation(["model-kit", "model-tanks"], legacy=lambda: legacy_groups, runtime=rt,
-                                      canonical_rank={})
-    assert got == legacy_groups
-    assert any("JUDGMENT_SHADOW seam=tag_consolidation agree=False" in r.getMessage() for r in caplog.records)
-
-
 # --- S9 fact curation --------------------------------------------------------
 
 def test_fact_curation_jev_keeps_facts_above_inclusive_floor():
@@ -234,31 +213,20 @@ def test_fact_curation_judges_every_fact_in_one_call():
     assert len(seen[0]["questions"]) == 120
 
 
-def test_fact_curation_shadow_returns_legacy(caplog):
-    rt, _ = _runtime("shadow", lambda b: _answers(_noul("rel__0", 0.9)))
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        assert judge_fact_curation("q", ["f"], legacy=lambda: [], runtime=rt) == []
-    assert any("JUDGMENT_SHADOW seam=fact_curation agree=False" in r.getMessage() for r in caplog.records)
-
-
 # --- S10 tag split -----------------------------------------------------------
 
-def test_tag_split_jev_and_shadow():
+def test_tag_split_jev():
     rt, seen = _runtime("jev", lambda b: _noul("multi_topic", 0.8))
     assert judge_tag_split("cooking", ["[T1] pasta", "[T2] car repair"], legacy=lambda: False, runtime=rt) is True
     assert seen[0]["state"]["tag"] == "cooking"
-    rt2, _ = _runtime("shadow", lambda b: _noul("multi_topic", 0.8))
-    assert judge_tag_split("cooking", ["[T1] pasta"], legacy=lambda: False, runtime=rt2) is False
 
 
 # --- S11 summary grounding ---------------------------------------------------
 
-def test_summary_grounding_jev_uses_noul_and_shadow_returns_legacy():
+def test_summary_grounding_jev_uses_noul():
     rt, seen = _runtime("jev", lambda b: _noul("grounded", 0.2))
     assert judge_summary_grounding("Alice moved to Paris.", "Alice said she may visit Paris.", legacy=lambda: True, runtime=rt) is False
     assert seen[0]["state"] == {"summary": "Alice moved to Paris.", "source": "Alice said she may visit Paris."}
-    rt2, _ = _runtime("shadow", lambda b: _noul("grounded", 0.2))
-    assert judge_summary_grounding("s", "src", legacy=lambda: True, runtime=rt2) is True
 
 
 def test_summary_grounding_skips_oversized_state(caplog):

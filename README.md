@@ -149,7 +149,7 @@ report = engine.on_turn_complete(messages)                                      
 | Truncation recovery | When a client trims its own history, the missing turns are restored from storage. | [proxy](docs/proxy.md) |
 | History import | ChatGPT, Claude and Grok exports arrive tagged and searchable (`virtual-context import`). | [commands](docs/commands.md) |
 | Native vector search | On PostgreSQL with pgvector, quote search, segment candidates and fact search rank inside the database instead of in each worker. | [native vector search](docs/native-vector-search.md) |
-| Judgment layer (optional) | A typed judgment model can make individual decisions: which topics and segments to retrieve, which facts to keep, which existing tags a turn belongs to, and more. Each decision runs in `legacy`, `shadow` (logged side by side) or `jev` mode and falls back to the built-in behavior on any failure. Needs a TypeSafe API key. | [configuration](docs/configuration.md#judgment) |
+| Judgment layer (optional) | A typed judgment model can make individual decisions: which topics and segments to retrieve, which facts to keep, which existing tags a turn belongs to, and more. Each decision runs in `legacy` or `jev` mode; `jev` falls back to the built-in behavior on any failure. Needs a TypeSafe API key. | [configuration](docs/configuration.md#judgment) |
 
 ## Commands in any conversation
 

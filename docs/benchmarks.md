@@ -261,7 +261,7 @@ assembly, retrieval, curation and judgment seams. The run keeps its own
 per-question SQLite storage, session id and `--context-window`, drops
 deployment-only keys (telemetry pricing files, agent actor ids), and drops
 in-database vector ranking when the store is not PostgreSQL, ranking the same
-candidates in process. Judgment seams in `jev` or `shadow` mode need
+candidates in process. Judgment seams in `jev` mode need
 `TYPESAFE_API_KEY`.
 
 ## Interpreting Results

@@ -75,12 +75,6 @@ def test_a_failed_jev_call_keeps_the_legacy_choice():
     assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False, [])
 
 
-def test_shadow_uses_the_legacy_choice():
-    rt, seen = _runtime("shadow", {"T:hcg-dosing": 0.99})
-    assert select_topics("q", RANKED, _load, max_results=2, runtime=rt) == (RANKED[:2], False, [])
-    assert len(seen) == 1
-
-
 def test_chosen_topic_summaries_lead_the_retrieved_items():
     class _Store:
         def get_tag_summary(self, tag, conversation_id=""):
@@ -124,9 +118,9 @@ def test_embedding_pool_is_the_most_similar_topics():
     assert pool["near"] > pool["mid"]
 
 
-@pytest.mark.parametrize(("mode", "source"), [("legacy", "embedding"), ("jev", "fused"), ("shadow", "embedding")])
+@pytest.mark.parametrize(("mode", "source"), [("legacy", "embedding"), ("jev", "fused")])
 def test_embedding_pool_needs_live_topic_selection_from_embeddings(mode, source):
-    """Legacy and shadow keep the fused pool; so does a live choice from the fused source."""
+    """Legacy keeps the fused pool; so does a live choice from the fused source."""
     retriever = _pool_retriever(mode, source, {"a": [1.0, 0.0]})
     assert retriever._embedding_pool_enabled() is False
 

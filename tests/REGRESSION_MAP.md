@@ -5,14 +5,6 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
-### BUG-120 — Shadow judgments held the request for a discarded answer
-
-- **Symptom**: prepare spent several hundred milliseconds per request on TypeSafe calls for seams in shadow mode (`temporal_intent`, `rerank`), whose answers are only logged.
-- **Root cause**: `decide` called Jev synchronously in shadow mode before returning the legacy answer.
-- **Fix**: shadow mode returns the legacy answer at once and runs the Jev comparison and its `JUDGMENT_SHADOW` line on a small background pool.
-- **Tests**:
-  - `test_judgment_shadow_background.py`
-
 ### PROXY-042 — Offered VC tools changed with each turn's history
 
 - **Symptom**: the first model call of a turn rarely reused the provider's prompt cache from the previous turn; the top-level tool list differed between turns.
@@ -1270,7 +1262,6 @@ Use `pytest -m regression` to run all regression tests.
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
 | `test_vc_tools_fixed_catalogue.py` | PROXY-042 |
-| `test_judgment_shadow_background.py` | BUG-120 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 
 import httpx
 import numpy as np
@@ -128,17 +127,6 @@ def test_a_subject_with_no_tag_keeps_the_tagging_model_new_tag():
     result = tagger.generate_tags("how long does a kit last", existing_tags=EXISTING)
     assert llm.n == 1
     assert result.tags == ["hcg-dosing", "hcg-kit-duration"]
-
-
-def test_shadow_keeps_the_tagging_model_answer_and_logs_the_selection(caplog):
-    rt, seen = _runtime("shadow", {"hcg-dosing": 0.95})
-    tagger, llm = _tagger(rt)
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        result = tagger.generate_tags("how long does a kit last", existing_tags=EXISTING)
-    assert llm.n == 1 and seen
-    assert "hcg-kit-duration" in result.tags
-    assert any("JUDGMENT_SHADOW seam=tag_select" in r.getMessage() and "hcg-dosing" in r.getMessage()
-               for r in caplog.records)
 
 
 def test_a_failed_judgment_falls_back_to_the_tagging_model():

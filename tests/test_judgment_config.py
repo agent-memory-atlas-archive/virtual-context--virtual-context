@@ -15,13 +15,13 @@ def test_judgment_defaults_are_dormant():
     assert cfg.rerank_min_probability == 0.0
     assert cfg.rerank_max_state_bytes == 200_000
     assert VirtualContextConfig().judgment == JudgmentConfig()
-    assert JUDGMENT_MODES == ("legacy", "shadow", "jev")
+    assert JUDGMENT_MODES == ("legacy", "jev")
 
 
 def test_judgment_yaml_block_is_parsed():
     cfg = _build_config({
         "judgment": {
-            "mode": "shadow",
+            "mode": "jev",
             "model": "jev-2",
             "timeout_s": 1.5,
             "noul_threshold": 0.6,
@@ -29,7 +29,7 @@ def test_judgment_yaml_block_is_parsed():
             "rerank_max_state_bytes": 1000,
         }
     }, validate=False)
-    assert cfg.judgment.mode == "shadow"
+    assert cfg.judgment.mode == "jev"
     assert cfg.judgment.model == "jev-2"
     assert cfg.judgment.timeout_s == 1.5
     assert cfg.judgment.noul_threshold == 0.6
@@ -42,16 +42,16 @@ def test_judgment_missing_block_uses_defaults():
     assert cfg.judgment == JudgmentConfig()
 
 
-@pytest.mark.parametrize("bad", ["", "on", "JEV ", "hybrid"])
+@pytest.mark.parametrize("bad", ["", "on", "JEV ", "hybrid", "shadow"])
 def test_judgment_invalid_mode_raises(bad):
     with pytest.raises(ValueError, match="judgment.mode"):
         _build_config({"judgment": {"mode": bad}}, validate=False)
 
 
 def test_judgment_seams_parse_and_validate():
-    cfg = _build_config({"judgment": {"mode": "legacy", "seams": {"admission": "shadow", "rerank": "jev"}}}, validate=False)
-    assert cfg.judgment.seams == {"admission": "shadow", "rerank": "jev"}
+    cfg = _build_config({"judgment": {"mode": "legacy", "seams": {"admission": "jev", "rerank": "legacy"}}}, validate=False)
+    assert cfg.judgment.seams == {"admission": "jev", "rerank": "legacy"}
     with pytest.raises(ValueError, match="unknown seam"):
-        _build_config({"judgment": {"seams": {"nope": "shadow"}}}, validate=False)
+        _build_config({"judgment": {"seams": {"nope": "jev"}}}, validate=False)
     with pytest.raises(ValueError, match="judgment.seams.admission"):
         _build_config({"judgment": {"seams": {"admission": "always"}}}, validate=False)

@@ -361,7 +361,7 @@ class ContextRetriever:
         return current()
 
     def _embedding_pool_live(self) -> bool:
-        """Topic selection is live (not legacy or shadow)."""
+        """Topic selection runs through Jev."""
         from .judgment import JudgmentMode
 
         rt = self._judgment_runtime()
@@ -371,7 +371,6 @@ class ContextRetriever:
         from .judgment import JudgmentMode
 
         rt = self._judgment_runtime()
-        # Shadow keeps the fused ranking so its comparison stays meaningful.
         return (
             rt.enabled_for("topic_select")
             and rt.mode_for("topic_select") is JudgmentMode.JEV

@@ -29,10 +29,10 @@ def test_engine_default_runtime_is_legacy(tmp_path, monkeypatch):
 
 def test_engine_runtime_follows_its_config(tmp_path, monkeypatch):
     monkeypatch.delenv("VC_JUDGMENT_MODE", raising=False)
-    eng = _engine(tmp_path, monkeypatch, mode="shadow", seams={"admission": "legacy"})
-    assert eng.judgment_runtime.mode is JudgmentMode.SHADOW
+    eng = _engine(tmp_path, monkeypatch, mode="jev", seams={"admission": "legacy"})
+    assert eng.judgment_runtime.mode is JudgmentMode.JEV
     assert eng.judgment_runtime.mode_for("admission") is JudgmentMode.LEGACY
-    assert eng.judgment_runtime.mode_for("rerank") is JudgmentMode.SHADOW
+    assert eng.judgment_runtime.mode_for("rerank") is JudgmentMode.JEV
 
 
 def test_env_set_before_construction_wins_and_is_pinned(tmp_path, monkeypatch):
@@ -51,17 +51,17 @@ def test_invalid_env_fails_construction(tmp_path, monkeypatch):
 
 def test_two_engines_keep_separate_runtimes_and_never_touch_the_registry(tmp_path, monkeypatch):
     monkeypatch.delenv("VC_JUDGMENT_MODE", raising=False)
-    shadow = _engine(tmp_path, monkeypatch, mode="shadow", name="shadow")
+    jev = _engine(tmp_path, monkeypatch, mode="jev", name="jev")
     legacy = _engine(tmp_path, monkeypatch, mode="legacy", name="legacy")
-    assert shadow.judgment_runtime.mode is JudgmentMode.SHADOW
+    assert jev.judgment_runtime.mode is JudgmentMode.JEV
     assert legacy.judgment_runtime.mode is JudgmentMode.LEGACY
     assert judgment.current().mode is JudgmentMode.LEGACY  # constructing engines never installs globally
-    assert shadow.judgment_runtime is not legacy.judgment_runtime
+    assert jev.judgment_runtime is not legacy.judgment_runtime
 
 
 def test_engine_hands_its_runtime_to_every_seam_host(tmp_path, monkeypatch):
     monkeypatch.delenv("VC_JUDGMENT_MODE", raising=False)
-    eng = _engine(tmp_path, monkeypatch, mode="shadow")
+    eng = _engine(tmp_path, monkeypatch, mode="jev")
     rt = eng.judgment_runtime
     assert eng._retriever.judgment_runtime is rt
     assert eng._assembler.judgment_runtime is rt

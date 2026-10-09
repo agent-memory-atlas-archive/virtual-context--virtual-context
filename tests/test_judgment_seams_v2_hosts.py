@@ -1,6 +1,5 @@
 """Host integration for seams S6-S11: each call site honours the runtime it is handed."""
 import json
-import logging
 from unittest.mock import MagicMock
 
 import httpx
@@ -77,14 +76,6 @@ def test_tag_generator_jev_replaces_new_tag_with_existing():
     assert "data-visualization" in seen[0]["state"]["existing_tags"]["0"]
 
 
-def test_tag_generator_shadow_keeps_tags_and_logs(caplog):
-    rt, seen = _runtime("shadow", _choice_all("data-visualization"))
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        result = _tagger(rt).generate_tags("charts about sales", existing_tags=["data-visualization"])
-    assert result.tags[0] == "data-visualization-tools"
-    assert seen and any("JUDGMENT_SHADOW seam=tag_reuse" in r.getMessage() for r in caplog.records)
-
-
 def test_tag_generator_legacy_never_calls_jev():
     rt, seen = _runtime("legacy", _choice_all("data-visualization"))
     result = _tagger(rt).generate_tags("charts about sales", existing_tags=["data-visualization"])
@@ -129,15 +120,6 @@ def test_tag_splitter_jev_multi_topic_runs_llm():
     assert result.splittable is True and llm.complete.call_count == 1
 
 
-def test_tag_splitter_shadow_calls_llm_once(caplog):
-    rt, _ = _runtime("shadow", _noul_all(0.1))
-    splitter, llm = _splitter(rt)
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        result = splitter.split("cooking", [(1, "pasta"), (2, "car repair")], set(), 10)
-    assert result.splittable is True and llm.complete.call_count == 1
-    assert any("JUDGMENT_SHADOW seam=tag_split agree=False" in r.getMessage() for r in caplog.records)
-
-
 # --- supersession ------------------------------------------------------------
 
 def _fact(id, object, session_date=""):
@@ -154,18 +136,6 @@ def test_supersession_checker_jev_uses_relations_not_llm():
     assert ids == ["o"] and llm.complete.call_count == 0
     assert seen[0]["state"]["candidates"]["o"]["session_date"] == "2023/01/01"
     assert seen[0]["state"]["new_fact_session_date"] == "2024/02/01"
-
-
-def test_supersession_checker_shadow_returns_llm_answer(caplog):
-    rt, _ = _runtime("shadow", _choice_all("supersedes"))
-    llm = MagicMock()
-    llm.complete.return_value = ("[]", {})
-    checker = FactSupersessionChecker(llm_provider=llm, model="m", store=MagicMock(),
-                                      config=SupersessionConfig(enabled=True), judgment_runtime=rt)
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        ids = checker._check_batch(_fact("n", "Seattle"), [_fact("o", "Boston")])
-    assert ids == [] and llm.complete.call_count == 1
-    assert any("JUDGMENT_SHADOW seam=supersession agree=False" in r.getMessage() for r in caplog.records)
 
 
 def test_fact_link_checker_jev_builds_links():
@@ -202,17 +172,6 @@ def test_curator_jev_keeps_no_facts_when_none_are_relevant():
     assert curator.curate(facts, "what is the capital of France?") == [] and llm.calls == []
 
 
-def test_curator_shadow_uses_llm_and_logs(caplog):
-    rt, _ = _runtime("shadow", _noul_all(0.9))
-    llm = MockLLMProvider(response="0")
-    curator = FactCurator(llm_provider=llm, model="m", config=CurationConfig(enabled=True), judgment_runtime=rt)
-    facts = [Fact(subject="user", verb="hiked", object="Dipsea"), Fact(subject="user", verb="lives-in", object="Seattle")]
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        out = curator.curate(facts, "q")
-    assert out == [facts[0]] and len(llm.calls) == 1
-    assert any("JUDGMENT_SHADOW seam=fact_curation agree=False" in r.getMessage() for r in caplog.records)
-
-
 # --- tag consolidation -------------------------------------------------------
 
 def _store(tags):
@@ -237,16 +196,6 @@ def test_consolidate_tags_jev_groups_without_llm():
     assert result.groups[0].reason.startswith("jev:") and llm.calls == []
 
 
-def test_consolidate_tags_shadow_keeps_llm_groups(caplog):
-    rt, _ = _runtime("shadow", _noul_all(0.1))
-    llm = MockLLMProvider(response='{"groups": [{"canonical": "model-kit", "aliases": ["model-tanks"], "reason": "hobby"}]}')
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        result = consolidate_tags(_store([("model-kit", 5), ("model-tanks", 2)]), llm, dry_run=True, judgment_runtime=rt)
-    assert [(g.canonical, g.aliases) for g in result.groups] == [("model-kit", ["model-tanks"])]
-    assert len(llm.calls) == 1
-    assert any("JUDGMENT_SHADOW seam=tag_consolidation agree=False" in r.getMessage() for r in caplog.records)
-
-
 # --- summary grounding in the compactor --------------------------------------
 
 def test_compactor_reject_reason_adds_jev_ungrounded_in_jev_mode():
@@ -256,14 +205,6 @@ def test_compactor_reject_reason_adds_jev_ungrounded_in_jev_mode():
     assert compactor._judged_summary_reject_reason("User moved to Paris.", source, None) == "jev_ungrounded"
     assert seen[0]["state"] == {"summary": "User moved to Paris.", "source": source}
     assert compactor._judged_summary_reject_reason("", source, None) == "degenerate"
-
-
-def test_compactor_reject_reason_shadow_keeps_heuristic(caplog):
-    rt, seen = _runtime("shadow", _noul_all(0.2))
-    compactor = DomainCompactor(MockLLMProvider(), CompactorConfig(), judgment_runtime=rt)
-    with caplog.at_level(logging.INFO, logger="virtual_context.core.judgment"):
-        assert compactor._judged_summary_reject_reason("User moved to Paris.", "User: I moved to Paris last spring, it was great.", None) is None
-    assert any("JUDGMENT_SHADOW seam=summary_grounding agree=False" in r.getMessage() for r in caplog.records)
 
 
 def test_compactor_reject_reason_legacy_never_calls_jev():
