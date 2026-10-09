@@ -176,7 +176,7 @@ def build_autonomous_hint(
         "Tools: find_quote, search_summaries, query_facts, expand_topic(collapse_tags?), "
         "remember_when, recall_all. "
         f"Max {max_tool_rounds} tool rounds — be strategic. "
-        "Scan [all topics]. Never answer without searching first."
+        "Scan [all topics]. Search for past details, not for greetings."
     )
 
     # Compact name-only coverage list.  It is complete when it fits and
@@ -371,7 +371,9 @@ def build_supervised_hint(
             "If a search already returned the answer, stop and respond.\n"
             "For counting/listing questions: scan [all topics] for every topic "
             "that could relate — items are often spread across unrelated topics.\n"
-            "Never answer without searching first.\n"
+            "Search before answering anything that depends on details from "
+            "earlier conversations; reply directly to greetings, "
+            "acknowledgements and small talk.\n"
             "FACT vs SUMMARY: The facts block contains structured events with "
             "statuses (completed, planned, active). Summaries describe topics "
             "DISCUSSED — they include plans, itineraries, and ideas that may "

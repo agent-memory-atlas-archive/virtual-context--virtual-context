@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-121 — The context hint required a search before every answer
+
+- **Symptom**: a greeting such as "can you hear me" made the model call `vc_find_quote` or `vc_query_facts` before replying, adding a second provider round to the turn.
+- **Root cause**: the supervised hint's tool rules, and the compact rules used under a tight hint budget, ended with "Never answer without searching first", which applies to every message once the VC tools are offered.
+- **Fix**: the rules ask for a search when the answer depends on earlier conversations and to reply directly to greetings, acknowledgements and small talk.
+- **Tests**:
+  - `test_hint_search_rule.py`
+
 ### PROXY-042 — Offered VC tools changed with each turn's history
 
 - **Symptom**: the first model call of a turn rarely reused the provider's prompt cache from the previous turn; the top-level tool list differed between turns.
@@ -1262,6 +1270,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
 | `test_vc_tools_fixed_catalogue.py` | PROXY-042 |
+| `test_hint_search_rule.py` | BUG-121 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |
