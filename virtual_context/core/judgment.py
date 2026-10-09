@@ -18,6 +18,7 @@ engine.
 from __future__ import annotations
 
 import contextlib
+import copy
 import difflib
 import json
 import logging
@@ -294,6 +295,26 @@ def _run_jev(seam: str, jev: Callable[[JevClient], JevOutcome | None], client: J
         return None
 
 
+_shadow_pool = None
+_shadow_pool_lock = threading.Lock()
+
+
+def _submit_shadow_background(task: Callable[[], None]) -> None:
+    """Run a shadow comparison off the caller's thread.
+
+    A shadow seam's Jev answer is only logged, so the caller never waits for it.
+    """
+    global _shadow_pool
+    with _shadow_pool_lock:
+        if _shadow_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _shadow_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="jev-shadow")
+    _shadow_pool.submit(task)
+
+
+_submit_shadow = _submit_shadow_background
+
+
 def decide(
     seam: str,
     legacy: Callable[[], T],
@@ -309,20 +330,29 @@ def decide(
     assert rt.client is not None
     if rt.mode_for(seam) is JudgmentMode.SHADOW:
         legacy_value = legacy()
-        outcome = _run_jev(seam, jev, rt.client)
-        if outcome is None or outcome.fallback_reason:
-            reason = outcome.fallback_reason if outcome else "jev_unavailable"
-            logger.info("JUDGMENT_SHADOW seam=%s agree=None legacy=%s jev=None reason=%s",
-                        seam, describe(legacy_value), reason)
-            return legacy_value
-        same = agree(legacy_value, outcome.value) if agree else (describe(legacy_value) == describe(outcome.value))
-        resp = outcome.response
-        logger.info(
-            "JUDGMENT_SHADOW seam=%s agree=%s legacy=%s jev=%s %s ms=%.0f tokens=%d/%d",
-            seam, same, describe(legacy_value), describe(outcome.value), _format_detail(outcome.detail),
-            resp.latency_ms if resp else 0.0,
-            resp.input_tokens if resp else 0, resp.output_tokens if resp else 0,
-        )
+        try:
+            compared = copy.deepcopy(legacy_value)
+        except Exception:
+            compared = legacy_value
+        client = rt.client
+
+        def compare() -> None:
+            outcome = _run_jev(seam, jev, client)
+            if outcome is None or outcome.fallback_reason:
+                reason = outcome.fallback_reason if outcome else "jev_unavailable"
+                logger.info("JUDGMENT_SHADOW seam=%s agree=None legacy=%s jev=None reason=%s",
+                            seam, describe(compared), reason)
+                return
+            same = agree(compared, outcome.value) if agree else (describe(compared) == describe(outcome.value))
+            resp = outcome.response
+            logger.info(
+                "JUDGMENT_SHADOW seam=%s agree=%s legacy=%s jev=%s %s ms=%.0f tokens=%d/%d",
+                seam, same, describe(compared), describe(outcome.value), _format_detail(outcome.detail),
+                resp.latency_ms if resp else 0.0,
+                resp.input_tokens if resp else 0, resp.output_tokens if resp else 0,
+            )
+
+        _submit_shadow(compare)
         return legacy_value
     outcome = _run_jev(seam, jev, rt.client)
     if outcome is None or outcome.fallback_reason:

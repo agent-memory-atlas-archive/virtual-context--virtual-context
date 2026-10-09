@@ -192,3 +192,13 @@ def _fresh_process_tag_vector_cache():
     yield
     if cache is not None:
         cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _inline_judgment_shadow(monkeypatch):
+    """Shadow judgments run their Jev comparison inline in tests, so the
+    JUDGMENT_SHADOW line exists when ``decide`` returns. Production runs it
+    in the background; ``test_judgment_shadow_background.py`` covers that."""
+    from virtual_context.core import judgment
+
+    monkeypatch.setattr(judgment, "_submit_shadow", lambda task: task())
