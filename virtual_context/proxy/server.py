@@ -1495,11 +1495,12 @@ async def prepare_payload(
                 payload_accounting=_payload_accounting,
             )
 
+            body = conversation_prompt_cache_key(body, _conversation_id)
             # 2-to-llm: log passthrough body sent to the LLM (after trim)
             if log_dir and log_prefix:
                 try:
                     _to_llm_log = log_dir / f"{log_prefix}.2-to-llm.json"
-                    _to_llm_log.write_text(_pt_outbound_json)
+                    _to_llm_log.write_text(json.dumps(body, ensure_ascii=False))
                 except Exception:
                     logger.debug("passthrough to-llm log write failed", exc_info=True)
 
@@ -1510,7 +1511,6 @@ async def prepare_payload(
                 _inbound_tokens, _outbound_tokens, user_message[:60],
             )
 
-            body = conversation_prompt_cache_key(body, _conversation_id)
             return PreparedPayload(
                 body=body,
                 enriched_body=body,
@@ -2234,16 +2234,6 @@ async def prepare_payload(
                 outbound_tokens, _size_limit,
             )
 
-    # 2-to-llm: exact payload sent to the LLM (after strip — byte-for-byte what goes upstream)
-    if log_dir and log_prefix:
-        try:
-            _llm_log_stage = time.monotonic()
-            _to_llm_log = log_dir / f"{log_prefix}.2-to-llm.json"
-            _to_llm_log.write_text(_outbound_json)
-            _note_prep("write_to_llm_log", _llm_log_stage)
-        except Exception:
-            logger.debug("enriched body log write failed", exc_info=True)
-
     # Ground truth: inbound tokens (what the client sent us, measured above)
     inbound_tokens = _inbound_tokens
 
@@ -2586,6 +2576,16 @@ async def prepare_payload(
     _turn_id = uuid.uuid4().hex[:12]
     _conversation_id = state.engine.config.conversation_id if state else ""
     enriched_body = conversation_prompt_cache_key(enriched_body, _conversation_id)
+
+    # 2-to-llm: the payload as it goes upstream, after every rewrite above.
+    if log_dir and log_prefix:
+        try:
+            _llm_log_stage = time.monotonic()
+            _to_llm_log = log_dir / f"{log_prefix}.2-to-llm.json"
+            _to_llm_log.write_text(json.dumps(enriched_body, ensure_ascii=False))
+            _note_prep("write_to_llm_log", _llm_log_stage)
+        except Exception:
+            logger.debug("enriched body log write failed", exc_info=True)
     _context_tokens_stage = time.monotonic()
     context_tokens = _vc_tokens if state else (fmt._count(prepend_text) if prepend_text else 0)
     _note_prep("context_token_count", _context_tokens_stage)
