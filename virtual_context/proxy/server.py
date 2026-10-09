@@ -1510,6 +1510,7 @@ async def prepare_payload(
                 _inbound_tokens, _outbound_tokens, user_message[:60],
             )
 
+            body = conversation_prompt_cache_key(body, _conversation_id)
             return PreparedPayload(
                 body=body,
                 enriched_body=body,
