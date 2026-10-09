@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### PROXY-042 — Offered VC tools changed with each turn's history
+
+- **Symptom**: the first model call of a turn rarely reused the provider's prompt cache from the previous turn; the top-level tool list differed between turns.
+- **Root cause**: `vc_restore_tool` was offered only when the turn's payload held stubs, `vc_find_quote` was injected by a separate branch, and the full catalogue depended on the paging mode, so the head of the prompt changed whenever history did.
+- **Fix**: `offer_vc_tools` offers one fixed catalogue, restore tool included, on every request while VC's tools are configured on; autonomous paging only sets the tool-use requirement. The separate find-quote, restore-tool and post-valve additions are removed.
+- **Tests**:
+  - `test_vc_tools_fixed_catalogue.py`
+
 ### BUG-119 — Selected room history stayed inside the protected current turn
 
 - **Symptom**: group-chat requests carried a current message of about 1 MB; after the replay block was expanded, roughly 318K tokens of earlier room messages remained in the current turn, which is never trimmed.
@@ -206,7 +214,7 @@ Use `pytest -m regression` to run all regression tests.
 - **Root cause**: the proxy decided whether to offer the restore tool when it injected the VC catalogue, from stubs made up to that point; the safety valve runs later in the same request and its stubs never updated the catalogue.
 - **Fix**: `_add_restore_tool` offers `vc_restore_tool` once (never duplicating it and never modifying the caller's body), and the proxy calls it after the safety valve when the valve stubbed outputs the catalogue did not account for.
 - **Tests**:
-  - `test_restore_tool_after_safety_valve.py`
+  - `test_vc_tools_fixed_catalogue.py` (the restore tool is now always offered; superseded by PROXY-042)
 
 ### BUG-096 — Fact curation re-ran on every model call of a tool loop
 
@@ -1253,7 +1261,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_history_catchup.py` | BUG-094 |
 | `test_pool_fill_measurement.py` | BUG-095 |
 | `test_curation_memo.py` | BUG-096 |
-| `test_restore_tool_after_safety_valve.py` | BUG-097 |
+| `test_vc_tools_fixed_catalogue.py` | PROXY-042 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |

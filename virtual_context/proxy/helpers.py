@@ -282,32 +282,31 @@ def tool_names(body: dict) -> list[str]:
     return names
 
 
-def _add_restore_tool(body: dict) -> dict:
-    """Offer ``vc_restore_tool`` in *body* if it is not already offered.
+def offer_vc_tools(body: dict, engine: "VirtualContextEngine", *, model_name: str = "", roster_snapshot=None) -> tuple[dict, bool]:
+    """Offer the VC tool catalogue; returns ``(body, offered)``.
 
-    Stubbing can happen after the catalogue was injected (the safety valve
-    runs later in the same request); a stubbed output is only recoverable when
-    the restore tool is present.
+    The catalogue is the same on every request while VC's tools are configured
+    on: it never depends on the turn's history (stubs, truncated outputs,
+    compaction) or on the paging mode. It sits at the head of the provider
+    prompt, so a set that changed between turns would also discard the
+    provider's cached prefix. Autonomous paging only adds the requirement to
+    use a tool once history has been compacted.
     """
-    tools = body.get("tools") or [] if isinstance(body, dict) else []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        names = [d.get("name") for d in tool.get("functionDeclarations") or []]
-        names.append(tool.get("name") or (tool.get("function") or {}).get("name"))
-        if "vc_restore_tool" in names:
-            return body
-    from ..core.tool_loop import vc_tool_definitions_for_runtime
-    defs = [
-        d for d in vc_tool_definitions_for_runtime(None, restore_available=True)
-        if d.get("name") == "vc_restore_tool"
-    ]
-    if not defs:
-        return body
-    # Some formats extend the existing tool list in place; inject into a copy
-    # so the caller's body is never modified.
-    import copy
-    return detect_format(body).inject_tools(copy.deepcopy(body), defs)
+    config = engine.config
+    if not (config.paging.enabled or config.tool_output.enabled):
+        return body, False
+    require_tools = None
+    if config.paging.enabled:
+        mode = engine._retrieval._resolve_paging_mode(body.get("model", "") or model_name)
+        if mode == "autonomous":
+            try:
+                require_tools = int(engine._engine_state.compacted_prefix_messages) > 0
+            except (TypeError, ValueError):
+                require_tools = False
+    body = _inject_vc_tools(
+        body, engine, require_tool_use=require_tools, restore_available=True, roster_snapshot=roster_snapshot,
+    )
+    return body, True
 
 
 def _build_continuation_request(

@@ -1110,7 +1110,7 @@ async def prepare_payload(
 
     # Resolve upstream context window limit for this model
     from .helpers import (  # noqa: F811 — resolve patched helpers at request time
-        _add_restore_tool,
+        offer_vc_tools,
     tool_names,
         _inject_context,
         _inject_vc_tools,
@@ -2016,93 +2016,39 @@ async def prepare_payload(
     )
     _note_prep("inject_context", _inject_stage)
 
-    # Inject VC paging tools for autonomous mode (formats that support it)
+    # The VC tool catalogue is fixed per configuration; see offer_vc_tools.
     paging_enabled = False
-    _restore_offered = False
-    if (
-        state
-        and fmt.supports_tool_interception
-        and state.engine.config.paging.enabled
-    ):
-        _paging_mode = state.engine._retrieval._resolve_paging_mode(
-            enriched_body.get("model", "") or _model_name,
+    if state and fmt.supports_tool_interception:
+        _paging_stage = time.monotonic()
+        # Atomicity: the request-local speaker enum reaches the catalogue
+        # only while the selection gate is on, because execution consumes
+        # the ``speaker`` argument behind that same gate. Gate off, the
+        # injected tools are byte-identical to the pre-feature catalogue.
+        _schema_snapshot = (
+            _roster_snapshot
+            if getattr(
+                state.engine.config.search,
+                "speaker_selection_enabled",
+                False,
+            ) is True
+            else None
         )
-        if _paging_mode == "autonomous":
-            tool_turn_count = len(state.engine._turn_tag_index.entries)
-            try:
-                compacted_count = int(state.engine._engine_state.compacted_prefix_messages)
-            except (TypeError, ValueError):
-                compacted_count = 0
-            require_tools = compacted_count > 0
-            _paging_stage = time.monotonic()
-            # Atomicity: the request-local speaker enum reaches the catalogue
-            # only while the selection gate is on, because execution consumes
-            # the ``speaker`` argument behind that same gate. Gate off, the
-            # injected tools are byte-identical to the pre-feature catalogue.
-            _schema_snapshot = (
-                _roster_snapshot
-                if getattr(
-                    state.engine.config.search,
-                    "speaker_selection_enabled",
-                    False,
-                ) is True
-                else None
-            )
-            enriched_body = _inject_vc_tools(
-                enriched_body,
-                state.engine,
-                require_tool_use=require_tools,
-                restore_available=_tool_stubs_present,
-                roster_snapshot=_schema_snapshot,
-            )
-            _restore_offered = bool(_tool_stubs_present)
-            _note_prep("inject_paging_tools", _paging_stage)
-            paging_enabled = True
-            _vc_names = [name for name in tool_names(enriched_body) if name.startswith("vc_")]
+        enriched_body, paging_enabled = offer_vc_tools(
+            enriched_body, state.engine, model_name=_model_name, roster_snapshot=_schema_snapshot,
+        )
+        _note_prep("inject_paging_tools", _paging_stage)
+        if paging_enabled:
             logger.info(
-                "PAGING Tools injected: %s (total tools: %d, policy=%s, turns=%d, compacted_prefix_messages=%d)",
-                _vc_names, len(enriched_body.get("tools", [])),
-                "required" if require_tools else "optional",
-                tool_turn_count, compacted_count,
+                "VC tools offered: %s (total tools: %d)",
+                [name for name in tool_names(enriched_body) if name.startswith("vc_")],
+                len(enriched_body.get("tools", [])),
             )
-        else:
-            logger.info("PAGING Mode=%s for model=%s -- tools NOT injected", _paging_mode, _model_name or "?")
-
-    # Inject vc_find_quote for tool output retrieval (when paging didn't already inject it)
     tool_output_find_quote = False
-    if (
-        not paging_enabled
-        and state
-        and fmt.supports_tool_interception
-        and state.engine.config.tool_output.enabled
-    ):
-        from ..core.tool_loop import vc_tool_definitions
-        _all_defs = vc_tool_definitions()
-        _fq_def = [d for d in _all_defs if d["name"] == "vc_find_quote"]
-        if _fq_def:
-            _find_quote_stage = time.monotonic()
-            enriched_body = fmt.inject_tools(enriched_body, _fq_def)
-            _note_prep("inject_find_quote_tool", _find_quote_stage)
-            tool_output_find_quote = True
-            logger.info("TOOL-OUTPUT Injected vc_find_quote tool for truncated output retrieval")
-
-    # Inject vc_restore_tool when stubs are present but paging didn't already inject it
     _restore_tool_injected = False
-    if _tool_stubs_present and not paging_enabled and fmt.supports_tool_interception:
-        existing_names = set(tool_names(enriched_body))
-        if "vc_restore_tool" not in existing_names:
-            from ..core.tool_loop import vc_tool_definitions
-            _restore_def = [d for d in vc_tool_definitions() if d["name"] == "vc_restore_tool"]
-            if _restore_def:
-                _restore_stage = time.monotonic()
-                enriched_body = fmt.inject_tools(enriched_body, _restore_def)
-                _note_prep("inject_restore_tool", _restore_stage)
-                _restore_tool_injected = True
-                logger.info("TOOL-STUB Injected vc_restore_tool for stub restoration")
 
     # Sanitize stale vc_restore_tool errors from history so the model isn't
     # poisoned by previous client-side "No such tool" rejections.
-    if _restore_tool_injected or paging_enabled:
+    if paging_enabled:
         from .message_filter import sanitize_vc_tool_errors
         _sanitize_stage = time.monotonic()
         enriched_body = sanitize_vc_tool_errors(enriched_body, fmt)
@@ -2212,13 +2158,6 @@ async def prepare_payload(
                             logger.info("SAFETY-VALVE TOOL-STUB: stubbed %d outputs", _sv_stub)
             except (TypeError, ValueError, AttributeError):
                 pass
-
-            # The catalogue was injected before the valve ran; a stub made
-            # here is only recoverable if the restore tool is offered too.
-            if paging_enabled and _tool_stubs_present and not _restore_offered:
-                enriched_body = _add_restore_tool(enriched_body)
-                _restore_offered = True
-                logger.info("SAFETY-VALVE: offered vc_restore_tool for outputs stubbed after tool injection")
 
             # Re-serialize to get new outbound size
             fmt.strip_vc_markers(enriched_body)

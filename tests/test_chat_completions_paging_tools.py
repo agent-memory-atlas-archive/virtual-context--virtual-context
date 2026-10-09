@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from virtual_context.proxy.formats import get_format
-from virtual_context.proxy.helpers import _add_restore_tool, tool_names
+from virtual_context.proxy.helpers import tool_names
 
 DEFS = [
     {"name": "vc_expand_topic", "description": "Open a topic.", "input_schema": {"type": "object", "properties": {"tag": {"type": "string"}}}},
@@ -54,10 +54,3 @@ def test_required_tool_use_sets_tool_choice_only_when_unset():
     fmt = get_format("openai")
     assert fmt.inject_tools(_body(), DEFS, require_tool_use=True)["tool_choice"] == "required"
     assert fmt.inject_tools(_body(tool_choice="auto"), DEFS, require_tool_use=True)["tool_choice"] == "auto"
-
-
-@pytest.mark.regression("BUG-109")
-def test_the_restore_tool_can_be_added_to_a_chat_completions_request():
-    body = _add_restore_tool(_body())
-    assert "vc_restore_tool" in tool_names(body)
-    assert tool_names(_add_restore_tool(body)).count("vc_restore_tool") == 1
