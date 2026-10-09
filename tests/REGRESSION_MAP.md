@@ -5,6 +5,15 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-119 — Selected room history stayed inside the protected current turn
+
+- **Symptom**: group-chat requests carried a current message of about 1 MB; after the replay block was expanded, roughly 318K tokens of earlier room messages remained in the current turn, which is never trimmed.
+- **Root cause**: the host lists recent room messages in a separate "Conversation context (chronological, selected for current message)" section of `#session:` lines ahead of the replay block, and `expand_host_replay` only understood the block.
+- **Fix**: `parse_selected_history` turns that section into user and assistant turns, which are placed before the replay block's turns; a message carrying only the section is expanded too.
+- **Tests**:
+  - `test_host_replay_expansion.py::test_selected_group_history_becomes_turns_before_the_replayed_block`
+  - `test_host_replay_expansion.py::test_selected_group_history_without_a_replay_block_is_expanded`
+
 ### BUG-118 — Host history block in an older message was never expanded
 
 - **Symptom**: on a client thread reused across turns, the request carried 4 turn groups, one of them about 300K tokens, and the outbound payload was larger than the inbound one (`in=336134t out=344027t`) with nothing trimmed.
@@ -1290,7 +1299,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_context_cache_prefix.py` | PROXY-027 |
 | `test_responses_context_placement.py` | PROXY-027 |
 | `test_chat_context_placement.py` | PROXY-027 |
-| `test_host_replay_expansion.py` | PROXY-026, BUG-118 |
+| `test_host_replay_expansion.py` | PROXY-026, BUG-118, BUG-119 |
 | `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |
 | `test_tui.py` | BUG-002 |
