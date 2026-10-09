@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-123 — Each engine rebuilt its token counter
+
+- **Symptom**: engine construction spent 150-600 ms in `create_token_counter` with the `tiktoken` counter.
+- **Root cause**: every engine loaded its tokenizer again.
+- **Fix**: counters are built once per mode and shared within the process.
+- **Tests**:
+  - `test_token_counter_shared.py`
+
 ### BUG-122 — Every Postgres store re-ran schema preparation
 
 - **Symptom**: building an engine for a conversation spent about 450 ms constructing its Postgres store, on every request that landed on a worker without the conversation loaded.
@@ -1281,6 +1289,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_vc_tools_fixed_catalogue.py` | PROXY-042 |
 | `test_hint_search_rule.py` | BUG-121 |
 | `test_postgres_schema_once.py` | BUG-122 |
+| `test_token_counter_shared.py` | BUG-123 |
 | `test_responses_custom_tool_outputs.py` | BUG-098, BUG-099 |
 | `test_responses_context_in_tool_loop.py` | BUG-100 |
 | `test_flush_gate_turn_memo.py` | BUG-101 |

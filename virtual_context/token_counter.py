@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from pathlib import Path
 from typing import Callable
@@ -19,8 +20,11 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+@functools.lru_cache(maxsize=None)
 def create_token_counter(mode: str = "estimate") -> Callable[[str], int]:
     """Factory for token counters.
+
+    Counters are built once per mode and shared within the process.
 
     Modes:
         "estimate"  - len(text) // 4 (zero deps)
