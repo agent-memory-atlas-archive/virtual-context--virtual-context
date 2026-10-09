@@ -178,3 +178,22 @@ def test_attachments_in_the_current_message_survive_the_split():
     assert parts[1] == image and parts[2] == note and parts[3] == pdf
     assert "<conversation_context>" not in parts[0]["text"]
     assert parts[0]["text"].endswith("What did you find about the camera?")
+
+
+@pytest.mark.regression("BUG-118")
+def test_a_reused_thread_expands_the_block_in_its_first_message():
+    """A host that projects history once into a thread's first message and then
+    appends later turns leaves the block in an older user message."""
+    body = {"model": "m", "input": [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "system"}]},
+        _user(PROMPT),
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Found it."}]},
+        _user("And the bridge?"),
+    ]}
+    out, n = expand_host_replay(body)
+    items = out["input"]
+    assert n == 5
+    assert [i["role"] for i in items] == ["developer", "user", "user", "assistant", "user", "assistant", "user", "assistant", "user"]
+    assert all("<conversation_context>" not in _text(i) for i in items)
+    assert _text(items[-3]).endswith("What did you find about the camera?")
+    assert _text(items[-1]) == "And the bridge?"

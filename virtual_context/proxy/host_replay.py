@@ -80,7 +80,12 @@ def find_replay_block(body: dict) -> str | None:
 
 
 def expand_host_replay(body: dict) -> tuple[dict, int]:
-    """Split the newest user message's replay block into turns before it.
+    """Split the newest replay block into turns before the message carrying it.
+
+    The block is normally in the current message. A host that projects history
+    once into a thread's first message and then appends later turns leaves it
+    in an older user message; the newest block found is expanded either way,
+    and older blocks are left as they are.
 
     Returns ``(body, inserted_item_count)``. The input body is never mutated;
     when there is nothing to expand the same object is returned with 0.
@@ -94,7 +99,7 @@ def expand_host_replay(body: dict) -> tuple[dict, int]:
         if isinstance(item, dict) and item.get("type", "message") == "message" and item.get("role") == "user":
             if "<conversation_context>" in _item_text(item):
                 target = index
-            break
+                break
     if target is None:
         return body, 0
     # Only the text part holding the block is rewritten; every other part of

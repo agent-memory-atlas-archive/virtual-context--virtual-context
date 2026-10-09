@@ -5,6 +5,14 @@ Use `pytest -m regression` to run all regression tests.
 
 ## By Bug ID
 
+### BUG-118 — Host history block in an older message was never expanded
+
+- **Symptom**: on a client thread reused across turns, the request carried 4 turn groups, one of them about 300K tokens, and the outbound payload was larger than the inbound one (`in=336134t out=344027t`) with nothing trimmed.
+- **Root cause**: `expand_host_replay` only looked at the newest user message. A host that projects history once into a thread's first message and then appends later turns leaves the `<conversation_context>` block in an older user message, where it stayed one protected turn.
+- **Fix**: the newest user message that carries a block is expanded, wherever it sits; when the current message carries its own block, older blocks are still left alone.
+- **Tests**:
+  - `test_host_replay_expansion.py::test_a_reused_thread_expands_the_block_in_its_first_message`
+
 ### PROXY-041 — Provider stream failures were logged without the provider's reason
 
 - **Symptom**: a request whose upstream stream ended in an error event returned `422 "The provider interrupted the response with an error."` and the logs carried no trace of what the provider reported.
@@ -1282,7 +1290,7 @@ Use `pytest -m regression` to run all regression tests.
 | `test_context_cache_prefix.py` | PROXY-027 |
 | `test_responses_context_placement.py` | PROXY-027 |
 | `test_chat_context_placement.py` | PROXY-027 |
-| `test_host_replay_expansion.py` | PROXY-026 |
+| `test_host_replay_expansion.py` | PROXY-026, BUG-118 |
 | `test_unreplied_turns_compaction.py` | BUG-079 |
 | `test_postgres_store.py` | BUG-078 |
 | `test_tui.py` | BUG-002 |
